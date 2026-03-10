@@ -1,0 +1,22 @@
+[
+  {
+    "Id": "tomodem",
+    "Name": "光猫助手",
+    "Type": "Shell Script",
+    "Icon": "router",
+    "StartCommand": "/data/bin/tomodem start",
+    "StopCommand": "/data/bin/tomodem stop",
+    "StatusCommand": "iptables -L FORWARD | grep -c \"softcenter:tomodem\" > /dev/null",
+    "IsAutoStart": 1
+  },
+  {
+    "Id": "v2ray",
+    "Name": "V2Ray 核心代理",
+    "Type": "Binary Core",
+    "Icon": "shield-check",
+    "StartCommand": "systemctl start koolss",
+    "StopCommand": "systemctl stop koolss",
+    "StatusCommand": "systemctl is-active --quiet koolss",
+    "IsAutoStart": 0
+  }
+]
