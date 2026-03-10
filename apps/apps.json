@@ -1,7 +1,7 @@
 [
   {
     "Id": "tomodem",
-    "Name": "光猫助手",
+    "Name": "鍏夌尗鍔╂墜",
     "Type": "Shell Script",
     "Icon": "router",
     "StartCommand": "/data/bin/tomodem start",
@@ -11,7 +11,7 @@
   },
   {
     "Id": "v2ray",
-    "Name": "V2Ray 核心代理",
+    "Name": "V2Ray 鏍稿績浠ｇ悊",
     "Type": "Binary Core",
     "Icon": "shield-check",
     "StartCommand": "systemctl start koolss",

@@ -11,6 +11,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.Data.Sqlite;
 using System.Text;
+using System.Reflection;
 
 // ======================================================================
 // 🚀 核心守护进程自动安装模块
@@ -112,7 +113,7 @@ var fileProvider = new PhysicalFileProvider($"{BaseDir}/web");
 app.UseDefaultFiles(new DefaultFilesOptions { FileProvider = fileProvider, RequestPath = "" });
 app.UseStaticFiles(new StaticFileOptions { FileProvider = fileProvider, RequestPath = "" });
 
-// --- 4. 探针与 API ---
+// --- 4. API 逻辑 ---
 bool IsAppRunning(string cmdStr)
 {
     try
@@ -240,21 +241,38 @@ app.MapGet("/api/system/logs", () => {
 });
 
 app.MapGet("/api/cron", () => {
-    var psi = new ProcessStartInfo { FileName = "/bin/bash", Arguments = "-c \"crontab -l 2>/dev/null\"", RedirectStandardOutput = true, UseShellExecute = false };
-    using var p = Process.Start(psi);
-    var lines = (p?.StandardOutput.ReadToEnd() ?? "").Split('\n', StringSplitOptions.RemoveEmptyEntries);
-    return lines.Where(l => !l.TrimStart().StartsWith("#")).Select(l => new CronEntity(Convert.ToBase64String(Encoding.UTF8.GetBytes(l)), "任务", string.Join(" ", l.Split(' ').Take(5)), string.Join(" ", l.Split(' ').Skip(5))));
+    var list = new List<CronEntity>();
+    try
+    {
+        var psi = new ProcessStartInfo { FileName = "/bin/bash", Arguments = "-c \"crontab -l 2>/dev/null\"", RedirectStandardOutput = true, UseShellExecute = false };
+        using var p = Process.Start(psi);
+        var output = p?.StandardOutput.ReadToEnd() ?? "";
+        foreach (var l in output.Split('\n', StringSplitOptions.RemoveEmptyEntries))
+        {
+            if (l.TrimStart().StartsWith("#")) continue;
+            var parts = l.Split(new[] { ' ', '\t' }, 6, StringSplitOptions.RemoveEmptyEntries);
+            if (parts.Length >= 6)
+            {
+                list.Add(new CronEntity(Convert.ToBase64String(Encoding.UTF8.GetBytes(l)), "任务", string.Join(" ", parts.Take(5)), parts[5]));
+            }
+        }
+    }
+    catch { }
+    return list;
 });
 
-app.MapPost("/api/cron", (CronRequest req) => {
-    Process.Start("/bin/bash", $"-c \"(crontab -l 2>/dev/null; echo '{req.Schedule} {req.Command}') | crontab -\"");
-    return Results.Ok();
-});
+// --- 8. API 接口：获取系统版本信息 ---
+app.MapGet("/api/system/info", () => {
+    // 提取由 MSBuild 注入的 InformationalVersion
+    var version = Assembly.GetExecutingAssembly()
+                          .GetCustomAttribute<AssemblyInformationalVersionAttribute>()
+                          ?.InformationalVersion ?? "1.0.0-dev";
 
-app.MapDelete("/api/cron/{id}", (string id) => {
-    var lineToRemove = Encoding.UTF8.GetString(Convert.FromBase64String(id));
-    Process.Start("/bin/bash", $"-c \"crontab -l | grep -vF '{lineToRemove}' | crontab -\"");
-    return Results.Ok();
+    return Results.Ok(new SystemInfo(
+        version,
+        "NativeAOT-.NET10",
+        "UCG-Fiber"
+    ));
 });
 
 app.Run($"http://0.0.0.0:{sysConfig.Port}");
@@ -264,6 +282,7 @@ public record AppEntity(string Id, string Name, string Type, string Icon, string
 public record CronEntity(string Id, string Name, string Schedule, string Command);
 public record CronRequest(string Schedule, string Command);
 public record LogResponse(string Content);
+public record SystemInfo(string Version, string Runtime, string Device);
 
 [JsonSerializable(typeof(AppConfig))]
 [JsonSerializable(typeof(AppEntity))]
@@ -273,4 +292,6 @@ public record LogResponse(string Content);
 [JsonSerializable(typeof(Dictionary<string, string>))]
 [JsonSerializable(typeof(List<AppEntity>))]
 [JsonSerializable(typeof(List<CronEntity>))]
+[JsonSerializable(typeof(IEnumerable<CronEntity>))]
+[JsonSerializable(typeof(SystemInfo))]
 internal partial class AppJsonContext : JsonSerializerContext { }

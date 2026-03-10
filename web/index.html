@@ -25,6 +25,7 @@
                 <div class="flex items-center space-x-3">
                     <div class="w-8 h-8 bg-black rounded-lg flex items-center justify-center text-white"><i data-lucide="shield-check" class="w-5 h-5"></i></div>
                     <span class="font-semibold text-lg tracking-tight">SoftCenter</span>
+                    <span class="text-[10px] text-gray-400 font-mono mt-1">Build {{ sysInfo.Version }}</span>
                 </div>
                 <div class="flex items-center space-x-4">
                     <button @click="showSystemLogs" class="bg-black text-white px-3 py-1.5 rounded-lg text-xs font-medium flex items-center shadow-sm hover:bg-gray-800 transition-colors">
@@ -109,31 +110,42 @@
             </section>
         </main>
 
-        <div v-if="showAddModal" class="fixed inset-0 z-[100] flex items-center justify-center p-6 bg-black/20 backdrop-blur-sm">
-            <div class="glass w-full max-w-2xl rounded-[2.5rem] p-8 shadow-2xl flex flex-col max-h-[90vh]">
-                <div class="flex justify-between items-center mb-6">
-                    <h3 class="text-2xl font-semibold">应用库</h3>
-                    <div class="flex space-x-2 bg-gray-100 p-1 rounded-xl">
-                        <button @click="addTab = 'online'" :class="addTab === 'online' ? 'bg-white shadow-sm' : 'text-gray-500'" class="px-4 py-1.5 rounded-lg text-sm font-medium transition-all">在线拉取</button>
-                        <button @click="addTab = 'local'" :class="addTab === 'local' ? 'bg-white shadow-sm' : 'text-gray-500'" class="px-4 py-1.5 rounded-lg text-sm font-medium transition-all">手动配置</button>
-                    </div>
-                </div>
-                <div class="overflow-y-auto flex-1 pr-2">
-                    <div v-if="addTab === 'online'" class="space-y-4">
-                        <div v-if="isFetchingStore" class="text-center py-8 text-gray-500">同步中...</div>
-                        <div v-for="pkg in onlineStore" :key="pkg.Id" class="flex items-center justify-between p-4 bg-white/60 rounded-2xl border border-gray-100">
-                            <div class="flex items-center space-x-4">
-                                <div class="w-10 h-10 bg-blue-100 text-blue-600 rounded-xl flex items-center justify-center"><i :data-lucide="pkg.Icon" class="w-5 h-5"></i></div>
-                                <div><h4 class="font-semibold">{{ pkg.Name }}</h4><p class="text-xs text-gray-500">{{ pkg.Id }}</p></div>
-                            </div>
-                            <button @click="installApp(pkg)" class="bg-black text-white px-4 py-2 rounded-xl text-sm font-medium">安装</button>
-                        </div>
-                    </div>
-                    </div>
-                <div class="flex space-x-3 mt-6"><button @click="showAddModal = false" class="flex-1 py-3 font-medium">关闭</button></div>
+<div v-if="showAddModal" class="fixed inset-0 z-[100] flex items-center justify-center p-6 bg-black/20 backdrop-blur-sm">
+    <div class="glass w-full max-w-2xl rounded-[2.5rem] p-8 shadow-2xl flex flex-col max-h-[90vh]">
+        <div class="flex justify-between items-center mb-6">
+            <h3 class="text-2xl font-semibold">应用库</h3>
+            <div class="flex space-x-2 bg-gray-100 p-1 rounded-xl">
+                <button @click="addTab = 'online'" :class="addTab === 'online' ? 'bg-white shadow-sm' : 'text-gray-500'" class="px-4 py-1.5 rounded-lg text-sm font-medium transition-all">在线拉取</button>
+                <button @click="addTab = 'local'" :class="addTab === 'local' ? 'bg-white shadow-sm' : 'text-gray-500'" class="px-4 py-1.5 rounded-lg text-sm font-medium transition-all">手动配置</button>
             </div>
         </div>
 
+        <div class="overflow-y-auto flex-1 pr-2">
+            <div v-if="addTab === 'online'" class="space-y-4">
+                <div v-if="isFetchingStore" class="text-center py-8 text-gray-500">同步中...</div>
+                <div v-for="pkg in onlineStore" :key="pkg.Id" class="flex items-center justify-between p-4 bg-white/60 rounded-2xl border border-gray-100">
+                    <div class="flex items-center space-x-4">
+                        <div class="w-10 h-10 bg-blue-100 text-blue-600 rounded-xl flex items-center justify-center"><i :data-lucide="pkg.Icon" class="w-5 h-5"></i></div>
+                        <div><h4 class="font-semibold">{{ pkg.Name }}</h4><p class="text-xs text-gray-500">{{ pkg.Id }}</p></div>
+                    </div>
+                    <button @click="installApp(pkg)" class="bg-black text-white px-4 py-2 rounded-xl text-sm font-medium">安装</button>
+                </div>
+            </div>
+
+            <div v-if="addTab === 'local'" class="space-y-4 text-sm mt-4">
+                <div class="grid grid-cols-2 gap-4">
+                    <input v-model="newApp.Id" placeholder="应用 ID" class="w-full bg-gray-100 rounded-xl px-4 py-2.5 outline-none">
+                    <input v-model="newApp.Name" placeholder="显示名称" class="w-full bg-gray-100 rounded-xl px-4 py-2.5 outline-none">
+                    <input v-model="newApp.Icon" placeholder="图标 (Lucide)" class="w-full bg-gray-100 rounded-xl px-4 py-2.5 outline-none">
+                    <input v-model="newApp.ConfigPath" placeholder="参数文件路径" class="w-full bg-gray-100 rounded-xl px-4 py-2.5 outline-none">
+                </div>
+                <input v-model="newApp.StatusCommand" placeholder="状态探针命令" class="w-full bg-gray-100 rounded-xl px-4 py-2.5 outline-none font-mono text-xs">
+                <input v-model="newApp.StartCommand" placeholder="启动命令" class="w-full bg-gray-100 rounded-xl px-4 py-2.5 outline-none font-mono text-xs">
+                <input v-model="newApp.StopCommand" placeholder="停止命令" class="w-full bg-gray-100 rounded-xl px-4 py-2.5 outline-none font-mono text-xs">
+                <button @click="installApp(newApp)" class="w-full bg-blue-600 text-white py-3 rounded-2xl font-medium">保存本地配置</button>
+            </div>
+        </div>
+        <div class="flex space-x-3 mt-6"><button @click="showAddModal = false" class="flex-1 py-3 font-medium border rounded-2xl">取消</button></div>
         <div v-if="logModalApp" class="fixed inset-0 z-[100] flex items-center justify-center p-6 bg-black/40 backdrop-blur-sm">
             <div class="w-full max-w-4xl bg-[#1e1e1e] rounded-[1.5rem] shadow-2xl flex flex-col h-[80vh]">
                 <div class="h-12 flex items-center justify-between px-4 bg-[#2d2d2d] rounded-t-[1.5rem]">
@@ -147,7 +159,6 @@
             </div>
         </div>
     </div>
-
     <script>
         const { createApp, ref, onMounted, nextTick, watch } = Vue;
 
@@ -194,7 +205,7 @@
                 const fetchOnlineStore = async () => {
                     isFetchingStore.value = true;
                     try {
-                        const res = await fetch('https://raw.githubusercontent.com/fw867/unifi-softcenterstore/main/apps/apps.json');
+                        const res = await fetch('https://raw.githubusercontent.com/fw867/unifi-softcenterstore/master/apps/apps.json');
                         onlineStore.value = await res.json();
                     } catch (e) { console.error(e); } finally { isFetchingStore.value = false; }
                 };
@@ -223,9 +234,16 @@
                     nextTick(() => { const c = document.getElementById('logContainer'); if(c) c.scrollTop = c.scrollHeight; });
                 };
 
-                onMounted(() => { if (token.value) { loadRealApps(); startPolling(); loadCronJobs(); } lucide.createIcons(); });
+                const sysInfo = ref({ Version: '0.0.0' });
 
-                return { token, apps, cronJobs, activeApp, appConfig, showAddModal, addTab, isFetchingStore, onlineStore, logModalApp, logContent, isLoadingLogs, onTokenSubmit: loadRealApps, toggleApp, openAddModal: () => { showAddModal.value = true; fetchOnlineStore(); }, showSystemLogs, showLogModal, refreshLogs, installApp: async (p) => { await callApi('/api/apps', 'POST', p); showAddModal.value = false; loadRealApps(); } };
+                const loadSystemInfo = async () => {
+                    const data = await callApi('/api/system/info');
+                    if (data) sysInfo.value = data;
+                };
+
+                onMounted(() => { if (token.value) { loadRealApps(); startPolling(); loadSystemInfo(); loadCronJobs(); } lucide.createIcons(); });
+
+                return { token, apps, cronJobs, activeApp, appConfig, showAddModal, addTab, isFetchingStore, onlineStore, logModalApp, logContent, isLoadingLogs, onTokenSubmit: loadRealApps, toggleApp, openAddModal: () => { showAddModal.value = true; fetchOnlineStore(); }, showSystemLogs, showLogModal, refreshLogs, installApp: async (p) => { await callApi('/api/apps', 'POST', p); showAddModal.value = false; loadRealApps(); }, sysInfo };
             }
         }).mount('#app');
     </script>
