@@ -42,8 +42,12 @@ jobs:
 
     - name: Zip the build
       run: |
+        cp -r web bin/Release/net10.0/linux-arm64/publish/ || true
         cd bin/Release/net10.0/linux-arm64/publish/
-        zip -r "$GITHUB_WORKSPACE/SoftCenter-v${{ env.APP_VERSION }}-arm64.zip" .
+        zip -r "$GITHUB_WORKSPACE/SoftCenter-v${{ env.APP_VERSION }}-arm64.zip" \
+            SoftCenterManager \
+            libe_sqlite3.so \
+            web/
 
     - name: Create GitHub Release
       uses: softprops/action-gh-release@v2
