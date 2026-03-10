@@ -27,7 +27,7 @@ jobs:
     - name: Install Cross-Compilation Tools
       run: |
         sudo apt-get update
-        sudo apt-get install -y gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu zlib1g-dev:amd64
+        sudo apt-get install -y gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu zlib1g-dev:amd64 zip
 
     - name: Install Dependencies
       run: dotnet restore
@@ -43,7 +43,7 @@ jobs:
     - name: Zip the build
       run: |
         cd bin/Release/net10.0/linux-arm64/publish/
-        zip -r ../../../../SoftCenter-v${{ env.APP_VERSION }}-arm64.zip . *
+        zip -r "$GITHUB_WORKSPACE/SoftCenter-v${{ env.APP_VERSION }}-arm64.zip" .
 
     - name: Create GitHub Release
       uses: softprops/action-gh-release@v2
@@ -52,8 +52,7 @@ jobs:
         name: Release ${{ env.RELEASE_TAG }}
         draft: false
         prerelease: false
-        files: |
-          SoftCenter-v${{ env.APP_VERSION }}-arm64.zip
+        files: SoftCenter-v${{ env.APP_VERSION }}-arm64.zip
         generate_release_notes: true
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
