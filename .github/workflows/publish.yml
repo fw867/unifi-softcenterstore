@@ -10,12 +10,18 @@ permissions:
 
 jobs:
   build:
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-latest
+    container: ubuntu:20.04
     env:
       APP_VERSION: "1.0.${{ github.run_number }}"
       RELEASE_TAG: "v1.0.${{ github.run_number }}"
 
     steps:
+    - name: Prepare Container Environment
+      run: |
+        apt-get update
+        apt-get install -y git curl zip unzip gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu zlib1g-dev ca-certificates
+
     - name: Checkout Code
       uses: actions/checkout@v4
 
@@ -23,11 +29,6 @@ jobs:
       uses: actions/setup-dotnet@v4
       with:
         dotnet-version: '10.0.x'
-
-    - name: Install Cross-Compilation Tools
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu zlib1g-dev:amd64 zip
 
     - name: Install Dependencies
       run: dotnet restore

@@ -7,16 +7,22 @@
     "StartCommand": "/data/bin/tomodem start",
     "StopCommand": "/data/bin/tomodem stop",
     "StatusCommand": "iptables -L FORWARD | grep -c \"softcenter:tomodem\" > /dev/null",
-    "IsAutoStart": 1
+    "IsAutoStart": 1,
+    "ConfigPath": "/data/bin/tomodem",
+    "ConfigKeys": "tomodem_ip,tomodem_eth,ethip1,ethip2",
+    "LogPath": "/var/log/tomodem.log"
   },
   {
-    "Id": "v2ray",
-    "Name": "V2Ray 核心代理",
+    "Id": "koolss",
+    "Name": "V2Ray",
     "Type": "Binary Core",
     "Icon": "shield-check",
     "StartCommand": "systemctl start koolss",
     "StopCommand": "systemctl stop koolss",
     "StatusCommand": "systemctl is-active --quiet koolss",
-    "IsAutoStart": 0
+    "IsAutoStart": 1,
+    "ConfigPath": "/data/softcenter/v2ray/config.json",
+    "ConfigKeys": "V2RAY_CONFIG_FILE,ISP_DNS1,ISP_DNS2,v2ray_bypass,v2ray_acl_default_mode,v2ray_basic_dns_chromecast,v2ray_quic_reject,v2ray_udp,v2ray_udp_list",
+    "LogPath": "/tmp/xray_log.txt"
   }
 ]
