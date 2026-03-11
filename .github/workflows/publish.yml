@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-20.04
     env:
       APP_VERSION: "1.0.${{ github.run_number }}"
       RELEASE_TAG: "v1.0.${{ github.run_number }}"
