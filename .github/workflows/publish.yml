@@ -22,8 +22,9 @@ jobs:
       env:
         DEBIAN_FRONTEND: noninteractive
       run: |
+        dpkg --add-architecture arm64
         apt-get update
-        apt-get install -y git curl zip unzip gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu zlib1g-dev ca-certificates libicu-dev
+        apt-get install -y git curl zip unzip gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu zlib1g-dev:arm64 ca-certificates libicu-dev clang gcc
 
     - name: Checkout Code
       uses: actions/checkout@v4
@@ -42,7 +43,8 @@ jobs:
         /p:PublishAot=true \
         /p:Version=${{ env.APP_VERSION }} \
         /p:InformationalVersion=${{ env.APP_VERSION }} \
-        /p:ObjCopyName=aarch64-linux-gnu-objcopy
+        /p:ObjCopyName=aarch64-linux-gnu-objcopy\
+        /p:CppCompilerAndLinker=aarch64-linux-gnu-gcc
 
     - name: Zip the build
       run: |
