@@ -19,14 +19,19 @@
     </style>
 </head>
 <body class="antialiased">
-    <div id="app" class="min-h-screen pb-20">
+    <div id="app" class="min-h-screen pb-20 relative">
         <nav class="sticky top-0 z-50 glass border-b border-gray-200 mb-8">
             <div class="safe-area px-6 h-16 flex items-center justify-between">
                 <div class="flex items-center space-x-3">
                     <div class="w-8 h-8 bg-black rounded-lg flex items-center justify-center text-white"><i data-lucide="shield-check" class="w-5 h-5"></i></div>
                     <div class="flex flex-col">
                         <span class="font-semibold text-lg tracking-tight leading-none">SoftCenter</span>
-                        <span class="text-[10px] text-gray-400 font-mono mt-0.5">Build {{ sysInfo.Version }}</span>
+                        <div class="flex items-center space-x-2 mt-1">
+                            <span class="text-[10px] text-gray-400 font-mono">Build {{ sysInfo.Version }}</span>
+                            <button v-if="hasUpdate" @click="doUpgrade" class="text-[10px] bg-blue-50 text-blue-600 px-2 py-0.5 rounded-full font-bold hover:bg-blue-100 transition-colors shadow-sm border border-blue-200">
+                                发现新版 {{ latestVersion }}
+                            </button>
+                        </div>
                     </div>
                 </div>
                 <div class="flex items-center space-x-4">
@@ -208,6 +213,12 @@
                 </div>
             </div>
         </div>
+
+        <div v-if="isUpgrading" class="fixed inset-0 z-[200] flex flex-col items-center justify-center bg-white/70 backdrop-blur-md transition-all">
+            <i data-lucide="loader-2" class="w-12 h-12 text-blue-600 animate-spin mb-4"></i>
+            <h3 class="text-xl font-semibold mb-2">正在下载并部署系统...</h3>
+            <p class="text-sm text-gray-500 font-mono">请勿关闭页面，系统恢复后将自动刷新</p>
+        </div>
     </div>
 
     <script>
@@ -237,6 +248,11 @@
                 const cronModalApp = ref(null);
                 const newCronReq = ref({ schedule: '0 4 * * *', command: '' });
 
+                // 升级相关
+                const hasUpdate = ref(false);
+                const latestVersion = ref('');
+                const isUpgrading = ref(false);
+
                 const callApi = async (url, method = 'GET', body = null) => {
                     if (!token.value) return null;
                     localStorage.setItem('sc_token', token.value);
@@ -255,12 +271,54 @@
                     startPolling();
                 };
 
-                const loadSystemInfo = async () => {
-                    const data = await callApi('/api/system/info');
-                    if (data) sysInfo.value = { Version: data.version || data.Version || '0.0.0' };
+                const isNewerVersion = (oldVer, newVer) => {
+                    const a = oldVer.split('.').map(Number);
+                    const b = newVer.split('.').map(Number);
+                    for (let i = 0; i < Math.max(a.length, b.length); i++) {
+                        if ((a[i] || 0) < (b[i] || 0)) return true;
+                        if ((a[i] || 0) > (b[i] || 0)) return false;
+                    }
+                    return false;
                 };
 
-                // 🌟 核心修复：全面兼容 Minimal API 的 JSON 驼峰命名规则
+                const checkUpdate = async () => {
+                    try {
+                        const res = await fetch('https://api.github.com/repos/fw867/unifi-softcenterstore/releases/latest');
+                        const data = await res.json();
+                        if (data && data.tag_name) {
+                            const latest = data.tag_name.replace('v', '');
+                            latestVersion.value = latest;
+                            if (sysInfo.value.Version !== '0.0.0' && isNewerVersion(sysInfo.value.Version, latest)) {
+                                hasUpdate.value = true;
+                            }
+                        }
+                    } catch (e) { console.error('检查更新失败', e); }
+                };
+
+                const doUpgrade = async () => {
+                    if (!confirm(`即将覆盖升级至 v${latestVersion.value} 并重启服务，是否继续？`)) return;
+                    isUpgrading.value = true;
+                    await callApi('/api/system/upgrade', 'POST');
+                    
+                    let retryTimer = setInterval(async () => {
+                        try {
+                            const res = await fetch('/api/system/info');
+                            if (res.ok) {
+                                clearInterval(retryTimer);
+                                window.location.reload(true); 
+                            }
+                        } catch (e) {}
+                    }, 3000);
+                };
+
+                const loadSystemInfo = async () => {
+                    const data = await callApi('/api/system/info');
+                    if (data) {
+                        sysInfo.value = { Version: data.version || data.Version || '0.0.0' };
+                        checkUpdate(); 
+                    }
+                };
+
                 const loadRealApps = async () => {
                     const data = await callApi('/api/apps');
                     if (data) {
@@ -373,7 +431,7 @@
 
                 const showCronModal = (app) => { 
                     cronModalApp.value = app; 
-                    newCronReq.value = { schedule: '0 4 * * *', command: app.startCommand }; 
+                    newCronReq.value = { schedule: '0 4 * * *', command: app.startCommand || app.StartCommand }; 
                 };
 
                 const submitCron = async () => {
@@ -398,6 +456,7 @@
                     token, tokenInputType, handleTokenSubmit, sysInfo,
                     apps, cronJobs, activeApp, appConfig, showAddModal, addTab, isFetchingStore, onlineStore, 
                     newApp, logModalApp, logContent, isLoadingLogs, cronModalApp, newCronReq,
+                    hasUpdate, latestVersion, isUpgrading, doUpgrade,
                     toggleApp, saveAutoStart, openAddModal: () => { showAddModal.value = true; fetchOnlineStore(); }, 
                     installApp, showSystemLogs, showLogModal, refreshLogs, loadCronJobs,
                     openConfig, saveAppConfig, showCronModal, submitCron, deleteCron

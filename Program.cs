@@ -113,7 +113,7 @@ var fileProvider = new PhysicalFileProvider($"{BaseDir}/web");
 app.UseDefaultFiles(new DefaultFilesOptions { FileProvider = fileProvider, RequestPath = "" });
 app.UseStaticFiles(new StaticFileOptions { FileProvider = fileProvider, RequestPath = "" });
 
-// --- 4. API 逻辑 ---
+// --- 4. 探针逻辑 ---
 bool IsAppRunning(string cmdStr)
 {
     try
@@ -126,6 +126,7 @@ bool IsAppRunning(string cmdStr)
     catch { return false; }
 }
 
+// --- 5. 应用管理接口 ---
 app.MapGet("/api/apps", () => {
     var apps = new List<AppEntity>();
     using var conn = new SqliteConnection(DbPath);
@@ -192,6 +193,7 @@ app.MapPut("/api/apps/{id}/autostart", (string id, int state) => {
     return Results.Ok();
 });
 
+// --- 6. 配置读写接口 ---
 app.MapGet("/api/apps/{id}/config", (string id) => {
     using var conn = new SqliteConnection(DbPath);
     conn.Open();
@@ -232,6 +234,7 @@ app.MapPost("/api/apps/{id}/config", async (string id, Dictionary<string, string
     return Results.NotFound();
 });
 
+// --- 7. 日志与定时任务接口 ---
 app.MapGet("/api/apps/{id}/logs", (string id) => {
     using var conn = new SqliteConnection(DbPath);
     conn.Open();
@@ -283,7 +286,7 @@ app.MapDelete("/api/cron/{id}", (string id) => {
     return Results.Ok();
 });
 
-// --- 8. API 接口：获取系统版本信息 ---
+// --- 8. API 接口：获取系统版本与自升级 ---
 app.MapGet("/api/system/info", () => {
     var version = Assembly.GetExecutingAssembly()
                           .GetCustomAttribute<AssemblyInformationalVersionAttribute>()
@@ -291,8 +294,24 @@ app.MapGet("/api/system/info", () => {
     return Results.Ok(new SystemInfo(version, "NativeAOT-.NET10", "UCG-Fiber"));
 });
 
+app.MapPost("/api/system/upgrade", () => {
+    var scriptUrl = "https://raw.githubusercontent.com/fw867/unifi-softcenterstore/master/install.sh";
+    var command = $"sleep 2 && curl -sSL {scriptUrl} | bash";
+    Process.Start(new ProcessStartInfo
+    {
+        FileName = "systemd-run",
+        Arguments = $"--unit=sc_updater --collect bash -c \"{command}\"",
+        UseShellExecute = false,
+        CreateNoWindow = true
+    });
+    return Results.Ok();
+});
+
 app.Run($"http://0.0.0.0:{sysConfig.Port}");
 
+// ======================================================================
+// AOT 序列化与数据模型
+// ======================================================================
 public class AppConfig { public int Port { get; set; } = 9958; public string AdminToken { get; set; } = "Your_Secret_Token_Here"; }
 public record AppEntity(string Id, string Name, string Type, string Icon, string StartCommand, string StopCommand, string StatusCommand, int IsAutoStart, bool IsRunning, string ConfigPath, string ConfigKeys, string LogPath);
 public record CronEntity(string Id, string Name, string Schedule, string Command);
