@@ -9,8 +9,17 @@ echo "========================================="
 REPO="fw867/unifi-softcenterstore"
 
 # 接收从 C# 后端传来的代理参数，如果没有则使用默认值
-PROXY=${1:-"https://cdn.gh-proxy.org/"}
-echo "🌐 当前使用加速通道: $PROXY"
+PROXY=$1
+
+if [ -n "$PROXY" ]; then
+    echo "🌐 当前使用本地/自定义代理: $PROXY"
+    # 注入环境变量，强制所有流量走代理
+    export http_proxy=$PROXY
+    export https_proxy=$PROXY
+    export all_proxy=$PROXY
+else
+    echo "🌐 当前使用直连网络"
+fi
 
 # 定义核心路径
 BIN_DIR="/data/bin"

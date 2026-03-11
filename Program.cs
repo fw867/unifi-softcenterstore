@@ -78,15 +78,13 @@ using (var conn = new SqliteConnection(DbPath))
             IsAutoStart INTEGER DEFAULT 0, ConfigPath TEXT, ConfigKeys TEXT, LogPath TEXT, SortOrder INTEGER DEFAULT 0
         );";
     cmd.ExecuteNonQuery();
-
-    // 自动为旧版本数据库升级表结构，补充 SortOrder 字段
     try
     {
         using var cmdAlter = conn.CreateCommand();
         cmdAlter.CommandText = "ALTER TABLE apps_registry ADD COLUMN SortOrder INTEGER DEFAULT 0;";
         cmdAlter.ExecuteNonQuery();
     }
-    catch { /* 字段已存在则忽略 */ }
+    catch { }
 }
 
 app.Use(async (context, next) => {
@@ -116,7 +114,6 @@ bool IsAppRunning(string cmdStr)
     catch { return false; }
 }
 
-// 获取应用列表 (加入 SortOrder 排序)
 app.MapGet("/api/apps", () => {
     var apps = new List<AppEntity>();
     using var conn = new SqliteConnection(DbPath);
@@ -132,7 +129,6 @@ app.MapGet("/api/apps", () => {
     return apps;
 });
 
-// 新增/覆盖应用
 app.MapPost("/api/apps", (AppEntity a) => {
     using var conn = new SqliteConnection(DbPath);
     conn.Open();
@@ -147,7 +143,6 @@ app.MapPost("/api/apps", (AppEntity a) => {
     return Results.Ok();
 });
 
-// 删除应用
 app.MapDelete("/api/apps/{id}", (string id) => {
     using var conn = new SqliteConnection(DbPath);
     conn.Open();
@@ -158,7 +153,6 @@ app.MapDelete("/api/apps/{id}", (string id) => {
     return Results.Ok();
 });
 
-// 拖拽排序保存接口
 app.MapPost("/api/apps/reorder", (List<AppOrderReq> req) => {
     using var conn = new SqliteConnection(DbPath);
     conn.Open();
@@ -176,7 +170,6 @@ app.MapPost("/api/apps/reorder", (List<AppOrderReq> req) => {
     return Results.Ok();
 });
 
-// 控制启停
 app.MapPost("/api/apps/{id}/control", (string id, string action) => {
     using var conn = new SqliteConnection(DbPath);
     conn.Open();
@@ -190,7 +183,6 @@ app.MapPost("/api/apps/{id}/control", (string id, string action) => {
     return Results.Ok();
 });
 
-// 开机自启状态切换
 app.MapPut("/api/apps/{id}/autostart", (string id, int state) => {
     using var conn = new SqliteConnection(DbPath);
     conn.Open();
@@ -201,7 +193,6 @@ app.MapPut("/api/apps/{id}/autostart", (string id, int state) => {
     return Results.Ok();
 });
 
-// 获取配置
 app.MapGet("/api/apps/{id}/config", (string id) => {
     using var conn = new SqliteConnection(DbPath);
     conn.Open();
@@ -225,7 +216,6 @@ app.MapGet("/api/apps/{id}/config", (string id) => {
     return Results.Ok(dict);
 });
 
-// 保存配置
 app.MapPost("/api/apps/{id}/config", async (string id, Dictionary<string, string> payload) => {
     using var conn = new SqliteConnection(DbPath);
     conn.Open();
@@ -243,7 +233,6 @@ app.MapPost("/api/apps/{id}/config", async (string id, Dictionary<string, string
     return Results.NotFound();
 });
 
-// 日志拉取
 app.MapGet("/api/apps/{id}/logs", (string id) => {
     using var conn = new SqliteConnection(DbPath);
     conn.Open();
@@ -256,13 +245,11 @@ app.MapGet("/api/apps/{id}/logs", (string id) => {
     return Results.Ok(new LogResponse(p?.StandardOutput.ReadToEnd() ?? ""));
 });
 
-// 系统日志拉取
 app.MapGet("/api/system/logs", () => {
     using var p = Process.Start(new ProcessStartInfo { FileName = "/bin/bash", Arguments = $"-c \"journalctl -u {ServiceName} -n 200 --no-pager\"", RedirectStandardOutput = true, UseShellExecute = false });
     return Results.Ok(new LogResponse(p?.StandardOutput.ReadToEnd() ?? ""));
 });
 
-// Cron 管理
 app.MapGet("/api/cron", () => {
     var list = new List<CronEntity>();
     try
@@ -291,21 +278,41 @@ app.MapDelete("/api/cron/{id}", (string id) => {
     return Results.Ok();
 });
 
-// 系统信息与一键更新
 app.MapGet("/api/system/info", () => {
     var rawVersion = Assembly.GetExecutingAssembly().GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion ?? "1.0.0-dev";
-    var version = rawVersion.Split('+')[0];
-    return Results.Ok(new SystemInfo(version, "NativeAOT-.NET10", "UCG-Fiber"));
+    return Results.Ok(new SystemInfo(rawVersion.Split('+')[0], "NativeAOT-.NET10", "UCG-Fiber"));
+});
+
+// 🌟 新增：获取全局设置接口
+app.MapGet("/api/system/config", () => Results.Ok(sysConfig));
+
+// 🌟 新增：保存全局设置并平滑重启接口
+app.MapPost("/api/system/config", async (AppConfig newConfig) => {
+    sysConfig.Port = newConfig.Port;
+    sysConfig.AdminToken = newConfig.AdminToken;
+    sysConfig.LocalProxy = newConfig.LocalProxy;
+    await File.WriteAllTextAsync(ConfigPath, JsonSerializer.Serialize(sysConfig, AppJsonContext.Default.AppConfig));
+    // 写入后，调用 systemd-run 脱壳重启服务，保证接口能正常返回 200 OK
+    Process.Start("systemd-run", $"--unit=sc_restarter --collect bash -c \"sleep 1 && systemctl restart {ServiceName}\"");
+    return Results.Ok();
 });
 
 app.MapPost("/api/system/upgrade", () => {
-    var proxy = sysConfig.GithubProxy;
-    if (!string.IsNullOrEmpty(proxy) && !proxy.EndsWith("/")) proxy += "/";
-    var scriptUrl = $"{proxy}https://raw.githubusercontent.com/fw867/unifi-softcenterstore/master/install.sh";
-
+    var proxy = sysConfig.LocalProxy;
+    var scriptUrl = "https://raw.githubusercontent.com/fw867/unifi-softcenterstore/master/install.sh";
     if (File.Exists("/tmp/sc_update.log")) File.Delete("/tmp/sc_update.log");
 
-    Process.Start("systemd-run", $"--unit=sc_updater --collect bash -c \"sleep 1 && curl -sSL {scriptUrl} | bash -s '{proxy}' > /tmp/sc_update.log 2>&1\"");
+    string curlCmd;
+    if (!string.IsNullOrEmpty(proxy))
+    {
+        curlCmd = $"curl -x {proxy} -sSL {scriptUrl} | bash -s '{proxy}' > /tmp/sc_update.log 2>&1";
+    }
+    else
+    {
+        curlCmd = $"curl -sSL {scriptUrl} | bash > /tmp/sc_update.log 2>&1";
+    }
+
+    Process.Start("systemd-run", $"--unit=sc_updater --collect bash -c \"sleep 1 && {curlCmd}\"");
     return Results.Ok();
 });
 
@@ -319,7 +326,12 @@ app.MapGet("/api/system/upgrade/log", () => {
 
 app.Run($"http://0.0.0.0:{sysConfig.Port}");
 
-public record AppConfig { public int Port { get; set; } = 9958; public string AdminToken { get; set; } = "Your_Secret_Token_Here"; public string GithubProxy { get; set; } = "https://cdn.gh-proxy.org/"; }
+public record AppConfig
+{
+    public int Port { get; set; } = 9958;
+    public string AdminToken { get; set; } = "Your_Secret_Token_Here";
+    public string LocalProxy { get; set; } = "";
+}
 public record AppEntity(string Id, string Name, string Type, string Icon, string StartCommand, string StopCommand, string StatusCommand, int IsAutoStart, bool IsRunning, string ConfigPath, string ConfigKeys, string LogPath, int SortOrder);
 public record AppOrderReq(string Id, int SortOrder);
 public record CronEntity(string Id, string Name, string Schedule, string Command);

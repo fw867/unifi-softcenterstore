@@ -71,6 +71,9 @@
                     </div>
                 </div>
                 <div class="flex items-center space-x-4">
+                    <button @click="openSettings" class="btn-apple bg-white text-gray-700 px-3 py-1.5 rounded-lg text-xs font-medium flex items-center shadow-sm border border-gray-200 hover:bg-gray-50 transition-colors">
+                        <i data-lucide="settings" class="w-4 h-4 mr-1.5 text-gray-500"></i> 系统设置
+                    </button>
                     <button @click="showSystemLogs" class="btn-apple bg-black text-white px-3 py-1.5 rounded-lg text-xs font-medium flex items-center shadow-sm hover:bg-gray-800 transition-colors">
                         <i data-lucide="terminal" class="w-4 h-4 mr-1.5"></i> 核心日志
                     </button>
@@ -181,6 +184,38 @@
             </section>
         </main>
 
+        <div v-if="showSettingsModal" class="fixed inset-0 z-[100] flex items-center justify-center p-6 bg-black/20 backdrop-blur-sm">
+            <div class="glass w-full max-w-lg rounded-[2.5rem] p-8 shadow-2xl">
+                <div class="flex items-center space-x-3 mb-6">
+                    <div class="w-10 h-10 bg-gray-100 rounded-xl flex items-center justify-center"><i data-lucide="settings" class="w-5 h-5 text-gray-600"></i></div>
+                    <h3 class="text-2xl font-semibold">全局系统设置</h3>
+                </div>
+                <p class="text-sm text-gray-500 mb-6 border-b pb-4">修改设置后将自动重启底层服务并刷新页面，请确保输入的端口未被占用。</p>
+
+                <div class="space-y-5 mb-8 text-sm">
+                    <div>
+                        <label class="block text-gray-500 mb-2 ml-1 font-medium">面板访问端口</label>
+                        <input type="number" v-model="sysConfigForm.port" class="w-full bg-white/60 border border-gray-200 rounded-xl px-4 py-3 focus:ring-2 focus:ring-blue-500 outline-none transition-all shadow-sm">
+                    </div>
+                    <div>
+                        <label class="block text-gray-500 mb-2 ml-1 font-medium">安全令牌 (Token)</label>
+                        <input type="text" v-model="sysConfigForm.adminToken" class="w-full bg-white/60 border border-gray-200 rounded-xl px-4 py-3 focus:ring-2 focus:ring-blue-500 outline-none transition-all shadow-sm">
+                    </div>
+                    <div>
+                        <label class="block text-gray-500 mb-2 ml-1 font-medium">全局更新代理 (V2Ray 等)</label>
+                        <input type="text" v-model="sysConfigForm.localProxy" placeholder="如: http://127.0.0.1:10809 (留空为直连)" class="w-full bg-white/60 border border-gray-200 rounded-xl px-4 py-3 focus:ring-2 focus:ring-blue-500 outline-none transition-all shadow-sm font-mono text-xs">
+                    </div>
+                </div>
+                <div class="flex space-x-3">
+                    <button @click="showSettingsModal = false" class="btn-apple flex-1 py-3 text-gray-500 font-medium border rounded-2xl hover:bg-gray-50">取消</button>
+                    <button @click="saveSettings" class="btn-apple flex-1 bg-black text-white py-3 rounded-2xl font-medium shadow-lg hover:bg-gray-800 flex justify-center items-center">
+                        <i v-if="isSavingSettings" data-lucide="loader-2" class="w-4 h-4 mr-2 animate-spin"></i>
+                        <span>保存并重启系统</span>
+                    </button>
+                </div>
+            </div>
+        </div>
+
         <div v-if="showAddModal" class="fixed inset-0 z-[100] flex items-center justify-center p-6 bg-black/20 backdrop-blur-sm">
             <div class="glass w-full max-w-2xl rounded-[2.5rem] p-8 shadow-2xl flex flex-col max-h-[90vh]">
                 <div class="flex justify-between items-center mb-6">
@@ -277,11 +312,9 @@
         <div v-if="isUpgrading" class="fixed inset-0 z-[200] flex flex-col items-center justify-center bg-black/80 backdrop-blur-md transition-all p-6">
             <i data-lucide="loader-2" class="w-12 h-12 text-blue-500 animate-spin mb-4"></i>
             <h3 class="text-xl font-semibold mb-6 text-white">正在下载并部署系统...</h3>
-
             <div class="w-full max-w-2xl bg-[#1e1e1e] rounded-[1rem] p-4 shadow-2xl border border-gray-700 h-64 overflow-y-auto terminal-scroll text-left">
                 <pre class="text-[#00ff00] font-mono text-xs whitespace-pre-wrap">{{ upgradeLog }}</pre>
             </div>
-
             <p class="text-sm text-gray-400 font-mono mt-6">请勿刷新页面，系统恢复后将自动刷新</p>
         </div>
     </div>
@@ -313,12 +346,16 @@
                 const cronModalApp = ref(null);
                 const newCronReq = ref({ schedule: '0 4 * * *', command: '' });
 
+                // 🌟 新增：系统设置状态
+                const showSettingsModal = ref(false);
+                const sysConfigForm = ref({ port: 9958, adminToken: '', localProxy: '' });
+                const isSavingSettings = ref(false);
+
                 const hasUpdate = ref(false);
                 const latestVersion = ref('');
                 const isUpgrading = ref(false);
                 const upgradeLog = ref('');
 
-                // 🌟 新增：搜索过滤逻辑
                 const searchQuery = ref('');
                 const filteredApps = computed(() => {
                     if (!searchQuery.value) return apps.value;
@@ -326,30 +363,16 @@
                     return apps.value.filter(a => a.name.toLowerCase().includes(q) || a.id.toLowerCase().includes(q));
                 });
 
-                // 🌟 新增：拖拽排序逻辑
                 const draggedIndex = ref(null);
 
-                const onDragStart = (e, index) => {
-                    draggedIndex.value = index;
-                    e.dataTransfer.effectAllowed = 'move';
-                };
-
+                const onDragStart = (e, index) => { draggedIndex.value = index; e.dataTransfer.effectAllowed = 'move'; };
                 const onDrop = async (e, index) => {
                     if (draggedIndex.value === null || draggedIndex.value === index) return;
-
-                    if (searchQuery.value) {
-                        alert('当前处于搜索模式，暂不支持拖拽排序。请清空搜索框后再试。');
-                        draggedIndex.value = null;
-                        return;
-                    }
-
-                    // 数组位置互换
+                    if (searchQuery.value) { alert('当前处于搜索模式，暂不支持拖拽排序。'); draggedIndex.value = null; return; }
                     const draggedApp = apps.value[draggedIndex.value];
                     apps.value.splice(draggedIndex.value, 1);
                     apps.value.splice(index, 0, draggedApp);
                     draggedIndex.value = null;
-
-                    // 构造新的排序列表并发给后端
                     const orderReq = apps.value.map((a, i) => ({ id: a.id, sortOrder: i }));
                     await callApi('/api/apps/reorder', 'POST', orderReq);
                 };
@@ -361,7 +384,7 @@
                         const res = await fetch(url, { method, headers: { 'Authorization': token.value, 'Content-Type': 'application/json' }, body: body ? JSON.stringify(body) : null });
                         if (res.status === 401) throw new Error('令牌错误');
                         return await res.json();
-                    } catch (e) { console.error(e.message); return null; }
+                    } catch (e) { return null; }
                 };
 
                 const handleTokenSubmit = () => {
@@ -370,6 +393,35 @@
                     loadSystemInfo();
                     loadCronJobs();
                     startPolling();
+                };
+
+                // 🌟 新增：打开设置弹窗
+                const openSettings = async () => {
+                    const data = await callApi('/api/system/config');
+                    if (data) {
+                        sysConfigForm.value = { port: data.port || data.Port, adminToken: data.adminToken || data.AdminToken, localProxy: data.localProxy || data.LocalProxy || '' };
+                        showSettingsModal.value = true;
+                    }
+                };
+
+                // 🌟 新增：保存设置并重定向
+                const saveSettings = async () => {
+                    if (!confirm("修改配置后，底层服务将会自动重启，是否继续？")) return;
+                    isSavingSettings.value = true;
+
+                    const res = await callApi('/api/system/config', 'POST', sysConfigForm.value);
+                    if (res !== null) {
+                        // 提前更新本地 Token，防止刷新后登出
+                        localStorage.setItem('sc_token', sysConfigForm.value.adminToken);
+                        token.value = sysConfigForm.value.adminToken;
+                        showSettingsModal.value = false;
+
+                        // 等待 2.5 秒，让后端的 systemd-run 完成重启，跳转到新端口
+                        setTimeout(() => {
+                            window.location.href = `http://${window.location.hostname}:${sysConfigForm.value.port}`;
+                        }, 2500);
+                    }
+                    isSavingSettings.value = false;
                 };
 
                 const isNewerVersion = (oldVer, newVer) => {
@@ -387,13 +439,10 @@
                         const res = await fetch('https://api.github.com/repos/fw867/unifi-softcenterstore/releases/latest');
                         const data = await res.json();
                         if (data && data.tag_name) {
-                            const latest = data.tag_name.replace('v', '');
-                            latestVersion.value = latest;
-                            if (sysInfo.value.Version !== '0.0.0' && isNewerVersion(sysInfo.value.Version, latest)) {
-                                hasUpdate.value = true;
-                            }
+                            latestVersion.value = data.tag_name.replace('v', '');
+                            if (sysInfo.value.Version !== '0.0.0' && isNewerVersion(sysInfo.value.Version, latestVersion.value)) hasUpdate.value = true;
                         }
-                    } catch (e) { console.error('检查更新失败', e); }
+                    } catch (e) { }
                 };
 
                 const doUpgrade = async () => {
@@ -411,23 +460,17 @@
                                 upgradeLog.value = data.content || data.Content || '等待日志输出...';
                                 const c = document.querySelector('.terminal-scroll');
                                 if (c) c.scrollTop = c.scrollHeight;
-                            } else {
-                                throw new Error('断连');
-                            }
+                            } else { throw new Error('断连'); }
                         } catch (e) {
                             clearInterval(logTimer);
-                            upgradeLog.value += '\n\n[系统提示] 后端服务已主动挂起。\n[系统提示] 正在执行底层二进制文件覆盖与 Systemd 守护进程重启...\n[系统提示] 正在等待路由节点重新上线...';
-
+                            upgradeLog.value += '\n\n[系统提示] 后端服务已主动挂起。\n[系统提示] 正在执行底层二进制文件覆盖与 Systemd 重启...\n[系统提示] 正在等待路由节点重新上线...';
                             const c = document.querySelector('.terminal-scroll');
                             if (c) c.scrollTop = c.scrollHeight;
 
                             let retryTimer = setInterval(async () => {
                                 try {
-                                    const res = await fetch('/api/system/info');
-                                    if (res.ok) {
-                                        clearInterval(retryTimer);
-                                        window.location.reload(true);
-                                    }
+                                    const res = await callApi('/api/system/info');
+                                    if (res) { clearInterval(retryTimer); window.location.reload(true); }
                                 } catch (err) { }
                             }, 2000);
                         }
@@ -439,7 +482,7 @@
                     if (data) {
                         const rawVersion = data.version || data.Version || '0.0.0';
                         sysInfo.value = { Version: rawVersion.split('+')[0] };
-                        checkUpdate(); 
+                        checkUpdate();
                     }
                 };
 
@@ -447,47 +490,30 @@
                     const data = await callApi('/api/apps');
                     if (data) {
                         apps.value = data.map(i => ({
-                            id: i.id || i.Id,
-                            name: i.name || i.Name,
-                            type: i.type || i.Type,
-                            icon: i.icon || i.Icon || 'box',
-                            startCommand: i.startCommand || i.StartCommand,
-                            autoStart: (i.isAutoStart !== undefined ? i.isAutoStart : i.IsAutoStart) === 1,
-                            isRunning: i.isRunning !== undefined ? i.isRunning : i.IsRunning,
-                            configPath: i.configPath || i.ConfigPath || '',
-                            configKeys: i.configKeys || i.ConfigKeys || '',
-                            logPath: i.logPath || i.LogPath || '',
-                            sortOrder: i.sortOrder !== undefined ? i.sortOrder : i.SortOrder
+                            id: i.id || i.Id, name: i.name || i.Name, type: i.type || i.Type, icon: i.icon || i.Icon || 'box',
+                            startCommand: i.startCommand || i.StartCommand, autoStart: (i.isAutoStart !== undefined ? i.isAutoStart : i.IsAutoStart) === 1,
+                            isRunning: i.isRunning !== undefined ? i.isRunning : i.IsRunning, configPath: i.configPath || i.ConfigPath || '',
+                            configKeys: i.configKeys || i.ConfigKeys || '', logPath: i.logPath || i.LogPath || '', sortOrder: i.sortOrder !== undefined ? i.sortOrder : i.SortOrder
                         }));
                         setTimeout(() => lucide.createIcons(), 100);
                     }
                 };
 
-                const saveAutoStart = async (app) => {
-                    await callApi(`/api/apps/${app.id}/autostart?state=${app.autoStart ? 1 : 0}`, 'PUT');
-                };
-
+                const saveAutoStart = async (app) => { await callApi(`/api/apps/${app.id}/autostart?state=${app.autoStart ? 1 : 0}`, 'PUT'); };
                 const loadCronJobs = async () => {
                     const data = await callApi('/api/cron');
-                    if (data) {
-                        cronJobs.value = data.map(c => ({
-                            id: c.id || c.Id, schedule: c.schedule || c.Schedule, command: c.command || c.Command
-                        }));
-                    }
+                    if (data) cronJobs.value = data.map(c => ({ id: c.id || c.Id, schedule: c.schedule || c.Schedule, command: c.command || c.Command }));
                 };
 
                 let pollTimer = null;
-                const startPolling = () => {
-                    if (pollTimer) clearInterval(pollTimer);
-                    pollTimer = setInterval(loadRealApps, 3000);
-                };
+                const startPolling = () => { if (pollTimer) clearInterval(pollTimer); pollTimer = setInterval(loadRealApps, 3000); };
 
                 const fetchOnlineStore = async () => {
                     isFetchingStore.value = true;
                     try {
                         const res = await fetch('https://raw.githubusercontent.com/fw867/unifi-softcenterstore/master/apps/apps.json');
                         onlineStore.value = await res.json();
-                    } catch (e) { console.error(e); } finally { isFetchingStore.value = false; }
+                    } catch (e) { } finally { isFetchingStore.value = false; }
                 };
 
                 const installApp = async (p) => {
@@ -531,16 +557,8 @@
                     activeApp.value = null;
                 };
 
-                const showSystemLogs = async () => {
-                    logModalApp.value = { id: 'sys', name: '系统核心' };
-                    await refreshLogs();
-                };
-
-                const showLogModal = async (app) => {
-                    if (!app.logPath) return;
-                    logModalApp.value = app;
-                    await refreshLogs();
-                };
+                const showSystemLogs = async () => { logModalApp.value = { id: 'sys', name: '系统核心' }; await refreshLogs(); };
+                const showLogModal = async (app) => { if (!app.logPath) return; logModalApp.value = app; await refreshLogs(); };
 
                 const refreshLogs = async () => {
                     if (!logModalApp.value) return;
@@ -552,11 +570,7 @@
                     nextTick(() => { const c = document.getElementById('logContainer'); if (c) c.scrollTop = c.scrollHeight; });
                 };
 
-                const showCronModal = (app) => {
-                    cronModalApp.value = app;
-                    newCronReq.value = { schedule: '0 4 * * *', command: app.startCommand || app.StartCommand };
-                };
-
+                const showCronModal = (app) => { cronModalApp.value = app; newCronReq.value = { schedule: '0 4 * * *', command: app.startCommand || app.StartCommand }; };
                 const submitCron = async () => {
                     if (!newCronReq.value.schedule) return;
                     await callApi('/api/cron', 'POST', newCronReq.value);
@@ -570,20 +584,14 @@
                     loadCronJobs();
                 };
 
-                onMounted(() => {
-                    if (token.value) handleTokenSubmit();
-                    lucide.createIcons();
-                });
+                onMounted(() => { if (token.value) handleTokenSubmit(); lucide.createIcons(); });
 
                 return {
-                    token, tokenInputType, handleTokenSubmit, sysInfo,
-                    apps, cronJobs, activeApp, appConfig, showAddModal, addTab, isFetchingStore, onlineStore,
-                    newApp, logModalApp, logContent, isLoadingLogs, cronModalApp, newCronReq,
-                    hasUpdate, latestVersion, isUpgrading, doUpgrade,
-                    searchQuery, filteredApps, draggedIndex, onDragStart, onDrop, deleteApp, // 🌟 暴露新增的变量与方法
-                    toggleApp, saveAutoStart, openAddModal: () => { showAddModal.value = true; fetchOnlineStore(); },
-                    installApp, showSystemLogs, showLogModal, refreshLogs, loadCronJobs,
-                    openConfig, saveAppConfig, showCronModal, submitCron, deleteCron, upgradeLog
+                    token, tokenInputType, handleTokenSubmit, sysInfo, apps, cronJobs, activeApp, appConfig, showAddModal, addTab, isFetchingStore, onlineStore,
+                    newApp, logModalApp, logContent, isLoadingLogs, cronModalApp, newCronReq, hasUpdate, latestVersion, isUpgrading, upgradeLog, doUpgrade,
+                    searchQuery, filteredApps, draggedIndex, onDragStart, onDrop, deleteApp, toggleApp, saveAutoStart, openAddModal: () => { showAddModal.value = true; fetchOnlineStore(); },
+                    installApp, showSystemLogs, showLogModal, refreshLogs, loadCronJobs, openConfig, saveAppConfig, showCronModal, submitCron, deleteCron,
+                    showSettingsModal, sysConfigForm, isSavingSettings, openSettings, saveSettings // 🌟 暴露设置功能
                 };
             }
         }).mount('#app');
