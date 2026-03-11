@@ -23,6 +23,10 @@ jobs:
         DEBIAN_FRONTEND: noninteractive
       run: |
         dpkg --add-architecture arm64
+        sed -i 's/deb http/deb [arch=amd64] http/g' /etc/apt/sources.list
+        echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports/ focal main restricted universe multiverse" >> /etc/apt/sources.list
+        echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports/ focal-updates main restricted universe multiverse" >> /etc/apt/sources.list
+        echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports/ focal-security main restricted universe multiverse" >> /etc/apt/sources.list        
         apt-get update
         apt-get install -y git curl zip unzip gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu zlib1g-dev:arm64 ca-certificates libicu-dev clang gcc
 
