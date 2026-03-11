@@ -24,7 +24,6 @@ jobs:
       run: |
         dpkg --add-architecture arm64
         apt-get update
-        
         apt-get install -y git curl zip unzip clang gcc gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu zlib1g-dev:arm64 ca-certificates libicu-dev
 
     - name: Checkout Code
@@ -44,8 +43,7 @@ jobs:
         /p:PublishAot=true \
         /p:Version=${{ env.APP_VERSION }} \
         /p:InformationalVersion=${{ env.APP_VERSION }} \
-        /p:ObjCopyName=aarch64-linux-gnu-objcopy \
-        /p:CppCompilerAndLinker=aarch64-linux-gnu-gcc
+        /p:ObjCopyName=aarch64-linux-gnu-objcopy
 
     - name: Zip the build
       run: |
