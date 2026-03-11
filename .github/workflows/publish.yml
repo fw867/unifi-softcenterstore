@@ -11,7 +11,7 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
-    container: ubuntu:20.04
+    container: debian:11
     env:
       APP_VERSION: "1.0.${{ github.run_number }}"
       RELEASE_TAG: "v1.0.${{ github.run_number }}"
@@ -22,8 +22,10 @@ jobs:
       env:
         DEBIAN_FRONTEND: noninteractive 
       run: |
+        dpkg --add-architecture arm64
         apt-get update
-        apt-get install -y git curl zip unzip clang gcc gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu zlib1g-dev-arm64-cross ca-certificates libicu-dev
+        
+        apt-get install -y git curl zip unzip clang gcc gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu zlib1g-dev:arm64 ca-certificates libicu-dev
 
     - name: Checkout Code
       uses: actions/checkout@v4
