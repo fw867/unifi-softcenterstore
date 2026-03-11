@@ -19,6 +19,8 @@ jobs:
 
     steps:
     - name: Prepare Container Environment
+      env:
+        DEBIAN_FRONTEND: noninteractive
       run: |
         apt-get update
         apt-get install -y git curl zip unzip gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu zlib1g-dev ca-certificates libicu-dev
