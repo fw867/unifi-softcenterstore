@@ -24,16 +24,22 @@
             <div class="safe-area px-6 h-16 flex items-center justify-between">
                 <div class="flex items-center space-x-3">
                     <div class="w-8 h-8 bg-black rounded-lg flex items-center justify-center text-white"><i data-lucide="shield-check" class="w-5 h-5"></i></div>
-                    <span class="font-semibold text-lg tracking-tight">SoftCenter</span>
-                    <span class="text-[10px] text-gray-400 font-mono mt-1">Build {{ sysInfo.Version }}</span>
+                    <div class="flex flex-col">
+                        <span class="font-semibold text-lg tracking-tight leading-none">SoftCenter</span>
+                        <span class="text-[10px] text-gray-400 font-mono mt-0.5">Build {{ sysInfo.Version }}</span>
+                    </div>
                 </div>
                 <div class="flex items-center space-x-4">
-                    <button @click="showSystemLogs" class="bg-black text-white px-3 py-1.5 rounded-lg text-xs font-medium flex items-center shadow-sm hover:bg-gray-800 transition-colors">
+                    <button @click="showSystemLogs" class="btn-apple bg-black text-white px-3 py-1.5 rounded-lg text-xs font-medium flex items-center shadow-sm hover:bg-gray-800 transition-colors">
                         <i data-lucide="terminal" class="w-4 h-4 mr-1.5"></i> 核心日志
                     </button>
                     <div class="flex items-center bg-gray-100 rounded-full px-3 py-1 border border-gray-200">
                         <i data-lucide="key" class="w-4 h-4 text-gray-400 mr-2"></i>
-                        <input type="password" v-model="token" placeholder="输入访问令牌" @keyup.enter="onTokenSubmit" @blur="onTokenSubmit" class="bg-transparent border-none text-xs focus:outline-none w-32">
+                        <input :type="tokenInputType" v-model="token" placeholder="输入访问令牌" 
+                               @focus="tokenInputType = 'text'" 
+                               @blur="handleTokenSubmit" 
+                               @keyup.enter="handleTokenSubmit" 
+                               class="bg-transparent border-none text-xs focus:outline-none w-32">
                     </div>
                 </div>
             </div>
@@ -102,7 +108,7 @@
                             <tr v-for="job in cronJobs" :key="job.id" class="text-sm hover:bg-white/40">
                                 <td class="px-6 py-4"><code>{{ job.schedule }}</code></td>
                                 <td class="px-6 py-4 font-mono text-xs">{{ job.command }}</td>
-                                <td class="px-6 py-4 text-right"><button @click="deleteCron(job.id)" class="text-red-500 font-medium">删除</button></td>
+                                <td class="px-6 py-4 text-right"><button @click="deleteCron(job.id)" class="text-red-500 font-medium hover:underline">删除</button></td>
                             </tr>
                         </tbody>
                     </table>
@@ -110,42 +116,49 @@
             </section>
         </main>
 
-<div v-if="showAddModal" class="fixed inset-0 z-[100] flex items-center justify-center p-6 bg-black/20 backdrop-blur-sm">
-    <div class="glass w-full max-w-2xl rounded-[2.5rem] p-8 shadow-2xl flex flex-col max-h-[90vh]">
-        <div class="flex justify-between items-center mb-6">
-            <h3 class="text-2xl font-semibold">应用库</h3>
-            <div class="flex space-x-2 bg-gray-100 p-1 rounded-xl">
-                <button @click="addTab = 'online'" :class="addTab === 'online' ? 'bg-white shadow-sm' : 'text-gray-500'" class="px-4 py-1.5 rounded-lg text-sm font-medium transition-all">在线拉取</button>
-                <button @click="addTab = 'local'" :class="addTab === 'local' ? 'bg-white shadow-sm' : 'text-gray-500'" class="px-4 py-1.5 rounded-lg text-sm font-medium transition-all">手动配置</button>
-            </div>
-        </div>
-
-        <div class="overflow-y-auto flex-1 pr-2">
-            <div v-if="addTab === 'online'" class="space-y-4">
-                <div v-if="isFetchingStore" class="text-center py-8 text-gray-500">同步中...</div>
-                <div v-for="pkg in onlineStore" :key="pkg.Id" class="flex items-center justify-between p-4 bg-white/60 rounded-2xl border border-gray-100">
-                    <div class="flex items-center space-x-4">
-                        <div class="w-10 h-10 bg-blue-100 text-blue-600 rounded-xl flex items-center justify-center"><i :data-lucide="pkg.Icon" class="w-5 h-5"></i></div>
-                        <div><h4 class="font-semibold">{{ pkg.Name }}</h4><p class="text-xs text-gray-500">{{ pkg.Id }}</p></div>
+        <div v-if="showAddModal" class="fixed inset-0 z-[100] flex items-center justify-center p-6 bg-black/20 backdrop-blur-sm">
+            <div class="glass w-full max-w-2xl rounded-[2.5rem] p-8 shadow-2xl flex flex-col max-h-[90vh]">
+                <div class="flex justify-between items-center mb-6">
+                    <h3 class="text-2xl font-semibold">应用库</h3>
+                    <div class="flex space-x-2 bg-gray-100 p-1 rounded-xl">
+                        <button @click="addTab = 'online'" :class="addTab === 'online' ? 'bg-white shadow-sm' : 'text-gray-500'" class="px-4 py-1.5 rounded-lg text-sm font-medium transition-all">在线拉取</button>
+                        <button @click="addTab = 'local'" :class="addTab === 'local' ? 'bg-white shadow-sm' : 'text-gray-500'" class="px-4 py-1.5 rounded-lg text-sm font-medium transition-all">手动配置</button>
                     </div>
-                    <button @click="installApp(pkg)" class="bg-black text-white px-4 py-2 rounded-xl text-sm font-medium">安装</button>
                 </div>
-            </div>
 
-            <div v-if="addTab === 'local'" class="space-y-4 text-sm mt-4">
-                <div class="grid grid-cols-2 gap-4">
-                    <input v-model="newApp.Id" placeholder="应用 ID" class="w-full bg-gray-100 rounded-xl px-4 py-2.5 outline-none">
-                    <input v-model="newApp.Name" placeholder="显示名称" class="w-full bg-gray-100 rounded-xl px-4 py-2.5 outline-none">
-                    <input v-model="newApp.Icon" placeholder="图标 (Lucide)" class="w-full bg-gray-100 rounded-xl px-4 py-2.5 outline-none">
-                    <input v-model="newApp.ConfigPath" placeholder="参数文件路径" class="w-full bg-gray-100 rounded-xl px-4 py-2.5 outline-none">
+                <div class="overflow-y-auto flex-1 pr-2">
+                    <div v-if="addTab === 'online'" class="space-y-4">
+                        <div v-if="isFetchingStore" class="text-center py-8 text-gray-500">同步中...</div>
+                        <div v-for="pkg in onlineStore" :key="pkg.id || pkg.Id" class="flex items-center justify-between p-4 bg-white/60 rounded-2xl border border-gray-100">
+                            <div class="flex items-center space-x-4">
+                                <div class="w-10 h-10 bg-blue-100 text-blue-600 rounded-xl flex items-center justify-center"><i :data-lucide="pkg.icon || pkg.Icon" class="w-5 h-5"></i></div>
+                                <div><h4 class="font-semibold">{{ pkg.name || pkg.Name }}</h4><p class="text-xs text-gray-500">{{ pkg.id || pkg.Id }}</p></div>
+                            </div>
+                            <button @click="installApp(pkg)" class="btn-apple bg-black text-white px-4 py-2 rounded-xl text-sm font-medium">安装</button>
+                        </div>
+                    </div>
+
+                    <div v-if="addTab === 'local'" class="space-y-4 text-sm mt-4">
+                        <div class="grid grid-cols-2 gap-4">
+                            <input v-model="newApp.Id" placeholder="应用 ID" class="w-full bg-gray-100 rounded-xl px-4 py-2.5 outline-none">
+                            <input v-model="newApp.Name" placeholder="显示名称" class="w-full bg-gray-100 rounded-xl px-4 py-2.5 outline-none">
+                            <input v-model="newApp.Icon" placeholder="图标 (Lucide, 如 router)" class="w-full bg-gray-100 rounded-xl px-4 py-2.5 outline-none">
+                            <input v-model="newApp.ConfigPath" placeholder="参数文件路径" class="w-full bg-gray-100 rounded-xl px-4 py-2.5 outline-none">
+                        </div>
+                        <div class="grid grid-cols-2 gap-4">
+                            <input v-model="newApp.ConfigKeys" placeholder="变量名 (逗号分隔)" class="w-full bg-gray-100 rounded-xl px-4 py-2.5 outline-none font-mono text-xs">
+                            <input v-model="newApp.LogPath" placeholder="日志路径" class="w-full bg-gray-100 rounded-xl px-4 py-2.5 outline-none font-mono text-xs">
+                        </div>
+                        <input v-model="newApp.StatusCommand" placeholder="状态探针命令" class="w-full bg-gray-100 rounded-xl px-4 py-2.5 outline-none font-mono text-xs">
+                        <input v-model="newApp.StartCommand" placeholder="启动命令" class="w-full bg-gray-100 rounded-xl px-4 py-2.5 outline-none font-mono text-xs">
+                        <input v-model="newApp.StopCommand" placeholder="停止命令" class="w-full bg-gray-100 rounded-xl px-4 py-2.5 outline-none font-mono text-xs">
+                        <button @click="installApp(newApp)" class="btn-apple w-full bg-blue-600 text-white py-3 rounded-2xl font-medium">保存本地配置</button>
+                    </div>
                 </div>
-                <input v-model="newApp.StatusCommand" placeholder="状态探针命令" class="w-full bg-gray-100 rounded-xl px-4 py-2.5 outline-none font-mono text-xs">
-                <input v-model="newApp.StartCommand" placeholder="启动命令" class="w-full bg-gray-100 rounded-xl px-4 py-2.5 outline-none font-mono text-xs">
-                <input v-model="newApp.StopCommand" placeholder="停止命令" class="w-full bg-gray-100 rounded-xl px-4 py-2.5 outline-none font-mono text-xs">
-                <button @click="installApp(newApp)" class="w-full bg-blue-600 text-white py-3 rounded-2xl font-medium">保存本地配置</button>
+                <div class="flex space-x-3 mt-6"><button @click="showAddModal = false" class="btn-apple flex-1 py-3 font-medium border rounded-2xl hover:bg-white">取消</button></div>
             </div>
         </div>
-        <div class="flex space-x-3 mt-6"><button @click="showAddModal = false" class="flex-1 py-3 font-medium border rounded-2xl">取消</button></div>
+
         <div v-if="logModalApp" class="fixed inset-0 z-[100] flex items-center justify-center p-6 bg-black/40 backdrop-blur-sm">
             <div class="w-full max-w-4xl bg-[#1e1e1e] rounded-[1.5rem] shadow-2xl flex flex-col h-[80vh]">
                 <div class="h-12 flex items-center justify-between px-4 bg-[#2d2d2d] rounded-t-[1.5rem]">
@@ -154,28 +167,75 @@
                     <button @click="refreshLogs"><i data-lucide="refresh-cw" :class="{'animate-spin': isLoadingLogs}" class="w-4 h-4 text-white"></i></button>
                 </div>
                 <div id="logContainer" class="flex-1 overflow-y-auto p-4 terminal-scroll bg-[#1e1e1e] rounded-b-[1.5rem]">
-                    <pre class="text-[#00ff00] font-mono text-xs whitespace-pre-wrap">{{ logContent }}</pre>
+                    <pre class="text-[#00ff00] font-mono text-xs whitespace-pre-wrap break-all">{{ logContent }}</pre>
+                </div>
+            </div>
+        </div>
+
+        <div v-if="activeApp" class="fixed inset-0 z-[100] flex items-center justify-center p-6 bg-black/20 backdrop-blur-sm">
+            <div class="glass w-full max-w-lg rounded-[2.5rem] p-8 shadow-2xl">
+                <h3 class="text-2xl font-semibold mb-2">配置 {{ activeApp.name }}</h3>
+                <p class="text-sm text-gray-500 mb-6 font-mono break-all text-xs">{{ activeApp.configPath }}</p>
+                <div class="space-y-4 mb-8 text-sm max-h-[50vh] overflow-y-auto pr-2">
+                    <div v-for="(val, key) in appConfig" :key="key">
+                        <label class="block text-gray-400 mb-2 ml-1 uppercase text-xs font-bold tracking-wider">{{ key.replace(/_/g, ' ') }}</label>
+                        <input v-model="appConfig[key]" class="w-full bg-white/60 border border-gray-200 rounded-xl px-4 py-3 focus:ring-2 focus:ring-blue-500 outline-none transition-all shadow-sm">
+                    </div>
+                </div>
+                <div class="flex space-x-3">
+                    <button @click="activeApp = null" class="btn-apple flex-1 py-3 text-gray-500 font-medium border rounded-2xl hover:bg-gray-50">取消</button>
+                    <button @click="saveAppConfig" class="btn-apple flex-1 bg-black text-white py-3 rounded-2xl font-medium shadow-lg hover:bg-gray-800">保存并重启服务</button>
+                </div>
+            </div>
+        </div>
+
+        <div v-if="cronModalApp" class="fixed inset-0 z-[100] flex items-center justify-center p-6 bg-black/20 backdrop-blur-sm">
+            <div class="glass w-full max-w-lg rounded-[2.5rem] p-8 shadow-2xl">
+                <h3 class="text-2xl font-semibold mb-6">为 {{ cronModalApp.name }} 添加定时计划</h3>
+                <div class="space-y-4 mb-8 text-sm">
+                    <div>
+                        <label class="block text-gray-500 mb-2 ml-1">Cron 表达式 (如: 0 4 * * *)</label>
+                        <input v-model="newCronReq.schedule" placeholder="分 时 日 月 周" class="w-full bg-white/60 border border-gray-200 rounded-xl px-4 py-3 outline-none">
+                    </div>
+                    <div>
+                        <label class="block text-gray-500 mb-2 ml-1">执行脚本</label>
+                        <input v-model="newCronReq.command" class="w-full bg-gray-100 border-none rounded-xl px-4 py-3 outline-none font-mono text-xs text-gray-600">
+                    </div>
+                </div>
+                <div class="flex space-x-3">
+                    <button @click="cronModalApp = null" class="btn-apple flex-1 py-3 text-gray-500 font-medium border rounded-2xl hover:bg-gray-50">取消</button>
+                    <button @click="submitCron" class="btn-apple flex-1 bg-blue-600 text-white py-3 rounded-2xl font-medium shadow-lg hover:bg-blue-700">添加至系统 Cron</button>
                 </div>
             </div>
         </div>
     </div>
+
     <script>
         const { createApp, ref, onMounted, nextTick, watch } = Vue;
 
         createApp({
             setup() {
                 const token = ref(localStorage.getItem('sc_token') || '');
+                const tokenInputType = ref('password'); 
+                const sysInfo = ref({ Version: '0.0.0' });
                 const apps = ref([]);
                 const cronJobs = ref([]);
-                const activeApp = ref(null);
-                const appConfig = ref({});
+                
                 const showAddModal = ref(false);
                 const addTab = ref('online');
                 const isFetchingStore = ref(false);
                 const onlineStore = ref([]);
+                const newApp = ref({ Id: '', Name: '', Type: 'Local', Icon: 'box', ConfigPath: '', ConfigKeys: '', LogPath: '', StartCommand: '', StopCommand: '', StatusCommand: '', IsAutoStart: 0 });
+                
                 const logModalApp = ref(null);
                 const logContent = ref('');
                 const isLoadingLogs = ref(false);
+                
+                const activeApp = ref(null);
+                const appConfig = ref({});
+                
+                const cronModalApp = ref(null);
+                const newCronReq = ref({ schedule: '0 4 * * *', command: '' });
 
                 const callApi = async (url, method = 'GET', body = null) => {
                     if (!token.value) return null;
@@ -187,20 +247,59 @@
                     } catch (e) { console.error(e.message); return null; }
                 };
 
+                const handleTokenSubmit = () => {
+                    tokenInputType.value = 'password';
+                    loadRealApps();
+                    loadSystemInfo();
+                    loadCronJobs();
+                    startPolling();
+                };
+
+                const loadSystemInfo = async () => {
+                    const data = await callApi('/api/system/info');
+                    if (data) sysInfo.value = { Version: data.version || data.Version || '0.0.0' };
+                };
+
+                // 🌟 核心修复：全面兼容 Minimal API 的 JSON 驼峰命名规则
                 const loadRealApps = async () => {
                     const data = await callApi('/api/apps');
                     if (data) {
                         apps.value = data.map(i => ({
-                            id: i.Id, name: i.Name, type: i.Type, icon: i.Icon,
-                            startCommand: i.StartCommand, autoStart: i.IsAutoStart === 1,
-                            isRunning: i.IsRunning, configPath: i.ConfigPath,
-                            configKeys: i.ConfigKeys, logPath: i.LogPath
+                            id: i.id || i.Id, 
+                            name: i.name || i.Name, 
+                            type: i.type || i.Type, 
+                            icon: i.icon || i.Icon || 'box',
+                            startCommand: i.startCommand || i.StartCommand, 
+                            autoStart: (i.isAutoStart !== undefined ? i.isAutoStart : i.IsAutoStart) === 1,
+                            isRunning: i.isRunning !== undefined ? i.isRunning : i.IsRunning, 
+                            configPath: i.configPath || i.ConfigPath || '',
+                            configKeys: i.configKeys || i.ConfigKeys || '', 
+                            logPath: i.logPath || i.LogPath || ''
                         }));
-                        nextTick(() => lucide.createIcons());
+                        setTimeout(() => lucide.createIcons(), 100);
                     }
                 };
 
-                const startPolling = () => { setInterval(loadRealApps, 3000); };
+                const saveAutoStart = async (app) => {
+                    await callApi(`/api/apps/${app.id}/autostart?state=${app.autoStart ? 1 : 0}`, 'PUT');
+                };
+
+                const loadCronJobs = async () => {
+                    const data = await callApi('/api/cron');
+                    if (data) {
+                        cronJobs.value = data.map(c => ({ 
+                            id: c.id || c.Id, 
+                            schedule: c.schedule || c.Schedule, 
+                            command: c.command || c.Command 
+                        }));
+                    }
+                };
+
+                let pollTimer = null;
+                const startPolling = () => { 
+                    if(pollTimer) clearInterval(pollTimer);
+                    pollTimer = setInterval(loadRealApps, 3000); 
+                };
 
                 const fetchOnlineStore = async () => {
                     isFetchingStore.value = true;
@@ -210,9 +309,45 @@
                     } catch (e) { console.error(e); } finally { isFetchingStore.value = false; }
                 };
 
+                const installApp = async (p) => {
+                    if (!p) return;
+                    const appData = {
+                        Id: p.Id || p.id,
+                        Name: p.Name || p.name,
+                        Type: p.Type || p.type || 'Local',
+                        Icon: p.Icon || p.icon || 'box',
+                        StartCommand: p.StartCommand || p.startCommand,
+                        StopCommand: p.StopCommand || p.stopCommand,
+                        StatusCommand: p.StatusCommand || p.statusCommand,
+                        IsAutoStart: p.IsAutoStart || p.isAutoStart || 0,
+                        ConfigPath: p.ConfigPath || p.configPath || '',
+                        ConfigKeys: p.ConfigKeys || p.configKeys || '',
+                        LogPath: p.LogPath || p.logPath || ''
+                    };
+                    if (!appData.Id || !appData.StartCommand) { alert('应用信息不完整'); return; }
+                    await callApi('/api/apps', 'POST', appData);
+                    showAddModal.value = false;
+                    loadRealApps();
+                };
+
                 const toggleApp = async (app) => {
                     const action = app.isRunning ? 'stop' : 'start';
                     await callApi(`/api/apps/${app.id}/control?action=${action}`, 'POST');
+                    setTimeout(loadRealApps, 500); 
+                };
+
+                const openConfig = async (app) => {
+                    if (!app.configKeys) return;
+                    activeApp.value = app; appConfig.value = {};
+                    const data = await callApi(`/api/apps/${app.id}/config`);
+                    if (data) appConfig.value = data;
+                };
+
+                const saveAppConfig = async () => {
+                    if (!activeApp.value) return;
+                    await callApi(`/api/apps/${activeApp.value.id}/config`, 'POST', appConfig.value);
+                    await callApi(`/api/apps/${activeApp.value.id}/control?action=restart`, 'POST');
+                    activeApp.value = null;
                 };
 
                 const showSystemLogs = async () => {
@@ -221,29 +356,52 @@
                 };
 
                 const showLogModal = async (app) => {
+                    if (!app.logPath) return;
                     logModalApp.value = app;
                     await refreshLogs();
                 };
 
                 const refreshLogs = async () => {
+                    if (!logModalApp.value) return;
                     isLoadingLogs.value = true;
                     const url = logModalApp.value.id === 'sys' ? '/api/system/logs' : `/api/apps/${logModalApp.value.id}/logs`;
                     const data = await callApi(url);
-                    logContent.value = data?.Content || '暂无内容';
+                    logContent.value = data?.Content || data?.content || '暂无内容';
                     isLoadingLogs.value = false;
                     nextTick(() => { const c = document.getElementById('logContainer'); if(c) c.scrollTop = c.scrollHeight; });
                 };
 
-                const sysInfo = ref({ Version: '0.0.0' });
-
-                const loadSystemInfo = async () => {
-                    const data = await callApi('/api/system/info');
-                    if (data) sysInfo.value = data;
+                const showCronModal = (app) => { 
+                    cronModalApp.value = app; 
+                    newCronReq.value = { schedule: '0 4 * * *', command: app.startCommand }; 
                 };
 
-                onMounted(() => { if (token.value) { loadRealApps(); startPolling(); loadSystemInfo(); loadCronJobs(); } lucide.createIcons(); });
+                const submitCron = async () => {
+                    if (!newCronReq.value.schedule) return;
+                    await callApi('/api/cron', 'POST', newCronReq.value);
+                    cronModalApp.value = null;
+                    setTimeout(loadCronJobs, 500);
+                };
 
-                return { token, apps, cronJobs, activeApp, appConfig, showAddModal, addTab, isFetchingStore, onlineStore, logModalApp, logContent, isLoadingLogs, onTokenSubmit: loadRealApps, toggleApp, openAddModal: () => { showAddModal.value = true; fetchOnlineStore(); }, showSystemLogs, showLogModal, refreshLogs, installApp: async (p) => { await callApi('/api/apps', 'POST', p); showAddModal.value = false; loadRealApps(); }, sysInfo };
+                const deleteCron = async (id) => {
+                    if (!confirm('确认删除该定时任务吗？')) return;
+                    await callApi(`/api/cron/${encodeURIComponent(id)}`, 'DELETE');
+                    loadCronJobs();
+                };
+
+                onMounted(() => { 
+                    if (token.value) handleTokenSubmit(); 
+                    lucide.createIcons(); 
+                });
+
+                return { 
+                    token, tokenInputType, handleTokenSubmit, sysInfo,
+                    apps, cronJobs, activeApp, appConfig, showAddModal, addTab, isFetchingStore, onlineStore, 
+                    newApp, logModalApp, logContent, isLoadingLogs, cronModalApp, newCronReq,
+                    toggleApp, saveAutoStart, openAddModal: () => { showAddModal.value = true; fetchOnlineStore(); }, 
+                    installApp, showSystemLogs, showLogModal, refreshLogs, loadCronJobs,
+                    openConfig, saveAppConfig, showCronModal, submitCron, deleteCron
+                };
             }
         }).mount('#app');
     </script>

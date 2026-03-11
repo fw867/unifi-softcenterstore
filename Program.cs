@@ -181,6 +181,17 @@ app.MapPost("/api/apps/{id}/control", (string id, string action) => {
     return Results.Ok();
 });
 
+app.MapPut("/api/apps/{id}/autostart", (string id, int state) => {
+    using var conn = new SqliteConnection(DbPath);
+    conn.Open();
+    using var cmd = conn.CreateCommand();
+    cmd.CommandText = "UPDATE apps_registry SET IsAutoStart = @state WHERE Id = @id";
+    cmd.Parameters.AddWithValue("@state", state);
+    cmd.Parameters.AddWithValue("@id", id);
+    cmd.ExecuteNonQuery();
+    return Results.Ok();
+});
+
 app.MapGet("/api/apps/{id}/config", (string id) => {
     using var conn = new SqliteConnection(DbPath);
     conn.Open();
@@ -228,7 +239,7 @@ app.MapGet("/api/apps/{id}/logs", (string id) => {
     cmd.CommandText = "SELECT LogPath FROM apps_registry WHERE Id = @id";
     cmd.Parameters.AddWithValue("@id", id);
     var logPath = cmd.ExecuteScalar()?.ToString();
-    if (string.IsNullOrEmpty(logPath) || !File.Exists(logPath)) return Results.Ok(new LogResponse("无日志。"));
+    if (string.IsNullOrEmpty(logPath) || !File.Exists(logPath)) return Results.Ok(new LogResponse("无日志或未配置。"));
     var psi = new ProcessStartInfo { FileName = "/bin/bash", Arguments = $"-c \"tail -n 200 {logPath}\"", RedirectStandardOutput = true, UseShellExecute = false };
     using var p = Process.Start(psi);
     return Results.Ok(new LogResponse(p?.StandardOutput.ReadToEnd() ?? ""));
@@ -261,18 +272,23 @@ app.MapGet("/api/cron", () => {
     return list;
 });
 
+app.MapPost("/api/cron", (CronRequest req) => {
+    Process.Start("/bin/bash", $"-c \"(crontab -l 2>/dev/null; echo '{req.Schedule} {req.Command}') | crontab -\"");
+    return Results.Ok();
+});
+
+app.MapDelete("/api/cron/{id}", (string id) => {
+    var lineToRemove = Encoding.UTF8.GetString(Convert.FromBase64String(id));
+    Process.Start("/bin/bash", $"-c \"crontab -l | grep -vF '{lineToRemove}' | crontab -\"");
+    return Results.Ok();
+});
+
 // --- 8. API 接口：获取系统版本信息 ---
 app.MapGet("/api/system/info", () => {
-    // 提取由 MSBuild 注入的 InformationalVersion
     var version = Assembly.GetExecutingAssembly()
                           .GetCustomAttribute<AssemblyInformationalVersionAttribute>()
                           ?.InformationalVersion ?? "1.0.0-dev";
-
-    return Results.Ok(new SystemInfo(
-        version,
-        "NativeAOT-.NET10",
-        "UCG-Fiber"
-    ));
+    return Results.Ok(new SystemInfo(version, "NativeAOT-.NET10", "UCG-Fiber"));
 });
 
 app.Run($"http://0.0.0.0:{sysConfig.Port}");
