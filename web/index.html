@@ -8,14 +8,50 @@
     <script src="https://cdn.jsdelivr.net/npm/vue@3.4.21/dist/vue.global.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/lucide@0.359.0/dist/umd/lucide.min.js"></script>
     <style>
-        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background-color: #F5F5F7; color: #1D1D1F; }
-        .glass { background: rgba(255, 255, 255, 0.72); backdrop-filter: saturate(180%) blur(20px); border: 1px solid rgba(255, 255, 255, 0.3); }
-        .safe-area { max-width: 1200px; margin: 0 auto; }
-        .btn-apple { transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1); }
-        .btn-apple:active { transform: scale(0.96); }
-        .terminal-scroll::-webkit-scrollbar { width: 8px; }
-        .terminal-scroll::-webkit-scrollbar-track { background: #1a1a1a; border-radius: 8px; }
-        .terminal-scroll::-webkit-scrollbar-thumb { background: #444; border-radius: 8px; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: #F5F5F7;
+            color: #1D1D1F;
+        }
+
+        .glass {
+            background: rgba(255, 255, 255, 0.72);
+            backdrop-filter: saturate(180%) blur(20px);
+            border: 1px solid rgba(255, 255, 255, 0.3);
+        }
+
+        .safe-area {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        .btn-apple {
+            transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+            .btn-apple:active {
+                transform: scale(0.96);
+            }
+
+        .terminal-scroll::-webkit-scrollbar {
+            width: 8px;
+        }
+
+        .terminal-scroll::-webkit-scrollbar-track {
+            background: #1a1a1a;
+            border-radius: 8px;
+        }
+
+        .terminal-scroll::-webkit-scrollbar-thumb {
+            background: #444;
+            border-radius: 8px;
+        }
+
+        .ghost {
+            opacity: 0.4;
+            background: #e2e8f0;
+            border: 2px dashed #94a3b8;
+        }
     </style>
 </head>
 <body class="antialiased">
@@ -40,10 +76,10 @@
                     </button>
                     <div class="flex items-center bg-gray-100 rounded-full px-3 py-1 border border-gray-200">
                         <i data-lucide="key" class="w-4 h-4 text-gray-400 mr-2"></i>
-                        <input :type="tokenInputType" v-model="token" placeholder="输入访问令牌" 
-                               @focus="tokenInputType = 'text'" 
-                               @blur="handleTokenSubmit" 
-                               @keyup.enter="handleTokenSubmit" 
+                        <input :type="tokenInputType" v-model="token" placeholder="输入访问令牌"
+                               @focus="tokenInputType = 'text'"
+                               @blur="handleTokenSubmit"
+                               @keyup.enter="handleTokenSubmit"
                                class="bg-transparent border-none text-xs focus:outline-none w-32">
                     </div>
                 </div>
@@ -51,20 +87,39 @@
         </nav>
 
         <main class="safe-area px-6">
-            <div class="mb-12">
-                <h2 class="text-3xl font-semibold mb-2">欢迎回来</h2>
-                <p class="text-gray-500">UniFi Cloud Gateway Fiber 正在安全运行</p>
+            <div class="flex flex-col md:flex-row md:items-center justify-between mb-8">
+                <div>
+                    <h2 class="text-3xl font-semibold mb-2">欢迎回来</h2>
+                    <p class="text-gray-500">UniFi Cloud Gateway Fiber 正在安全运行</p>
+                </div>
+                <div class="mt-4 md:mt-0 flex items-center bg-white border border-gray-200 rounded-full px-4 py-2 shadow-sm focus-within:ring-2 focus-within:ring-blue-500 transition-all w-full md:w-64">
+                    <i data-lucide="search" class="w-4 h-4 text-gray-400 mr-2"></i>
+                    <input v-model="searchQuery" type="text" placeholder="搜索应用名称或ID..." class="bg-transparent border-none outline-none text-sm w-full text-gray-700">
+                </div>
             </div>
 
             <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mb-12">
-                <div v-for="app in apps" :key="app.id" class="glass rounded-[2rem] p-6 shadow-sm hover:shadow-md transition-all">
+                <div v-for="(app, index) in filteredApps" :key="app.id"
+                     draggable="true"
+                     @dragstart="onDragStart($event, index)"
+                     @dragover.prevent
+                     @dragenter.prevent
+                     @drop="onDrop($event, index)"
+                     :class="{'opacity-50 border-dashed border-2 border-blue-400': draggedIndex === index}"
+                     class="glass rounded-[2rem] p-6 shadow-sm hover:shadow-md transition-all relative">
+
                     <div class="flex justify-between items-start mb-6">
                         <div :class="app.isRunning ? 'bg-blue-600' : 'bg-gray-400'" class="w-14 h-14 rounded-2xl flex items-center justify-center text-white shadow-lg transition-colors">
                             <i :data-lucide="app.icon" class="w-7 h-7"></i>
                         </div>
-                        <button @click="toggleApp(app)" :class="app.isRunning ? 'bg-[#34C759]' : 'bg-[#E9E9EA]'" class="w-12 h-7 rounded-full relative p-1 transition-colors">
-                            <div :class="app.isRunning ? 'translate-x-5' : 'translate-x-0'" class="w-5 h-5 bg-white rounded-full shadow-sm transform transition-transform"></div>
-                        </button>
+                        <div class="flex items-center space-x-3">
+                            <div class="cursor-move text-gray-300 hover:text-gray-500 transition-colors" title="按住拖拽排序">
+                                <i data-lucide="grip-vertical" class="w-5 h-5"></i>
+                            </div>
+                            <button @click="toggleApp(app)" :class="app.isRunning ? 'bg-[#34C759]' : 'bg-[#E9E9EA]'" class="w-12 h-7 rounded-full relative p-1 transition-colors">
+                                <div :class="app.isRunning ? 'translate-x-5' : 'translate-x-0'" class="w-5 h-5 bg-white rounded-full shadow-sm transform transition-transform"></div>
+                            </button>
+                        </div>
                     </div>
 
                     <h3 class="text-xl font-semibold mb-1">{{ app.name }}</h3>
@@ -79,11 +134,14 @@
 
                     <div class="flex space-x-2">
                         <button @click="openConfig(app)" :disabled="!app.configKeys" :class="!app.configKeys ? 'opacity-50 cursor-not-allowed' : 'hover:bg-gray-50'" class="btn-apple flex-1 bg-white border border-gray-200 py-2.5 rounded-xl text-sm font-medium transition-all">配置</button>
-                        <button @click="showLogModal(app)" :disabled="!app.logPath" :class="!app.logPath ? 'opacity-50 cursor-not-allowed' : 'hover:bg-gray-50'" class="btn-apple px-4 bg-white border border-gray-200 py-2.5 rounded-xl transition-all">
-                            <i data-lucide="file-text" class="w-4 h-4"></i>
+                        <button @click="showLogModal(app)" :disabled="!app.logPath" :class="!app.logPath ? 'opacity-50 cursor-not-allowed' : 'hover:bg-gray-50'" class="btn-apple px-3 bg-white border border-gray-200 py-2.5 rounded-xl transition-all">
+                            <i data-lucide="file-text" class="w-4 h-4 text-gray-600"></i>
                         </button>
-                        <button @click="showCronModal(app)" class="btn-apple px-4 bg-white border border-gray-200 py-2.5 rounded-xl hover:bg-gray-50">
-                            <i data-lucide="clock" class="w-4 h-4"></i>
+                        <button @click="showCronModal(app)" class="btn-apple px-3 bg-white border border-gray-200 py-2.5 rounded-xl hover:bg-gray-50 transition-all">
+                            <i data-lucide="clock" class="w-4 h-4 text-gray-600"></i>
+                        </button>
+                        <button @click="deleteApp(app)" class="btn-apple px-3 bg-white border border-red-100 py-2.5 rounded-xl hover:bg-red-50 hover:border-red-200 transition-all group">
+                            <i data-lucide="trash-2" class="w-4 h-4 text-red-400 group-hover:text-red-600"></i>
                         </button>
                     </div>
                 </div>
@@ -105,7 +163,9 @@
                     <table class="w-full text-left border-collapse">
                         <thead>
                             <tr class="bg-gray-50/50 text-xs font-semibold text-gray-400 uppercase tracking-wider">
-                                <th class="px-6 py-4">周期</th><th class="px-6 py-4">命令</th><th class="px-6 py-4 text-right">操作</th>
+                                <th class="px-6 py-4">周期</th>
+                                <th class="px-6 py-4">命令</th>
+                                <th class="px-6 py-4 text-right">操作</th>
                             </tr>
                         </thead>
                         <tbody class="divide-y divide-gray-100">
@@ -222,36 +282,71 @@
     </div>
 
     <script>
-        const { createApp, ref, onMounted, nextTick, watch } = Vue;
+        const { createApp, ref, onMounted, nextTick, computed } = Vue;
 
         createApp({
             setup() {
                 const token = ref(localStorage.getItem('sc_token') || '');
-                const tokenInputType = ref('password'); 
+                const tokenInputType = ref('password');
                 const sysInfo = ref({ Version: '0.0.0' });
                 const apps = ref([]);
                 const cronJobs = ref([]);
-                
+
                 const showAddModal = ref(false);
                 const addTab = ref('online');
                 const isFetchingStore = ref(false);
                 const onlineStore = ref([]);
-                const newApp = ref({ Id: '', Name: '', Type: 'Local', Icon: 'box', ConfigPath: '', ConfigKeys: '', LogPath: '', StartCommand: '', StopCommand: '', StatusCommand: '', IsAutoStart: 0 });
-                
+                const newApp = ref({ Id: '', Name: '', Type: 'Local', Icon: 'box', ConfigPath: '', ConfigKeys: '', LogPath: '', StartCommand: '', StopCommand: '', StatusCommand: '', IsAutoStart: 0, SortOrder: 999 });
+
                 const logModalApp = ref(null);
                 const logContent = ref('');
                 const isLoadingLogs = ref(false);
-                
+
                 const activeApp = ref(null);
                 const appConfig = ref({});
-                
+
                 const cronModalApp = ref(null);
                 const newCronReq = ref({ schedule: '0 4 * * *', command: '' });
 
-                // 升级相关
                 const hasUpdate = ref(false);
                 const latestVersion = ref('');
                 const isUpgrading = ref(false);
+
+                // 🌟 新增：搜索过滤逻辑
+                const searchQuery = ref('');
+                const filteredApps = computed(() => {
+                    if (!searchQuery.value) return apps.value;
+                    const q = searchQuery.value.toLowerCase();
+                    return apps.value.filter(a => a.name.toLowerCase().includes(q) || a.id.toLowerCase().includes(q));
+                });
+
+                // 🌟 新增：拖拽排序逻辑
+                const draggedIndex = ref(null);
+
+                const onDragStart = (e, index) => {
+                    draggedIndex.value = index;
+                    e.dataTransfer.effectAllowed = 'move';
+                };
+
+                const onDrop = async (e, index) => {
+                    if (draggedIndex.value === null || draggedIndex.value === index) return;
+
+                    if (searchQuery.value) {
+                        alert('当前处于搜索模式，暂不支持拖拽排序。请清空搜索框后再试。');
+                        draggedIndex.value = null;
+                        return;
+                    }
+
+                    // 数组位置互换
+                    const draggedApp = apps.value[draggedIndex.value];
+                    apps.value.splice(draggedIndex.value, 1);
+                    apps.value.splice(index, 0, draggedApp);
+                    draggedIndex.value = null;
+
+                    // 构造新的排序列表并发给后端
+                    const orderReq = apps.value.map((a, i) => ({ id: a.id, sortOrder: i }));
+                    await callApi('/api/apps/reorder', 'POST', orderReq);
+                };
 
                 const callApi = async (url, method = 'GET', body = null) => {
                     if (!token.value) return null;
@@ -299,15 +394,15 @@
                     if (!confirm(`即将覆盖升级至 v${latestVersion.value} 并重启服务，是否继续？`)) return;
                     isUpgrading.value = true;
                     await callApi('/api/system/upgrade', 'POST');
-                    
+
                     let retryTimer = setInterval(async () => {
                         try {
                             const res = await fetch('/api/system/info');
                             if (res.ok) {
                                 clearInterval(retryTimer);
-                                window.location.reload(true); 
+                                window.location.reload(true);
                             }
-                        } catch (e) {}
+                        } catch (e) { }
                     }, 3000);
                 };
 
@@ -315,7 +410,7 @@
                     const data = await callApi('/api/system/info');
                     if (data) {
                         sysInfo.value = { Version: data.version || data.Version || '0.0.0' };
-                        checkUpdate(); 
+                        checkUpdate();
                     }
                 };
 
@@ -323,16 +418,17 @@
                     const data = await callApi('/api/apps');
                     if (data) {
                         apps.value = data.map(i => ({
-                            id: i.id || i.Id, 
-                            name: i.name || i.Name, 
-                            type: i.type || i.Type, 
+                            id: i.id || i.Id,
+                            name: i.name || i.Name,
+                            type: i.type || i.Type,
                             icon: i.icon || i.Icon || 'box',
-                            startCommand: i.startCommand || i.StartCommand, 
+                            startCommand: i.startCommand || i.StartCommand,
                             autoStart: (i.isAutoStart !== undefined ? i.isAutoStart : i.IsAutoStart) === 1,
-                            isRunning: i.isRunning !== undefined ? i.isRunning : i.IsRunning, 
+                            isRunning: i.isRunning !== undefined ? i.isRunning : i.IsRunning,
                             configPath: i.configPath || i.ConfigPath || '',
-                            configKeys: i.configKeys || i.ConfigKeys || '', 
-                            logPath: i.logPath || i.LogPath || ''
+                            configKeys: i.configKeys || i.ConfigKeys || '',
+                            logPath: i.logPath || i.LogPath || '',
+                            sortOrder: i.sortOrder !== undefined ? i.sortOrder : i.SortOrder
                         }));
                         setTimeout(() => lucide.createIcons(), 100);
                     }
@@ -345,18 +441,16 @@
                 const loadCronJobs = async () => {
                     const data = await callApi('/api/cron');
                     if (data) {
-                        cronJobs.value = data.map(c => ({ 
-                            id: c.id || c.Id, 
-                            schedule: c.schedule || c.Schedule, 
-                            command: c.command || c.Command 
+                        cronJobs.value = data.map(c => ({
+                            id: c.id || c.Id, schedule: c.schedule || c.Schedule, command: c.command || c.Command
                         }));
                     }
                 };
 
                 let pollTimer = null;
-                const startPolling = () => { 
-                    if(pollTimer) clearInterval(pollTimer);
-                    pollTimer = setInterval(loadRealApps, 3000); 
+                const startPolling = () => {
+                    if (pollTimer) clearInterval(pollTimer);
+                    pollTimer = setInterval(loadRealApps, 3000);
                 };
 
                 const fetchOnlineStore = async () => {
@@ -370,17 +464,11 @@
                 const installApp = async (p) => {
                     if (!p) return;
                     const appData = {
-                        Id: p.Id || p.id,
-                        Name: p.Name || p.name,
-                        Type: p.Type || p.type || 'Local',
-                        Icon: p.Icon || p.icon || 'box',
-                        StartCommand: p.StartCommand || p.startCommand,
-                        StopCommand: p.StopCommand || p.stopCommand,
-                        StatusCommand: p.StatusCommand || p.statusCommand,
-                        IsAutoStart: p.IsAutoStart || p.isAutoStart || 0,
-                        ConfigPath: p.ConfigPath || p.configPath || '',
-                        ConfigKeys: p.ConfigKeys || p.configKeys || '',
-                        LogPath: p.LogPath || p.logPath || ''
+                        Id: p.Id || p.id, Name: p.Name || p.name, Type: p.Type || p.type || 'Local', Icon: p.Icon || p.icon || 'box',
+                        StartCommand: p.StartCommand || p.startCommand, StopCommand: p.StopCommand || p.stopCommand,
+                        StatusCommand: p.StatusCommand || p.statusCommand, IsAutoStart: p.IsAutoStart || p.isAutoStart || 0,
+                        ConfigPath: p.ConfigPath || p.configPath || '', ConfigKeys: p.ConfigKeys || p.configKeys || '',
+                        LogPath: p.LogPath || p.logPath || '', SortOrder: p.SortOrder || apps.value.length
                     };
                     if (!appData.Id || !appData.StartCommand) { alert('应用信息不完整'); return; }
                     await callApi('/api/apps', 'POST', appData);
@@ -388,10 +476,17 @@
                     loadRealApps();
                 };
 
+                // 🌟 新增：删除应用逻辑
+                const deleteApp = async (app) => {
+                    if (!confirm(`确定要从管理中心移除 "${app.name}" 吗？\n注意：这仅移除配置，不会物理删除路由器上的脚本文件。`)) return;
+                    const res = await callApi(`/api/apps/${app.id}`, 'DELETE');
+                    if (res !== null) loadRealApps();
+                };
+
                 const toggleApp = async (app) => {
                     const action = app.isRunning ? 'stop' : 'start';
                     await callApi(`/api/apps/${app.id}/control?action=${action}`, 'POST');
-                    setTimeout(loadRealApps, 500); 
+                    setTimeout(loadRealApps, 500);
                 };
 
                 const openConfig = async (app) => {
@@ -426,12 +521,12 @@
                     const data = await callApi(url);
                     logContent.value = data?.Content || data?.content || '暂无内容';
                     isLoadingLogs.value = false;
-                    nextTick(() => { const c = document.getElementById('logContainer'); if(c) c.scrollTop = c.scrollHeight; });
+                    nextTick(() => { const c = document.getElementById('logContainer'); if (c) c.scrollTop = c.scrollHeight; });
                 };
 
-                const showCronModal = (app) => { 
-                    cronModalApp.value = app; 
-                    newCronReq.value = { schedule: '0 4 * * *', command: app.startCommand || app.StartCommand }; 
+                const showCronModal = (app) => {
+                    cronModalApp.value = app;
+                    newCronReq.value = { schedule: '0 4 * * *', command: app.startCommand || app.StartCommand };
                 };
 
                 const submitCron = async () => {
@@ -447,17 +542,18 @@
                     loadCronJobs();
                 };
 
-                onMounted(() => { 
-                    if (token.value) handleTokenSubmit(); 
-                    lucide.createIcons(); 
+                onMounted(() => {
+                    if (token.value) handleTokenSubmit();
+                    lucide.createIcons();
                 });
 
-                return { 
+                return {
                     token, tokenInputType, handleTokenSubmit, sysInfo,
-                    apps, cronJobs, activeApp, appConfig, showAddModal, addTab, isFetchingStore, onlineStore, 
+                    apps, cronJobs, activeApp, appConfig, showAddModal, addTab, isFetchingStore, onlineStore,
                     newApp, logModalApp, logContent, isLoadingLogs, cronModalApp, newCronReq,
                     hasUpdate, latestVersion, isUpgrading, doUpgrade,
-                    toggleApp, saveAutoStart, openAddModal: () => { showAddModal.value = true; fetchOnlineStore(); }, 
+                    searchQuery, filteredApps, draggedIndex, onDragStart, onDrop, deleteApp, // 🌟 暴露新增的变量与方法
+                    toggleApp, saveAutoStart, openAddModal: () => { showAddModal.value = true; fetchOnlineStore(); },
                     installApp, showSystemLogs, showLogModal, refreshLogs, loadCronJobs,
                     openConfig, saveAppConfig, showCronModal, submitCron, deleteCron
                 };
