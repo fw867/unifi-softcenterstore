@@ -22,7 +22,7 @@ else
 fi
 
 # 定义核心路径
-BIN_DIR="/data/bin"
+BIN_DIR="/data/softcenter/bin"
 DATA_DIR="/data/softcenter"
 TMP_DIR="/tmp/softcenter_update"
 
