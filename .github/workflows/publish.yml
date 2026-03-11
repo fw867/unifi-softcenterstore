@@ -15,12 +15,13 @@ jobs:
     env:
       APP_VERSION: "1.0.${{ github.run_number }}"
       RELEASE_TAG: "v1.0.${{ github.run_number }}"
+      DOTNET_SYSTEM_GLOBALIZATION_INVARIANT: 1
 
     steps:
     - name: Prepare Container Environment
       run: |
         apt-get update
-        apt-get install -y git curl zip unzip gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu zlib1g-dev ca-certificates
+        apt-get install -y git curl zip unzip gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu zlib1g-dev ca-certificates libicu-dev
 
     - name: Checkout Code
       uses: actions/checkout@v4
