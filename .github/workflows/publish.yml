@@ -11,7 +11,7 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
-    container: ubuntu:22.04
+    container: ubuntu:20.04
     env:
       APP_VERSION: "1.0.${{ github.run_number }}"
       RELEASE_TAG: "v1.0.${{ github.run_number }}"
@@ -20,16 +20,10 @@ jobs:
     steps:
     - name: Prepare Container Environment
       env:
-        DEBIAN_FRONTEND: noninteractive
+        DEBIAN_FRONTEND: noninteractive 
       run: |
-        dpkg --add-architecture arm64
-        sed -i 's/deb http/deb [arch=amd64] http/g' /etc/apt/sources.list
-        echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports/ focal main restricted universe multiverse" >> /etc/apt/sources.list
-        echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports/ focal-updates main restricted universe multiverse" >> /etc/apt/sources.list
-        echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports/ focal-security main restricted universe multiverse" >> /etc/apt/sources.list        
         apt-get update
-        apt-get upgrade -y
-        apt-get install -y git curl zip unzip gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu zlib1g-dev:arm64 ca-certificates libicu-dev clang gcc
+        apt-get install -y git curl zip unzip clang gcc gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu zlib1g-dev-arm64-cross ca-certificates libicu-dev
 
     - name: Checkout Code
       uses: actions/checkout@v4
@@ -48,7 +42,7 @@ jobs:
         /p:PublishAot=true \
         /p:Version=${{ env.APP_VERSION }} \
         /p:InformationalVersion=${{ env.APP_VERSION }} \
-        /p:ObjCopyName=aarch64-linux-gnu-objcopy\
+        /p:ObjCopyName=aarch64-linux-gnu-objcopy \
         /p:CppCompilerAndLinker=aarch64-linux-gnu-gcc
 
     - name: Zip the build
