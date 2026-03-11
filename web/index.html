@@ -274,10 +274,15 @@
             </div>
         </div>
 
-        <div v-if="isUpgrading" class="fixed inset-0 z-[200] flex flex-col items-center justify-center bg-white/70 backdrop-blur-md transition-all">
-            <i data-lucide="loader-2" class="w-12 h-12 text-blue-600 animate-spin mb-4"></i>
-            <h3 class="text-xl font-semibold mb-2">正在下载并部署系统...</h3>
-            <p class="text-sm text-gray-500 font-mono">请勿关闭页面，系统恢复后将自动刷新</p>
+        <div v-if="isUpgrading" class="fixed inset-0 z-[200] flex flex-col items-center justify-center bg-black/80 backdrop-blur-md transition-all p-6">
+            <i data-lucide="loader-2" class="w-12 h-12 text-blue-500 animate-spin mb-4"></i>
+            <h3 class="text-xl font-semibold mb-6 text-white">正在下载并部署系统...</h3>
+
+            <div class="w-full max-w-2xl bg-[#1e1e1e] rounded-[1rem] p-4 shadow-2xl border border-gray-700 h-64 overflow-y-auto terminal-scroll text-left">
+                <pre class="text-[#00ff00] font-mono text-xs whitespace-pre-wrap">{{ upgradeLog }}</pre>
+            </div>
+
+            <p class="text-sm text-gray-400 font-mono mt-6">请勿刷新页面，系统恢复后将自动刷新</p>
         </div>
     </div>
 
@@ -311,6 +316,7 @@
                 const hasUpdate = ref(false);
                 const latestVersion = ref('');
                 const isUpgrading = ref(false);
+                const upgradeLog = ref('');
 
                 // 🌟 新增：搜索过滤逻辑
                 const searchQuery = ref('');
@@ -393,17 +399,39 @@
                 const doUpgrade = async () => {
                     if (!confirm(`即将覆盖升级至 v${latestVersion.value} 并重启服务，是否继续？`)) return;
                     isUpgrading.value = true;
+                    upgradeLog.value = '发起升级请求...\n';
+
                     await callApi('/api/system/upgrade', 'POST');
-                    
-                    let retryTimer = setInterval(async () => {
+
+                    let logTimer = setInterval(async () => {
                         try {
-                            const res = await callApi('/api/system/info');
-                            if (res) {
-                                clearInterval(retryTimer);
-                                window.location.reload(true); 
+                            const res = await fetch('/api/system/upgrade/log', { headers: { 'Authorization': token.value } });
+                            if (res.ok) {
+                                const data = await res.json();
+                                upgradeLog.value = data.content || data.Content || '等待日志输出...';
+                                const c = document.querySelector('.terminal-scroll');
+                                if (c) c.scrollTop = c.scrollHeight;
+                            } else {
+                                throw new Error('断连');
                             }
-                        } catch (e) {}
-                    }, 3000);
+                        } catch (e) {
+                            clearInterval(logTimer);
+                            upgradeLog.value += '\n\n[系统提示] 后端服务已主动挂起。\n[系统提示] 正在执行底层二进制文件覆盖与 Systemd 守护进程重启...\n[系统提示] 正在等待路由节点重新上线...';
+
+                            const c = document.querySelector('.terminal-scroll');
+                            if (c) c.scrollTop = c.scrollHeight;
+
+                            let retryTimer = setInterval(async () => {
+                                try {
+                                    const res = await fetch('/api/system/info');
+                                    if (res.ok) {
+                                        clearInterval(retryTimer);
+                                        window.location.reload(true);
+                                    }
+                                } catch (err) { }
+                            }, 2000);
+                        }
+                    }, 1000);
                 };
 
                 const loadSystemInfo = async () => {
@@ -555,7 +583,7 @@
                     searchQuery, filteredApps, draggedIndex, onDragStart, onDrop, deleteApp, // 🌟 暴露新增的变量与方法
                     toggleApp, saveAutoStart, openAddModal: () => { showAddModal.value = true; fetchOnlineStore(); },
                     installApp, showSystemLogs, showLogModal, refreshLogs, loadCronJobs,
-                    openConfig, saveAppConfig, showCronModal, submitCron, deleteCron
+                    openConfig, saveAppConfig, showCronModal, submitCron, deleteCron, upgradeLog
                 };
             }
         }).mount('#app');

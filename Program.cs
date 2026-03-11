@@ -301,11 +301,20 @@ app.MapGet("/api/system/info", () => {
 app.MapPost("/api/system/upgrade", () => {
     var proxy = sysConfig.GithubProxy;
     if (!string.IsNullOrEmpty(proxy) && !proxy.EndsWith("/")) proxy += "/";
-
     var scriptUrl = $"{proxy}https://raw.githubusercontent.com/fw867/unifi-softcenterstore/master/install.sh";
 
-    Process.Start("systemd-run", $"--unit=sc_updater --collect bash -c \"sleep 2 && curl -sSL {scriptUrl} | bash -s '{proxy}'\"");
+    if (File.Exists("/tmp/sc_update.log")) File.Delete("/tmp/sc_update.log");
+
+    Process.Start("systemd-run", $"--unit=sc_updater --collect bash -c \"sleep 1 && curl -sSL {scriptUrl} | bash -s '{proxy}' > /tmp/sc_update.log 2>&1\"");
     return Results.Ok();
+});
+
+app.MapGet("/api/system/upgrade/log", () => {
+    if (File.Exists("/tmp/sc_update.log"))
+    {
+        return Results.Ok(new LogResponse(File.ReadAllText("/tmp/sc_update.log")));
+    }
+    return Results.Ok(new LogResponse("正在准备更新环境..."));
 });
 
 app.Run($"http://0.0.0.0:{sysConfig.Port}");
