@@ -394,23 +394,24 @@
                     if (!confirm(`即将覆盖升级至 v${latestVersion.value} 并重启服务，是否继续？`)) return;
                     isUpgrading.value = true;
                     await callApi('/api/system/upgrade', 'POST');
-
+                    
                     let retryTimer = setInterval(async () => {
                         try {
-                            const res = await fetch('/api/system/info');
-                            if (res.ok) {
+                            const res = await callApi('/api/system/info');
+                            if (res) {
                                 clearInterval(retryTimer);
-                                window.location.reload(true);
+                                window.location.reload(true); 
                             }
-                        } catch (e) { }
+                        } catch (e) {}
                     }, 3000);
                 };
 
                 const loadSystemInfo = async () => {
                     const data = await callApi('/api/system/info');
                     if (data) {
-                        sysInfo.value = { Version: data.version || data.Version || '0.0.0' };
-                        checkUpdate();
+                        const rawVersion = data.version || data.Version || '0.0.0';
+                        sysInfo.value = { Version: rawVersion.split('+')[0] };
+                        checkUpdate(); 
                     }
                 };
 
@@ -476,7 +477,6 @@
                     loadRealApps();
                 };
 
-                // 🌟 新增：删除应用逻辑
                 const deleteApp = async (app) => {
                     if (!confirm(`确定要从管理中心移除 "${app.name}" 吗？\n注意：这仅移除配置，不会物理删除路由器上的脚本文件。`)) return;
                     const res = await callApi(`/api/apps/${app.id}`, 'DELETE');

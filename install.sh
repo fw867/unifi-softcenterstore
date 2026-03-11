@@ -8,6 +8,10 @@ echo "========================================="
 # 设置你的仓库名
 REPO="fw867/unifi-softcenterstore"
 
+# 接收从 C# 后端传来的代理参数，如果没有则使用默认值
+PROXY=${1:-"https://cdn.gh-proxy.org/"}
+echo "🌐 当前使用加速通道: $PROXY"
+
 # 定义核心路径
 BIN_DIR="/data/bin"
 DATA_DIR="/data/softcenter"
@@ -23,12 +27,15 @@ if [ -z "$ZIP_URL" ]; then
     exit 1
 fi
 
+# 🌟 拼接加速代理的下载链接
+FAST_DOWNLOAD_URL="${PROXY}${ZIP_URL}"
+
 echo "🚀 发现最新版本: $VERSION"
 echo "[2/4] 正在下载更新包..."
 # 清理可能存在的旧缓存并创建解压目录
 rm -rf $TMP_DIR
 mkdir -p $TMP_DIR/extracted
-curl -L -o $TMP_DIR/update.zip "$ZIP_URL"
+curl -L -o $TMP_DIR/update.zip "$FAST_DOWNLOAD_URL"
 
 echo "[3/4] 暂停当前服务，解除文件占用..."
 systemctl stop softcenter.service 2>/dev/null || true

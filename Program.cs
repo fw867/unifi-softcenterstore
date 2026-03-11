@@ -293,19 +293,24 @@ app.MapDelete("/api/cron/{id}", (string id) => {
 
 // 系统信息与一键更新
 app.MapGet("/api/system/info", () => {
-    var version = Assembly.GetExecutingAssembly().GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion ?? "1.0.0-dev";
+    var rawVersion = Assembly.GetExecutingAssembly().GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion ?? "1.0.0-dev";
+    var version = rawVersion.Split('+')[0];
     return Results.Ok(new SystemInfo(version, "NativeAOT-.NET10", "UCG-Fiber"));
 });
 
 app.MapPost("/api/system/upgrade", () => {
-    var scriptUrl = "https://raw.githubusercontent.com/fw867/unifi-softcenterstore/master/install.sh";
-    Process.Start("systemd-run", $"--unit=sc_updater --collect bash -c \"sleep 2 && curl -sSL {scriptUrl} | bash\"");
+    var proxy = sysConfig.GithubProxy;
+    if (!string.IsNullOrEmpty(proxy) && !proxy.EndsWith("/")) proxy += "/";
+
+    var scriptUrl = $"{proxy}https://raw.githubusercontent.com/fw867/unifi-softcenterstore/master/install.sh";
+
+    Process.Start("systemd-run", $"--unit=sc_updater --collect bash -c \"sleep 2 && curl -sSL {scriptUrl} | bash -s '{proxy}'\"");
     return Results.Ok();
 });
 
 app.Run($"http://0.0.0.0:{sysConfig.Port}");
 
-public record AppConfig { public int Port { get; set; } = 9958; public string AdminToken { get; set; } = "Your_Secret_Token_Here"; }
+public record AppConfig { public int Port { get; set; } = 9958; public string AdminToken { get; set; } = "Your_Secret_Token_Here"; public string GithubProxy { get; set; } = "https://cdn.gh-proxy.org/"; }
 public record AppEntity(string Id, string Name, string Type, string Icon, string StartCommand, string StopCommand, string StatusCommand, int IsAutoStart, bool IsRunning, string ConfigPath, string ConfigKeys, string LogPath, int SortOrder);
 public record AppOrderReq(string Id, int SortOrder);
 public record CronEntity(string Id, string Name, string Schedule, string Command);
