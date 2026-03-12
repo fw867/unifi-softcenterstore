@@ -8,15 +8,44 @@
     <script src="https://cdn.jsdelivr.net/npm/vue@3.4.21/dist/vue.global.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/lucide@0.359.0/dist/umd/lucide.min.js"></script>
     <style>
-        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background-color: #F5F5F7; color: #1D1D1F; }
-        .glass { background: rgba(255, 255, 255, 0.72); backdrop-filter: saturate(180%) blur(20px); border: 1px solid rgba(255, 255, 255, 0.3); }
-        .safe-area { max-width: 1200px; margin: 0 auto; }
-        .btn-apple { transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1); }
-        .btn-apple:active { transform: scale(0.96); }
-        .terminal-scroll::-webkit-scrollbar { width: 8px; }
-        .terminal-scroll::-webkit-scrollbar-track { background: #1a1a1a; border-radius: 8px; }
-        .terminal-scroll::-webkit-scrollbar-thumb { background: #444; border-radius: 8px; }
-        .ghost { opacity: 0.4; background: #e2e8f0; border: 2px dashed #94a3b8; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: #F5F5F7;
+            color: #1D1D1F;
+        }
+
+        .glass {
+            background: rgba(255, 255, 255, 0.72);
+            backdrop-filter: saturate(180%) blur(20px);
+            border: 1px solid rgba(255, 255, 255, 0.3);
+        }
+
+        .safe-area {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        .btn-apple {
+            transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+            .btn-apple:active {
+                transform: scale(0.96);
+            }
+
+        .terminal-scroll::-webkit-scrollbar {
+            width: 8px;
+        }
+
+        .terminal-scroll::-webkit-scrollbar-track {
+            background: #1a1a1a;
+            border-radius: 8px;
+        }
+
+        .terminal-scroll::-webkit-scrollbar-thumb {
+            background: #444;
+            border-radius: 8px;
+        }
     </style>
 </head>
 <body class="antialiased">
@@ -84,7 +113,10 @@
                         </div>
                     </div>
 
-                    <h3 class="text-xl font-semibold mb-1">{{ app.name }}</h3>
+                    <div class="flex items-center space-x-2 mb-1">
+                        <h3 class="text-xl font-semibold">{{ app.name }}</h3>
+                        <span class="text-[10px] bg-gray-200 text-gray-600 px-1.5 py-0.5 rounded-md font-mono">v{{ app.version }}</span>
+                    </div>
                     <p class="text-xs text-gray-400 font-medium uppercase tracking-widest mb-6">{{ app.type }}</p>
 
                     <div class="space-y-3 mb-6 bg-white/40 rounded-2xl p-4 border border-white/50 text-sm">
@@ -128,7 +160,9 @@
                     <table class="w-full text-left border-collapse">
                         <thead>
                             <tr class="bg-gray-50/50 text-xs font-semibold text-gray-400 uppercase tracking-wider">
-                                <th class="px-6 py-4">周期</th><th class="px-6 py-4">命令</th><th class="px-6 py-4 text-right">操作</th>
+                                <th class="px-6 py-4">周期</th>
+                                <th class="px-6 py-4">命令</th>
+                                <th class="px-6 py-4 text-right">操作</th>
                             </tr>
                         </thead>
                         <tbody class="divide-y divide-gray-100">
@@ -184,29 +218,61 @@
                         <button @click="addTab = 'local'" :class="addTab === 'local' ? 'bg-white shadow-sm' : 'text-gray-500'" class="px-4 py-1.5 rounded-lg text-sm font-medium transition-all">手动配置</button>
                     </div>
                 </div>
+
                 <div class="overflow-y-auto flex-1 pr-2">
                     <div v-if="addTab === 'online'" class="space-y-4">
                         <div v-if="isFetchingStore" class="text-center py-8 text-gray-500">同步中...</div>
+
                         <div v-for="pkg in onlineStore" :key="pkg.id || pkg.Id" class="flex items-center justify-between p-4 bg-white/60 rounded-2xl border border-gray-100">
-                            <div class="flex items-center space-x-4">
-                                <div class="w-10 h-10 bg-blue-100 text-blue-600 rounded-xl flex items-center justify-center"><i :data-lucide="pkg.icon || pkg.Icon" class="w-5 h-5"></i></div>
-                                <div><h4 class="font-semibold">{{ pkg.name || pkg.Name }}</h4><p class="text-xs text-gray-500">{{ pkg.id || pkg.Id }}</p></div>
+                            <div class="flex items-start space-x-4">
+                                <div class="w-12 h-12 bg-blue-100 text-blue-600 rounded-xl flex items-center justify-center shrink-0 mt-0.5">
+                                    <i :data-lucide="pkg.icon || pkg.Icon" class="w-6 h-6"></i>
+                                </div>
+                                <div>
+                                    <div class="flex items-center space-x-2">
+                                        <h4 class="font-semibold text-gray-800">{{ pkg.name || pkg.Name }}</h4>
+                                        <span class="text-[10px] bg-gray-200 text-gray-600 px-1.5 py-0.5 rounded-md font-mono">v{{ pkg.version || pkg.Version || '1.0.0' }}</span>
+                                    </div>
+                                    <p class="text-xs text-gray-500 mt-1.5 line-clamp-2 leading-relaxed">{{ pkg.description || pkg.Description || '暂无应用简介' }}</p>
+                                </div>
                             </div>
-                            <button @click="installApp(pkg)" class="btn-apple bg-black text-white px-4 py-2 rounded-xl text-sm font-medium">安装</button>
+
+                            <div class="shrink-0 ml-4">
+                                <template v-if="getLocalApp(pkg.id || pkg.Id)">
+                                    <button v-if="isNewerVersion(getLocalApp(pkg.id || pkg.Id).version, pkg.version || pkg.Version)"
+                                            @click="installApp(pkg)"
+                                            class="btn-apple bg-blue-600 text-white px-5 py-2 rounded-xl text-sm font-medium shadow-sm hover:bg-blue-700">
+                                        升级
+                                    </button>
+                                    <button v-else disabled
+                                            class="bg-gray-100 text-gray-400 px-5 py-2 rounded-xl text-sm font-medium cursor-not-allowed border border-gray-200">
+                                        已安装
+                                    </button>
+                                </template>
+                                <button v-else @click="installApp(pkg)"
+                                        class="btn-apple bg-black text-white px-5 py-2 rounded-xl text-sm font-medium shadow-sm hover:bg-gray-800">
+                                    安装
+                                </button>
+                            </div>
                         </div>
                     </div>
+
                     <div v-if="addTab === 'local'" class="space-y-4 text-sm mt-4">
                         <div class="grid grid-cols-2 gap-4">
                             <input v-model="newApp.Id" placeholder="应用 ID" class="w-full bg-gray-100 rounded-xl px-4 py-2.5 outline-none">
                             <input v-model="newApp.Name" placeholder="显示名称" class="w-full bg-gray-100 rounded-xl px-4 py-2.5 outline-none">
-                            <input v-model="newApp.Icon" placeholder="图标 (Lucide, 如 router)" class="w-full bg-gray-100 rounded-xl px-4 py-2.5 outline-none">
+                            <input v-model="newApp.Version" placeholder="版本号 (如 1.0.0)" class="w-full bg-gray-100 rounded-xl px-4 py-2.5 outline-none font-mono text-xs">
+                            <input v-model="newApp.Icon" placeholder="图标 (Lucide)" class="w-full bg-gray-100 rounded-xl px-4 py-2.5 outline-none font-mono text-xs">
+                        </div>
+                        <input v-model="newApp.Description" placeholder="应用简介" class="w-full bg-gray-100 rounded-xl px-4 py-2.5 outline-none">
+                        <div class="grid grid-cols-2 gap-4">
                             <input v-model="newApp.ConfigPath" placeholder="参数文件路径" class="w-full bg-gray-100 rounded-xl px-4 py-2.5 outline-none">
+                            <input v-model="newApp.ConfigKeys" placeholder="变量名 (逗号分隔)" class="w-full bg-gray-100 rounded-xl px-4 py-2.5 outline-none font-mono text-xs">
                         </div>
                         <div class="grid grid-cols-2 gap-4">
-                            <input v-model="newApp.ConfigKeys" placeholder="变量名 (逗号分隔)" class="w-full bg-gray-100 rounded-xl px-4 py-2.5 outline-none font-mono text-xs">
                             <input v-model="newApp.LogPath" placeholder="日志路径" class="w-full bg-gray-100 rounded-xl px-4 py-2.5 outline-none font-mono text-xs">
+                            <input v-model="newApp.StatusCommand" placeholder="状态探针命令" class="w-full bg-gray-100 rounded-xl px-4 py-2.5 outline-none font-mono text-xs">
                         </div>
-                        <input v-model="newApp.StatusCommand" placeholder="状态探针命令" class="w-full bg-gray-100 rounded-xl px-4 py-2.5 outline-none font-mono text-xs">
                         <input v-model="newApp.StartCommand" placeholder="启动命令" class="w-full bg-gray-100 rounded-xl px-4 py-2.5 outline-none font-mono text-xs">
                         <input v-model="newApp.StopCommand" placeholder="停止命令" class="w-full bg-gray-100 rounded-xl px-4 py-2.5 outline-none font-mono text-xs">
                         <button @click="installApp(newApp)" class="btn-apple w-full bg-blue-600 text-white py-3 rounded-2xl font-medium">保存本地配置</button>
@@ -291,7 +357,7 @@
                 const addTab = ref('online');
                 const isFetchingStore = ref(false);
                 const onlineStore = ref([]);
-                const newApp = ref({ Id: '', Name: '', Type: 'Local', Icon: 'box', ConfigPath: '', ConfigKeys: '', LogPath: '', StartCommand: '', StopCommand: '', StatusCommand: '', IsAutoStart: 0, SortOrder: 999 });
+                const newApp = ref({ Id: '', Name: '', Type: 'Local', Icon: 'box', ConfigPath: '', ConfigKeys: '', LogPath: '', StartCommand: '', StopCommand: '', StatusCommand: '', IsAutoStart: 0, SortOrder: 999, Version: '1.0.0', Description: '' });
 
                 const logModalApp = ref(null);
                 const logContent = ref('');
@@ -320,6 +386,8 @@
                 });
 
                 const draggedIndex = ref(null);
+
+                const getLocalApp = (id) => apps.value.find(a => a.id === id);
 
                 const onDragStart = (e, index) => { draggedIndex.value = index; e.dataTransfer.effectAllowed = 'move'; };
                 const onDrop = async (e, index) => {
@@ -368,14 +436,13 @@
                         localStorage.setItem('sc_token', sysConfigForm.value.adminToken);
                         token.value = sysConfigForm.value.adminToken;
                         showSettingsModal.value = false;
-                        setTimeout(() => {
-                            window.location.href = `http://${window.location.hostname}:${sysConfigForm.value.port}`;
-                        }, 2500);
+                        setTimeout(() => { window.location.href = `http://${window.location.hostname}:${sysConfigForm.value.port}`; }, 2500);
                     }
                     isSavingSettings.value = false;
                 };
 
                 const isNewerVersion = (oldVer, newVer) => {
+                    if (!oldVer || !newVer) return false;
                     const a = oldVer.split('.').map(Number);
                     const b = newVer.split('.').map(Number);
                     for (let i = 0; i < Math.max(a.length, b.length); i++) {
@@ -396,7 +463,6 @@
                     } catch (e) { }
                 };
 
-                // 双线程防挂死完美心跳检测机制
                 const doUpgrade = async () => {
                     if (!confirm(`即将覆盖升级至 v${latestVersion.value} 并重启服务，是否继续？`)) return;
                     isUpgrading.value = true;
@@ -404,7 +470,6 @@
 
                     await callApi('/api/system/upgrade', 'POST');
 
-                    // 尽力而为拉取日志，不管成功失败
                     let logTimer = setInterval(async () => {
                         try {
                             const controller = new AbortController();
@@ -435,17 +500,13 @@
                         if (c) c.scrollTop = c.scrollHeight;
                     };
 
-                    // 线程2：在 8 秒后（后端必死的时间）开启独立的复活探测器
                     setTimeout(() => {
                         let retryTimer = setInterval(async () => {
                             try {
                                 const res = await fetch('/api/system/info?_t=' + Date.now(), {
                                     headers: { 'Authorization': token.value }, cache: 'no-store'
                                 });
-                                if (res.ok) {
-                                    clearInterval(retryTimer);
-                                    window.location.reload(true);
-                                }
+                                if (res.ok) { clearInterval(retryTimer); window.location.reload(true); }
                             } catch (err) { }
                         }, 2000);
                     }, 8000);
@@ -467,7 +528,8 @@
                             id: i.id || i.Id, name: i.name || i.Name, type: i.type || i.Type, icon: i.icon || i.Icon || 'box',
                             startCommand: i.startCommand || i.StartCommand, autoStart: (i.isAutoStart !== undefined ? i.isAutoStart : i.IsAutoStart) === 1,
                             isRunning: i.isRunning !== undefined ? i.isRunning : i.IsRunning, configPath: i.configPath || i.ConfigPath || '',
-                            configKeys: i.configKeys || i.ConfigKeys || '', logPath: i.logPath || i.LogPath || '', sortOrder: i.sortOrder !== undefined ? i.sortOrder : i.SortOrder
+                            configKeys: i.configKeys || i.ConfigKeys || '', logPath: i.logPath || i.LogPath || '', sortOrder: i.sortOrder !== undefined ? i.sortOrder : i.SortOrder,
+                            version: i.version || i.Version || '1.0.0', description: i.description || i.Description || ''
                         }));
                         setTimeout(() => lucide.createIcons(), 100);
                     }
@@ -490,43 +552,30 @@
                     } catch (e) { } finally { isFetchingStore.value = false; }
                 };
 
-                // 从云端获取应用最新配置并覆盖
                 const updateAppConfigFromCloud = async (app) => {
                     if (!confirm(`确定要从云端获取 "${app.name}" 的最新系统配置参数并覆盖本地吗？\n(注意：这只会更新系统运行参数，不会改变您的开机自启状态)`)) return;
-                    
+
                     try {
                         const res = await fetch('https://raw.githubusercontent.com/fw867/unifi-softcenterstore/master/apps/apps.json?_t=' + Date.now(), { cache: 'no-store' });
                         if (!res.ok) throw new Error('Network Error');
                         const storeApps = await res.json();
-                        
-                        const onlineApp = storeApps.find(a => (a.Id || a.id) === app.id);
-                        if (!onlineApp) {
-                            alert(`云端库中未找到 "${app.name}" 的配置，可能已被移除或更名。`);
-                            return;
-                        }
 
-                        // 将云端最新数据和本地用户自启状态进行合并
+                        const onlineApp = storeApps.find(a => (a.Id || a.id) === app.id);
+                        if (!onlineApp) { alert(`云端库中未找到 "${app.name}" 的配置，可能已被移除或更名。`); return; }
+
                         const appData = {
-                            Id: app.id,
-                            Name: onlineApp.Name || onlineApp.name || app.name,
-                            Type: onlineApp.Type || onlineApp.type || app.type,
-                            Icon: onlineApp.Icon || onlineApp.icon || app.icon,
-                            StartCommand: onlineApp.StartCommand || onlineApp.startCommand,
-                            StopCommand: onlineApp.StopCommand || onlineApp.stopCommand,
-                            StatusCommand: onlineApp.StatusCommand || onlineApp.statusCommand,
-                            IsAutoStart: app.autoStart ? 1 : 0, // 保留用户本地自启状态
-                            ConfigPath: onlineApp.ConfigPath || onlineApp.configPath || '',
-                            ConfigKeys: onlineApp.ConfigKeys || onlineApp.configKeys || '',
-                            LogPath: onlineApp.LogPath || onlineApp.logPath || '',
-                            SortOrder: app.sortOrder // 保留用户排序状态
+                            Id: app.id, Name: onlineApp.Name || onlineApp.name || app.name, Type: onlineApp.Type || onlineApp.type || app.type, Icon: onlineApp.Icon || onlineApp.icon || app.icon,
+                            StartCommand: onlineApp.StartCommand || onlineApp.startCommand, StopCommand: onlineApp.StopCommand || onlineApp.stopCommand,
+                            StatusCommand: onlineApp.StatusCommand || onlineApp.statusCommand, IsAutoStart: app.autoStart ? 1 : 0,
+                            ConfigPath: onlineApp.ConfigPath || onlineApp.configPath || '', ConfigKeys: onlineApp.ConfigKeys || onlineApp.configKeys || '',
+                            LogPath: onlineApp.LogPath || onlineApp.logPath || '', SortOrder: app.sortOrder,
+                            Version: onlineApp.Version || onlineApp.version || '0.0.1', Description: onlineApp.Description || onlineApp.description || ''
                         };
 
                         await callApi('/api/apps', 'POST', appData);
                         alert(`🎉 "${app.name}" 的底层配置已成功同步为云端最新版本！`);
                         loadRealApps();
-                    } catch (e) {
-                        alert('同步失败：无法连接到云端应用库网络。');
-                    }
+                    } catch (e) { alert('同步失败：无法连接到云端应用库网络。'); }
                 };
 
                 const installApp = async (p) => {
@@ -536,7 +585,8 @@
                         StartCommand: p.StartCommand || p.startCommand, StopCommand: p.StopCommand || p.stopCommand,
                         StatusCommand: p.StatusCommand || p.statusCommand, IsAutoStart: p.IsAutoStart || p.isAutoStart || 0,
                         ConfigPath: p.ConfigPath || p.configPath || '', ConfigKeys: p.ConfigKeys || p.configKeys || '',
-                        LogPath: p.LogPath || p.logPath || '', SortOrder: p.SortOrder || apps.value.length
+                        LogPath: p.LogPath || p.logPath || '', SortOrder: p.SortOrder || apps.value.length,
+                        Version: p.Version || p.version || '0.0.1', Description: p.Description || p.description || ''
                     };
                     if (!appData.Id || !appData.StartCommand) { alert('应用信息不完整'); return; }
                     await callApi('/api/apps', 'POST', appData);
@@ -602,7 +652,7 @@
                 return {
                     token, tokenInputType, handleTokenSubmit, sysInfo, apps, cronJobs, activeApp, appConfig, showAddModal, addTab, isFetchingStore, onlineStore,
                     newApp, logModalApp, logContent, isLoadingLogs, cronModalApp, newCronReq, hasUpdate, latestVersion, isUpgrading, upgradeLog, doUpgrade,
-                    searchQuery, filteredApps, draggedIndex, onDragStart, onDrop, deleteApp, toggleApp, saveAutoStart, openAddModal: () => { showAddModal.value = true; fetchOnlineStore(); },
+                    searchQuery, filteredApps, draggedIndex, getLocalApp, isNewerVersion, onDragStart, onDrop, deleteApp, toggleApp, saveAutoStart, openAddModal: () => { showAddModal.value = true; fetchOnlineStore(); },
                     installApp, updateAppConfigFromCloud, showSystemLogs, showLogModal, refreshLogs, loadCronJobs, openConfig, saveAppConfig, showCronModal, submitCron, deleteCron,
                     showSettingsModal, sysConfigForm, isSavingSettings, openSettings, saveSettings
                 };

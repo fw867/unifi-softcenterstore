@@ -19,19 +19,16 @@ string? currentExe = Process.GetCurrentProcess().MainModule?.FileName;
 
 if (!string.IsNullOrEmpty(currentExe) && !File.Exists(ServicePath))
 {
-    string serviceContent = $@"
-[Unit]
+    string serviceContent = $@"[Unit]
 Description=UniFi SoftCenter & Boot Manager
 After=network-online.target
 Wants=network-online.target
-
 [Service]
 Type=simple
 ExecStart={currentExe}
 WorkingDirectory=/data/softcenter
 Restart=always
 RestartSec=5
-
 [Install]
 WantedBy=multi-user.target";
     File.WriteAllText(ServicePath, serviceContent.Trim());
@@ -75,25 +72,23 @@ using (var conn = new SqliteConnection(DbPath))
         CREATE TABLE IF NOT EXISTS apps_registry (
             Id TEXT PRIMARY KEY, Name TEXT NOT NULL, Type TEXT NOT NULL, Icon TEXT DEFAULT 'box', 
             StartCommand TEXT NOT NULL, StopCommand TEXT NOT NULL, StatusCommand TEXT NOT NULL, 
-            IsAutoStart INTEGER DEFAULT 0, ConfigPath TEXT, ConfigKeys TEXT, LogPath TEXT, SortOrder INTEGER DEFAULT 0
+            IsAutoStart INTEGER DEFAULT 0, ConfigPath TEXT, ConfigKeys TEXT, LogPath TEXT, SortOrder INTEGER DEFAULT 0,
+            Version TEXT DEFAULT '1.0.0', Description TEXT DEFAULT ''
         );
         CREATE TABLE IF NOT EXISTS cron_registry (
             Id TEXT PRIMARY KEY, Name TEXT NOT NULL, Schedule TEXT NOT NULL, Command TEXT NOT NULL
         );";
     cmd.ExecuteNonQuery();
-    try
-    {
-        using var cmdAlter = conn.CreateCommand();
-        cmdAlter.CommandText = "ALTER TABLE apps_registry ADD COLUMN SortOrder INTEGER DEFAULT 0;";
-        cmdAlter.ExecuteNonQuery();
-    }
-    catch { }
+
+    // 自动为旧数据库补充字段
+    try { using var c1 = conn.CreateCommand(); c1.CommandText = "ALTER TABLE apps_registry ADD COLUMN SortOrder INTEGER DEFAULT 0;"; c1.ExecuteNonQuery(); } catch { }
+    try { using var c2 = conn.CreateCommand(); c2.CommandText = "ALTER TABLE apps_registry ADD COLUMN Version TEXT DEFAULT '0.0.1';"; c2.ExecuteNonQuery(); } catch { }
+    try { using var c3 = conn.CreateCommand(); c3.CommandText = "ALTER TABLE apps_registry ADD COLUMN Description TEXT DEFAULT '';"; c3.ExecuteNonQuery(); } catch { }
 }
 
 string bootLock = "/tmp/softcenter_booted.lock";
 if (!File.Exists(bootLock))
 {
-    // 1. 恢复 Cron 定时任务
     try
     {
         var cronLines = new List<string>();
@@ -113,7 +108,6 @@ if (!File.Exists(bootLock))
     }
     catch { }
 
-    // 2. 🌟 执行 SoftCenter 专属的开机脚本目录，避免与 UDM-Boot 冲突
     try
     {
         string onBootDir = "/data/softcenter/on_boot.d";
@@ -126,7 +120,6 @@ if (!File.Exists(bootLock))
     }
     catch { }
 
-    // 3. 拉起设为开机自启的应用
     try
     {
         using (var conn = new SqliteConnection(DbPath))
@@ -176,12 +169,12 @@ app.MapGet("/api/apps", () => {
     var apps = new List<AppEntity>();
     using var conn = new SqliteConnection(DbPath); conn.Open();
     using var cmd = conn.CreateCommand();
-    cmd.CommandText = "SELECT Id, Name, Type, Icon, StartCommand, StopCommand, StatusCommand, IsAutoStart, ConfigPath, ConfigKeys, LogPath, SortOrder FROM apps_registry ORDER BY SortOrder ASC, Id ASC";
+    cmd.CommandText = "SELECT Id, Name, Type, Icon, StartCommand, StopCommand, StatusCommand, IsAutoStart, ConfigPath, ConfigKeys, LogPath, SortOrder, Version, Description FROM apps_registry ORDER BY SortOrder ASC, Id ASC";
     using var reader = cmd.ExecuteReader();
     while (reader.Read())
     {
         var sCmd = reader.GetString(6);
-        apps.Add(new AppEntity(reader.GetString(0), reader.GetString(1), reader.GetString(2), reader.GetString(3), reader.GetString(4), reader.GetString(5), sCmd, reader.GetInt32(7), IsAppRunning(sCmd), reader.IsDBNull(8) ? "" : reader.GetString(8), reader.IsDBNull(9) ? "" : reader.GetString(9), reader.IsDBNull(10) ? "" : reader.GetString(10), reader.IsDBNull(11) ? 0 : reader.GetInt32(11)));
+        apps.Add(new AppEntity(reader.GetString(0), reader.GetString(1), reader.GetString(2), reader.GetString(3), reader.GetString(4), reader.GetString(5), sCmd, reader.GetInt32(7), IsAppRunning(sCmd), reader.IsDBNull(8) ? "" : reader.GetString(8), reader.IsDBNull(9) ? "" : reader.GetString(9), reader.IsDBNull(10) ? "" : reader.GetString(10), reader.IsDBNull(11) ? 0 : reader.GetInt32(11), reader.IsDBNull(12) ? "1.0.0" : reader.GetString(12), reader.IsDBNull(13) ? "" : reader.GetString(13)));
     }
     return apps;
 });
@@ -189,12 +182,15 @@ app.MapGet("/api/apps", () => {
 app.MapPost("/api/apps", (AppEntity a) => {
     using var conn = new SqliteConnection(DbPath); conn.Open();
     using var cmd = conn.CreateCommand();
-    cmd.CommandText = "INSERT OR REPLACE INTO apps_registry VALUES (@Id,@Name,@Type,@Icon,@Start,@Stop,@Status,@Auto,@CPath,@CKeys,@LPath,@SortOrder)";
+    // 🌟 插入包含 Version 和 Description
+    cmd.CommandText = "INSERT OR REPLACE INTO apps_registry VALUES (@Id,@Name,@Type,@Icon,@Start,@Stop,@Status,@Auto,@CPath,@CKeys,@LPath,@SortOrder,@Ver,@Desc)";
     cmd.Parameters.AddWithValue("@Id", a.Id); cmd.Parameters.AddWithValue("@Name", a.Name); cmd.Parameters.AddWithValue("@Type", a.Type);
     cmd.Parameters.AddWithValue("@Icon", a.Icon ?? "box"); cmd.Parameters.AddWithValue("@Start", a.StartCommand); cmd.Parameters.AddWithValue("@Stop", a.StopCommand);
     cmd.Parameters.AddWithValue("@Status", a.StatusCommand); cmd.Parameters.AddWithValue("@Auto", a.IsAutoStart);
     cmd.Parameters.AddWithValue("@CPath", a.ConfigPath ?? ""); cmd.Parameters.AddWithValue("@CKeys", a.ConfigKeys ?? ""); cmd.Parameters.AddWithValue("@LPath", a.LogPath ?? "");
     cmd.Parameters.AddWithValue("@SortOrder", a.SortOrder);
+    cmd.Parameters.AddWithValue("@Ver", a.Version ?? "1.0.0");
+    cmd.Parameters.AddWithValue("@Desc", a.Description ?? "");
     cmd.ExecuteNonQuery(); return Results.Ok();
 });
 
@@ -352,7 +348,7 @@ app.MapGet("/api/system/upgrade/log", () => {
 app.Run($"http://0.0.0.0:{sysConfig.Port}");
 
 public record AppConfig { public int Port { get; set; } = 9958; public string AdminToken { get; set; } = "Your_Secret_Token_Here"; public string LocalProxy { get; set; } = ""; }
-public record AppEntity(string Id, string Name, string Type, string Icon, string StartCommand, string StopCommand, string StatusCommand, int IsAutoStart, bool IsRunning, string ConfigPath, string ConfigKeys, string LogPath, int SortOrder);
+public record AppEntity(string Id, string Name, string Type, string Icon, string StartCommand, string StopCommand, string StatusCommand, int IsAutoStart, bool IsRunning, string ConfigPath, string ConfigKeys, string LogPath, int SortOrder, string Version, string Description);
 public record AppOrderReq(string Id, int SortOrder);
 public record CronEntity(string Id, string Name, string Schedule, string Command);
 public record CronRequest(string Schedule, string Command);

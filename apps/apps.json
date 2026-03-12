@@ -1,21 +1,25 @@
 [
-  {
-    "Id": "tomodem",
-    "Name": "光猫助手",
-    "Type": "Shell Script",
-    "Icon": "router",
-    "StartCommand": "/data/bin/tomodem start",
-    "StopCommand": "/data/bin/tomodem stop",
-    "StatusCommand": "iptables -L FORWARD | grep -c \"softcenter:tomodem\" > /dev/null",
-    "IsAutoStart": 1,
-    "ConfigPath": "/data/bin/tomodem",
-    "ConfigKeys": "tomodem_ip,tomodem_eth,ethip1,ethip2",
-    "LogPath": "/var/log/tomodem.log"
-  },
+    {
+        "Id": "tomodem",
+        "Name": "光猫助手",
+        "Type": "Shell Script",
+        "Version": "1.0.0",
+        "Description": "配置路由和光猫IP，完美解决内网和光猫互通问题。",
+        "Icon": "router",
+        "StartCommand": "/data/bin/tomodem start",
+        "StopCommand": "/data/bin/tomodem stop",
+        "StatusCommand": "iptables -L FORWARD | grep -c \"softcenter:tomodem\" > /dev/null",
+        "IsAutoStart": 1,
+        "ConfigPath": "/data/bin/tomodem",
+        "ConfigKeys": "tomodem_ip,tomodem_eth,ethip1,ethip2",
+        "LogPath": "/var/log/tomodem.log"
+    },
     {
         "Id": "koolss",
         "Name": "V2Ray",
         "Type": "Binary Core",
+        "Version": "1.0.0",
+        "Description": "V2ray代理，支持GFWList、大陆白名单，游戏、全局模式。",
         "Icon": "shield-check",
         "StartCommand": "systemctl start koolss",
         "StopCommand": "systemctl stop koolss",
@@ -24,5 +28,35 @@
         "ConfigPath": "/data/bin/koolss",
         "ConfigKeys": "V2RAY_CONFIG_FILE,ISP_DNS1,ISP_DNS2,v2ray_bypass,v2ray_acl_default_mode,v2ray_basic_dns_chromecast,v2ray_quic_reject,v2ray_udp,v2ray_udp_list",
         "LogPath": "/tmp/xray_log.txt"
+    },
+    {
+        "Id": "wechat",
+        "Name": "微信通知",
+        "Type": "Shell Script",
+        "Version": "1.0.0",
+        "Description": "路由重新拨号后通过企业微信通知新IP。",
+        "Icon": "message-circle",
+        "StartCommand": "/data/bin/wechat start",
+        "StopCommand": "/data/bin/wechat stop",
+        "StatusCommand": "[ -f \"/etc/ppp/ip-up.d/wechat\" ]",
+        "IsAutoStart": 1,
+        "ConfigPath": "/data/bin/wechat",
+        "ConfigKeys": "wan_interface_name",
+        "LogPath": "/var/log/wechat.log"
+    },
+    {
+        "Id": "ddnso",
+        "Name": "DDNSTO",
+        "Type": "Binary Core",
+        "Version": "1.0.0",
+        "Description": "Koolshare小宝大神的内网穿透神器。",
+        "Icon": "globe",
+        "StartCommand": "systemctl start ddnsto",
+        "StopCommand": "systemctl stop ddnsto",
+        "StatusCommand": "systemctl is-active --quiet ddnsto",
+        "IsAutoStart": 1,
+        "ConfigPath": "/etc/systemd/system/ddnsto.service",
+        "ConfigKeys": "ExecStart",
+        "LogPath": "/var/log/ddnsto.log"
     }
 ]
