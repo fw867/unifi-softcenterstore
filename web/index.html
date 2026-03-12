@@ -8,50 +8,15 @@
     <script src="https://cdn.jsdelivr.net/npm/vue@3.4.21/dist/vue.global.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/lucide@0.359.0/dist/umd/lucide.min.js"></script>
     <style>
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-            background-color: #F5F5F7;
-            color: #1D1D1F;
-        }
-
-        .glass {
-            background: rgba(255, 255, 255, 0.72);
-            backdrop-filter: saturate(180%) blur(20px);
-            border: 1px solid rgba(255, 255, 255, 0.3);
-        }
-
-        .safe-area {
-            max-width: 1200px;
-            margin: 0 auto;
-        }
-
-        .btn-apple {
-            transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
-        }
-
-            .btn-apple:active {
-                transform: scale(0.96);
-            }
-
-        .terminal-scroll::-webkit-scrollbar {
-            width: 8px;
-        }
-
-        .terminal-scroll::-webkit-scrollbar-track {
-            background: #1a1a1a;
-            border-radius: 8px;
-        }
-
-        .terminal-scroll::-webkit-scrollbar-thumb {
-            background: #444;
-            border-radius: 8px;
-        }
-
-        .ghost {
-            opacity: 0.4;
-            background: #e2e8f0;
-            border: 2px dashed #94a3b8;
-        }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background-color: #F5F5F7; color: #1D1D1F; }
+        .glass { background: rgba(255, 255, 255, 0.72); backdrop-filter: saturate(180%) blur(20px); border: 1px solid rgba(255, 255, 255, 0.3); }
+        .safe-area { max-width: 1200px; margin: 0 auto; }
+        .btn-apple { transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1); }
+        .btn-apple:active { transform: scale(0.96); }
+        .terminal-scroll::-webkit-scrollbar { width: 8px; }
+        .terminal-scroll::-webkit-scrollbar-track { background: #1a1a1a; border-radius: 8px; }
+        .terminal-scroll::-webkit-scrollbar-thumb { background: #444; border-radius: 8px; }
+        .ghost { opacity: 0.4; background: #e2e8f0; border: 2px dashed #94a3b8; }
     </style>
 </head>
 <body class="antialiased">
@@ -80,9 +45,7 @@
                     <div class="flex items-center bg-gray-100 rounded-full px-3 py-1 border border-gray-200">
                         <i data-lucide="key" class="w-4 h-4 text-gray-400 mr-2"></i>
                         <input :type="tokenInputType" v-model="token" placeholder="输入访问令牌"
-                               @focus="tokenInputType = 'text'"
-                               @blur="handleTokenSubmit"
-                               @keyup.enter="handleTokenSubmit"
+                               @focus="tokenInputType = 'text'" @blur="handleTokenSubmit" @keyup.enter="handleTokenSubmit"
                                class="bg-transparent border-none text-xs focus:outline-none w-32">
                     </div>
                 </div>
@@ -103,11 +66,7 @@
 
             <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mb-12">
                 <div v-for="(app, index) in filteredApps" :key="app.id"
-                     draggable="true"
-                     @dragstart="onDragStart($event, index)"
-                     @dragover.prevent
-                     @dragenter.prevent
-                     @drop="onDrop($event, index)"
+                     draggable="true" @dragstart="onDragStart($event, index)" @dragover.prevent @dragenter.prevent @drop="onDrop($event, index)"
                      :class="{'opacity-50 border-dashed border-2 border-blue-400': draggedIndex === index}"
                      class="glass rounded-[2rem] p-6 shadow-sm hover:shadow-md transition-all relative">
 
@@ -137,13 +96,16 @@
 
                     <div class="flex space-x-2">
                         <button @click="openConfig(app)" :disabled="!app.configKeys" :class="!app.configKeys ? 'opacity-50 cursor-not-allowed' : 'hover:bg-gray-50'" class="btn-apple flex-1 bg-white border border-gray-200 py-2.5 rounded-xl text-sm font-medium transition-all">配置</button>
-                        <button @click="showLogModal(app)" :disabled="!app.logPath" :class="!app.logPath ? 'opacity-50 cursor-not-allowed' : 'hover:bg-gray-50'" class="btn-apple px-3 bg-white border border-gray-200 py-2.5 rounded-xl transition-all">
+                        <button @click="showLogModal(app)" :disabled="!app.logPath" :class="!app.logPath ? 'opacity-50 cursor-not-allowed' : 'hover:bg-gray-50'" class="btn-apple px-3 bg-white border border-gray-200 py-2.5 rounded-xl transition-all group" title="查看日志">
                             <i data-lucide="file-text" class="w-4 h-4 text-gray-600"></i>
                         </button>
-                        <button @click="showCronModal(app)" class="btn-apple px-3 bg-white border border-gray-200 py-2.5 rounded-xl hover:bg-gray-50 transition-all">
+                        <button @click="showCronModal(app)" class="btn-apple px-3 bg-white border border-gray-200 py-2.5 rounded-xl hover:bg-gray-50 transition-all group" title="定时任务">
                             <i data-lucide="clock" class="w-4 h-4 text-gray-600"></i>
                         </button>
-                        <button @click="deleteApp(app)" class="btn-apple px-3 bg-white border border-red-100 py-2.5 rounded-xl hover:bg-red-50 hover:border-red-200 transition-all group">
+                        <button @click="updateAppConfigFromCloud(app)" class="btn-apple px-3 bg-white border border-blue-100 py-2.5 rounded-xl hover:bg-blue-50 hover:border-blue-200 transition-all group" title="同步最新云端配置">
+                            <i data-lucide="cloud-download" class="w-4 h-4 text-blue-400 group-hover:text-blue-600"></i>
+                        </button>
+                        <button @click="deleteApp(app)" class="btn-apple px-3 bg-white border border-red-100 py-2.5 rounded-xl hover:bg-red-50 hover:border-red-200 transition-all group" title="移除应用">
                             <i data-lucide="trash-2" class="w-4 h-4 text-red-400 group-hover:text-red-600"></i>
                         </button>
                     </div>
@@ -166,9 +128,7 @@
                     <table class="w-full text-left border-collapse">
                         <thead>
                             <tr class="bg-gray-50/50 text-xs font-semibold text-gray-400 uppercase tracking-wider">
-                                <th class="px-6 py-4">周期</th>
-                                <th class="px-6 py-4">命令</th>
-                                <th class="px-6 py-4 text-right">操作</th>
+                                <th class="px-6 py-4">周期</th><th class="px-6 py-4">命令</th><th class="px-6 py-4 text-right">操作</th>
                             </tr>
                         </thead>
                         <tbody class="divide-y divide-gray-100">
@@ -191,7 +151,6 @@
                     <h3 class="text-2xl font-semibold">全局系统设置</h3>
                 </div>
                 <p class="text-sm text-gray-500 mb-6 border-b pb-4">修改设置后将自动重启底层服务并刷新页面，请确保输入的端口未被占用。</p>
-
                 <div class="space-y-5 mb-8 text-sm">
                     <div>
                         <label class="block text-gray-500 mb-2 ml-1 font-medium">面板访问端口</label>
@@ -225,7 +184,6 @@
                         <button @click="addTab = 'local'" :class="addTab === 'local' ? 'bg-white shadow-sm' : 'text-gray-500'" class="px-4 py-1.5 rounded-lg text-sm font-medium transition-all">手动配置</button>
                     </div>
                 </div>
-
                 <div class="overflow-y-auto flex-1 pr-2">
                     <div v-if="addTab === 'online'" class="space-y-4">
                         <div v-if="isFetchingStore" class="text-center py-8 text-gray-500">同步中...</div>
@@ -237,7 +195,6 @@
                             <button @click="installApp(pkg)" class="btn-apple bg-black text-white px-4 py-2 rounded-xl text-sm font-medium">安装</button>
                         </div>
                     </div>
-
                     <div v-if="addTab === 'local'" class="space-y-4 text-sm mt-4">
                         <div class="grid grid-cols-2 gap-4">
                             <input v-model="newApp.Id" placeholder="应用 ID" class="w-full bg-gray-100 rounded-xl px-4 py-2.5 outline-none">
@@ -346,7 +303,6 @@
                 const cronModalApp = ref(null);
                 const newCronReq = ref({ schedule: '0 4 * * *', command: '' });
 
-                // 🌟 新增：系统设置状态
                 const showSettingsModal = ref(false);
                 const sysConfigForm = ref({ port: 9958, adminToken: '', localProxy: '' });
                 const isSavingSettings = ref(false);
@@ -395,7 +351,6 @@
                     startPolling();
                 };
 
-                // 🌟 新增：打开设置弹窗
                 const openSettings = async () => {
                     const data = await callApi('/api/system/config');
                     if (data) {
@@ -404,19 +359,15 @@
                     }
                 };
 
-                // 🌟 新增：保存设置并重定向
                 const saveSettings = async () => {
                     if (!confirm("修改配置后，底层服务将会自动重启，是否继续？")) return;
                     isSavingSettings.value = true;
 
                     const res = await callApi('/api/system/config', 'POST', sysConfigForm.value);
                     if (res !== null) {
-                        // 提前更新本地 Token，防止刷新后登出
                         localStorage.setItem('sc_token', sysConfigForm.value.adminToken);
                         token.value = sysConfigForm.value.adminToken;
                         showSettingsModal.value = false;
-
-                        // 等待 2.5 秒，让后端的 systemd-run 完成重启，跳转到新端口
                         setTimeout(() => {
                             window.location.href = `http://${window.location.hostname}:${sysConfigForm.value.port}`;
                         }, 2500);
@@ -445,23 +396,21 @@
                     } catch (e) { }
                 };
 
+                // 双线程防挂死完美心跳检测机制
                 const doUpgrade = async () => {
                     if (!confirm(`即将覆盖升级至 v${latestVersion.value} 并重启服务，是否继续？`)) return;
                     isUpgrading.value = true;
-                    upgradeLog.value = '发起升级请求...\\\\n';
+                    upgradeLog.value = '发起升级请求...\n';
 
                     await callApi('/api/system/upgrade', 'POST');
 
-                    let errCount = 0;
+                    // 尽力而为拉取日志，不管成功失败
                     let logTimer = setInterval(async () => {
                         try {
-                            // 使用 AbortController 防挂起。后端一死，2 秒内立刻掐断 fetch 进入 catch
                             const controller = new AbortController();
                             const timeoutId = setTimeout(() => controller.abort(), 2000);
-
                             const res = await fetch('/api/system/upgrade/log?_t=' + Date.now(), {
-                                headers: { 'Authorization': token.value },
-                                signal: controller.signal
+                                headers: { 'Authorization': token.value }, signal: controller.signal, cache: 'no-store'
                             });
                             clearTimeout(timeoutId);
 
@@ -471,32 +420,35 @@
                                 const c = document.querySelector('.terminal-scroll');
                                 if (c) c.scrollTop = c.scrollHeight;
                             } else {
-                                throw new Error('Status Error');
+                                clearInterval(logTimer);
+                                triggerDeathLog();
                             }
                         } catch (e) {
-                            errCount++;
-                            // 容错 3 次（约 4.5 秒）后，明确判定为后端正在进行底层替换
-                            if (errCount >= 3) {
-                                clearInterval(logTimer);
-                                upgradeLog.value += '\\\\n\\\\n[系统提示] 后端服务已主动挂起。\\\\n[系统提示] 正在执行底层二进制文件覆盖与 Systemd 重启...\\\\n[系统提示] 正在等待路由节点重新上线...';
-                                const c = document.querySelector('.terminal-scroll');
-                                if (c) c.scrollTop = c.scrollHeight;
-
-                                // 使用带时间戳的原生 fetch 进行心跳轮询，防止 401 或缓存导致死循环
-                                let retryTimer = setInterval(async () => {
-                                    try {
-                                        const res = await fetch('/api/system/info?_t=' + Date.now(), {
-                                            headers: { 'Authorization': token.value }
-                                        });
-                                        if (res.ok) {
-                                            clearInterval(retryTimer);
-                                            window.location.reload(true);
-                                        }
-                                    } catch (err) { }
-                                }, 2000);
-                            }
+                            clearInterval(logTimer);
+                            triggerDeathLog();
                         }
                     }, 1500);
+
+                    const triggerDeathLog = () => {
+                        upgradeLog.value += '\n\n[系统提示] 后端服务连接已断开，正在执行底层二进制文件覆盖...\n[系统提示] 正在等待路由节点重新上线...';
+                        const c = document.querySelector('.terminal-scroll');
+                        if (c) c.scrollTop = c.scrollHeight;
+                    };
+
+                    // 线程2：在 8 秒后（后端必死的时间）开启独立的复活探测器
+                    setTimeout(() => {
+                        let retryTimer = setInterval(async () => {
+                            try {
+                                const res = await fetch('/api/system/info?_t=' + Date.now(), {
+                                    headers: { 'Authorization': token.value }, cache: 'no-store'
+                                });
+                                if (res.ok) {
+                                    clearInterval(retryTimer);
+                                    window.location.reload(true);
+                                }
+                            } catch (err) { }
+                        }, 2000);
+                    }, 8000);
                 };
 
                 const loadSystemInfo = async () => {
@@ -533,9 +485,48 @@
                 const fetchOnlineStore = async () => {
                     isFetchingStore.value = true;
                     try {
-                        const res = await fetch('https://raw.githubusercontent.com/fw867/unifi-softcenterstore/master/apps/apps.json');
+                        const res = await fetch('https://raw.githubusercontent.com/fw867/unifi-softcenterstore/master/apps/apps.json?_t=' + Date.now());
                         onlineStore.value = await res.json();
                     } catch (e) { } finally { isFetchingStore.value = false; }
+                };
+
+                // 从云端获取应用最新配置并覆盖
+                const updateAppConfigFromCloud = async (app) => {
+                    if (!confirm(`确定要从云端获取 "${app.name}" 的最新系统配置参数并覆盖本地吗？\n(注意：这只会更新系统运行参数，不会改变您的开机自启状态)`)) return;
+                    
+                    try {
+                        const res = await fetch('https://raw.githubusercontent.com/fw867/unifi-softcenterstore/master/apps/apps.json?_t=' + Date.now(), { cache: 'no-store' });
+                        if (!res.ok) throw new Error('Network Error');
+                        const storeApps = await res.json();
+                        
+                        const onlineApp = storeApps.find(a => (a.Id || a.id) === app.id);
+                        if (!onlineApp) {
+                            alert(`云端库中未找到 "${app.name}" 的配置，可能已被移除或更名。`);
+                            return;
+                        }
+
+                        // 将云端最新数据和本地用户自启状态进行合并
+                        const appData = {
+                            Id: app.id,
+                            Name: onlineApp.Name || onlineApp.name || app.name,
+                            Type: onlineApp.Type || onlineApp.type || app.type,
+                            Icon: onlineApp.Icon || onlineApp.icon || app.icon,
+                            StartCommand: onlineApp.StartCommand || onlineApp.startCommand,
+                            StopCommand: onlineApp.StopCommand || onlineApp.stopCommand,
+                            StatusCommand: onlineApp.StatusCommand || onlineApp.statusCommand,
+                            IsAutoStart: app.autoStart ? 1 : 0, // 保留用户本地自启状态
+                            ConfigPath: onlineApp.ConfigPath || onlineApp.configPath || '',
+                            ConfigKeys: onlineApp.ConfigKeys || onlineApp.configKeys || '',
+                            LogPath: onlineApp.LogPath || onlineApp.logPath || '',
+                            SortOrder: app.sortOrder // 保留用户排序状态
+                        };
+
+                        await callApi('/api/apps', 'POST', appData);
+                        alert(`🎉 "${app.name}" 的底层配置已成功同步为云端最新版本！`);
+                        loadRealApps();
+                    } catch (e) {
+                        alert('同步失败：无法连接到云端应用库网络。');
+                    }
                 };
 
                 const installApp = async (p) => {
@@ -612,8 +603,8 @@
                     token, tokenInputType, handleTokenSubmit, sysInfo, apps, cronJobs, activeApp, appConfig, showAddModal, addTab, isFetchingStore, onlineStore,
                     newApp, logModalApp, logContent, isLoadingLogs, cronModalApp, newCronReq, hasUpdate, latestVersion, isUpgrading, upgradeLog, doUpgrade,
                     searchQuery, filteredApps, draggedIndex, onDragStart, onDrop, deleteApp, toggleApp, saveAutoStart, openAddModal: () => { showAddModal.value = true; fetchOnlineStore(); },
-                    installApp, showSystemLogs, showLogModal, refreshLogs, loadCronJobs, openConfig, saveAppConfig, showCronModal, submitCron, deleteCron,
-                    showSettingsModal, sysConfigForm, isSavingSettings, openSettings, saveSettings // 🌟 暴露设置功能
+                    installApp, updateAppConfigFromCloud, showSystemLogs, showLogModal, refreshLogs, loadCronJobs, openConfig, saveAppConfig, showCronModal, submitCron, deleteCron,
+                    showSettingsModal, sysConfigForm, isSavingSettings, openSettings, saveSettings
                 };
             }
         }).mount('#app');
