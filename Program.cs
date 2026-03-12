@@ -209,7 +209,8 @@ app.MapGet("/api/apps/{id}/config", (string id) => {
         var content = File.ReadAllText(path);
         foreach (var k in keys.Select(x => x.Trim()))
         {
-            var m = Regex.Match(content, $@"{k}=['""]?([^'""\n\r]*)['""]?");
+            // 🌟 直接匹配等号后面的整行内容，不做任何额外截断
+            var m = Regex.Match(content, $@"{k}=([^\n\r]*)");
             dict[k] = m.Success ? m.Groups[1].Value : "";
         }
     }
@@ -226,7 +227,10 @@ app.MapPost("/api/apps/{id}/config", async (string id, Dictionary<string, string
     if (!string.IsNullOrEmpty(path) && File.Exists(path))
     {
         var content = await File.ReadAllTextAsync(path);
-        foreach (var kv in payload) content = Regex.Replace(content, $@"{kv.Key}=['""]?[^'""\n\r]*['""]?", $"{kv.Key}=\"{kv.Value}\"");
+        foreach (var kv in payload)
+        {
+            content = Regex.Replace(content, $@"{kv.Key}=[^\n\r]*", _ => $"{kv.Key}={kv.Value}");
+        }
         await File.WriteAllTextAsync(path, content);
         return Results.Ok();
     }

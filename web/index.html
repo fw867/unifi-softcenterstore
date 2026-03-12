@@ -448,33 +448,55 @@
                 const doUpgrade = async () => {
                     if (!confirm(`即将覆盖升级至 v${latestVersion.value} 并重启服务，是否继续？`)) return;
                     isUpgrading.value = true;
-                    upgradeLog.value = '发起升级请求...\n';
+                    upgradeLog.value = '发起升级请求...\\\\n';
 
                     await callApi('/api/system/upgrade', 'POST');
 
+                    let errCount = 0;
                     let logTimer = setInterval(async () => {
                         try {
-                            const res = await fetch('/api/system/upgrade/log', { headers: { 'Authorization': token.value } });
+                            // 使用 AbortController 防挂起。后端一死，2 秒内立刻掐断 fetch 进入 catch
+                            const controller = new AbortController();
+                            const timeoutId = setTimeout(() => controller.abort(), 2000);
+
+                            const res = await fetch('/api/system/upgrade/log?_t=' + Date.now(), {
+                                headers: { 'Authorization': token.value },
+                                signal: controller.signal
+                            });
+                            clearTimeout(timeoutId);
+
                             if (res.ok) {
                                 const data = await res.json();
                                 upgradeLog.value = data.content || data.Content || '等待日志输出...';
                                 const c = document.querySelector('.terminal-scroll');
                                 if (c) c.scrollTop = c.scrollHeight;
-                            } else { throw new Error('断连'); }
+                            } else {
+                                throw new Error('Status Error');
+                            }
                         } catch (e) {
-                            clearInterval(logTimer);
-                            upgradeLog.value += '\n\n[系统提示] 后端服务已主动挂起。\n[系统提示] 正在执行底层二进制文件覆盖与 Systemd 重启...\n[系统提示] 正在等待路由节点重新上线...';
-                            const c = document.querySelector('.terminal-scroll');
-                            if (c) c.scrollTop = c.scrollHeight;
+                            errCount++;
+                            // 容错 3 次（约 4.5 秒）后，明确判定为后端正在进行底层替换
+                            if (errCount >= 3) {
+                                clearInterval(logTimer);
+                                upgradeLog.value += '\\\\n\\\\n[系统提示] 后端服务已主动挂起。\\\\n[系统提示] 正在执行底层二进制文件覆盖与 Systemd 重启...\\\\n[系统提示] 正在等待路由节点重新上线...';
+                                const c = document.querySelector('.terminal-scroll');
+                                if (c) c.scrollTop = c.scrollHeight;
 
-                            let retryTimer = setInterval(async () => {
-                                try {
-                                    const res = await callApi('/api/system/info');
-                                    if (res) { clearInterval(retryTimer); window.location.reload(true); }
-                                } catch (err) { }
-                            }, 2000);
+                                // 使用带时间戳的原生 fetch 进行心跳轮询，防止 401 或缓存导致死循环
+                                let retryTimer = setInterval(async () => {
+                                    try {
+                                        const res = await fetch('/api/system/info?_t=' + Date.now(), {
+                                            headers: { 'Authorization': token.value }
+                                        });
+                                        if (res.ok) {
+                                            clearInterval(retryTimer);
+                                            window.location.reload(true);
+                                        }
+                                    } catch (err) { }
+                                }, 2000);
+                            }
                         }
-                    }, 1000);
+                    }, 1500);
                 };
 
                 const loadSystemInfo = async () => {
