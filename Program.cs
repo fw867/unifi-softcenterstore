@@ -17,13 +17,13 @@ const string ServiceName = "softcenter.service";
 const string ServicePath = $"/etc/systemd/system/{ServiceName}";
 string? currentExe = Process.GetCurrentProcess().MainModule?.FileName;
 
-// 自动注册 Systemd 服务
 if (!string.IsNullOrEmpty(currentExe) && !File.Exists(ServicePath))
 {
     string serviceContent = $@"
 [Unit]
-Description=UniFi SoftCenter Manager
-After=network.target
+Description=UniFi SoftCenter & Boot Manager
+After=network-online.target
+Wants=network-online.target
 
 [Service]
 Type=simple
@@ -76,6 +76,9 @@ using (var conn = new SqliteConnection(DbPath))
             Id TEXT PRIMARY KEY, Name TEXT NOT NULL, Type TEXT NOT NULL, Icon TEXT DEFAULT 'box', 
             StartCommand TEXT NOT NULL, StopCommand TEXT NOT NULL, StatusCommand TEXT NOT NULL, 
             IsAutoStart INTEGER DEFAULT 0, ConfigPath TEXT, ConfigKeys TEXT, LogPath TEXT, SortOrder INTEGER DEFAULT 0
+        );
+        CREATE TABLE IF NOT EXISTS cron_registry (
+            Id TEXT PRIMARY KEY, Name TEXT NOT NULL, Schedule TEXT NOT NULL, Command TEXT NOT NULL
         );";
     cmd.ExecuteNonQuery();
     try
@@ -87,13 +90,69 @@ using (var conn = new SqliteConnection(DbPath))
     catch { }
 }
 
+string bootLock = "/tmp/softcenter_booted.lock";
+if (!File.Exists(bootLock))
+{
+    // 1. 恢复 Cron 定时任务
+    try
+    {
+        var cronLines = new List<string>();
+        using (var conn = new SqliteConnection(DbPath))
+        {
+            conn.Open();
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = "SELECT Schedule, Command FROM cron_registry";
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read()) cronLines.Add($"{reader.GetString(0)} {reader.GetString(1)}");
+        }
+        if (cronLines.Any())
+        {
+            File.WriteAllText("/tmp/sc_cron_restore", string.Join("\n", cronLines) + "\n");
+            Process.Start("/bin/bash", "-c \"crontab /tmp/sc_cron_restore\"")?.WaitForExit();
+        }
+    }
+    catch { }
+
+    // 2. 🌟 执行 SoftCenter 专属的开机脚本目录，避免与 UDM-Boot 冲突
+    try
+    {
+        string onBootDir = "/data/softcenter/on_boot.d";
+        if (!Directory.Exists(onBootDir)) Directory.CreateDirectory(onBootDir);
+        var scripts = Directory.GetFiles(onBootDir, "*.sh").OrderBy(x => x);
+        foreach (var script in scripts)
+        {
+            Process.Start(new ProcessStartInfo { FileName = "/bin/bash", Arguments = $"-c \"chmod +x {script}; {script}\"", UseShellExecute = false, CreateNoWindow = true });
+        }
+    }
+    catch { }
+
+    // 3. 拉起设为开机自启的应用
+    try
+    {
+        using (var conn = new SqliteConnection(DbPath))
+        {
+            conn.Open();
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = "SELECT StartCommand FROM apps_registry WHERE IsAutoStart=1";
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read())
+            {
+                var startCmd = reader.GetString(0);
+                Process.Start(new ProcessStartInfo { FileName = "/bin/bash", Arguments = $"-c \"{startCmd}\"", UseShellExecute = false, CreateNoWindow = true });
+            }
+        }
+    }
+    catch { }
+
+    File.WriteAllText(bootLock, DateTime.Now.ToString());
+}
+
 app.Use(async (context, next) => {
     if (context.Request.Path.StartsWithSegments("/api"))
     {
         if (!context.Request.Headers.TryGetValue("Authorization", out var auth) || auth != sysConfig.AdminToken)
         {
-            context.Response.StatusCode = 401;
-            return;
+            context.Response.StatusCode = 401; return;
         }
     }
     await next();
@@ -108,16 +167,14 @@ bool IsAppRunning(string cmdStr)
     try
     {
         using var p = Process.Start(new ProcessStartInfo { FileName = "/bin/bash", Arguments = $"-c \"{cmdStr}\"", UseShellExecute = false, CreateNoWindow = true });
-        p?.WaitForExit();
-        return p?.ExitCode == 0;
+        p?.WaitForExit(); return p?.ExitCode == 0;
     }
     catch { return false; }
 }
 
 app.MapGet("/api/apps", () => {
     var apps = new List<AppEntity>();
-    using var conn = new SqliteConnection(DbPath);
-    conn.Open();
+    using var conn = new SqliteConnection(DbPath); conn.Open();
     using var cmd = conn.CreateCommand();
     cmd.CommandText = "SELECT Id, Name, Type, Icon, StartCommand, StopCommand, StatusCommand, IsAutoStart, ConfigPath, ConfigKeys, LogPath, SortOrder FROM apps_registry ORDER BY SortOrder ASC, Id ASC";
     using var reader = cmd.ExecuteReader();
@@ -130,8 +187,7 @@ app.MapGet("/api/apps", () => {
 });
 
 app.MapPost("/api/apps", (AppEntity a) => {
-    using var conn = new SqliteConnection(DbPath);
-    conn.Open();
+    using var conn = new SqliteConnection(DbPath); conn.Open();
     using var cmd = conn.CreateCommand();
     cmd.CommandText = "INSERT OR REPLACE INTO apps_registry VALUES (@Id,@Name,@Type,@Icon,@Start,@Stop,@Status,@Auto,@CPath,@CKeys,@LPath,@SortOrder)";
     cmd.Parameters.AddWithValue("@Id", a.Id); cmd.Parameters.AddWithValue("@Name", a.Name); cmd.Parameters.AddWithValue("@Type", a.Type);
@@ -139,63 +195,49 @@ app.MapPost("/api/apps", (AppEntity a) => {
     cmd.Parameters.AddWithValue("@Status", a.StatusCommand); cmd.Parameters.AddWithValue("@Auto", a.IsAutoStart);
     cmd.Parameters.AddWithValue("@CPath", a.ConfigPath ?? ""); cmd.Parameters.AddWithValue("@CKeys", a.ConfigKeys ?? ""); cmd.Parameters.AddWithValue("@LPath", a.LogPath ?? "");
     cmd.Parameters.AddWithValue("@SortOrder", a.SortOrder);
-    cmd.ExecuteNonQuery();
-    return Results.Ok();
+    cmd.ExecuteNonQuery(); return Results.Ok();
 });
 
 app.MapDelete("/api/apps/{id}", (string id) => {
-    using var conn = new SqliteConnection(DbPath);
-    conn.Open();
+    using var conn = new SqliteConnection(DbPath); conn.Open();
     using var cmd = conn.CreateCommand();
     cmd.CommandText = "DELETE FROM apps_registry WHERE Id = @id";
     cmd.Parameters.AddWithValue("@id", id);
-    cmd.ExecuteNonQuery();
-    return Results.Ok();
+    cmd.ExecuteNonQuery(); return Results.Ok();
 });
 
 app.MapPost("/api/apps/reorder", (List<AppOrderReq> req) => {
-    using var conn = new SqliteConnection(DbPath);
-    conn.Open();
+    using var conn = new SqliteConnection(DbPath); conn.Open();
     using var tx = conn.BeginTransaction();
     using var cmd = conn.CreateCommand();
     cmd.CommandText = "UPDATE apps_registry SET SortOrder = @so WHERE Id = @id";
     var pId = cmd.Parameters.Add("@id", SqliteType.Text);
     var pSo = cmd.Parameters.Add("@so", SqliteType.Integer);
-    foreach (var r in req)
-    {
-        pId.Value = r.Id; pSo.Value = r.SortOrder;
-        cmd.ExecuteNonQuery();
-    }
-    tx.Commit();
-    return Results.Ok();
+    foreach (var r in req) { pId.Value = r.Id; pSo.Value = r.SortOrder; cmd.ExecuteNonQuery(); }
+    tx.Commit(); return Results.Ok();
 });
 
 app.MapPost("/api/apps/{id}/control", (string id, string action) => {
-    using var conn = new SqliteConnection(DbPath);
-    conn.Open();
+    using var conn = new SqliteConnection(DbPath); conn.Open();
     using var cmd = conn.CreateCommand();
     cmd.CommandText = "SELECT StartCommand, StopCommand FROM apps_registry WHERE Id=@id";
     cmd.Parameters.AddWithValue("@id", id);
     using var reader = cmd.ExecuteReader();
     if (!reader.Read()) return Results.NotFound();
     var exec = action == "start" ? reader.GetString(0) : (action == "stop" ? reader.GetString(1) : $"{reader.GetString(1)};sleep 1;{reader.GetString(0)}");
-    Process.Start("/bin/bash", $"-c \"{exec}\"");
-    return Results.Ok();
+    Process.Start("/bin/bash", $"-c \"{exec}\""); return Results.Ok();
 });
 
 app.MapPut("/api/apps/{id}/autostart", (string id, int state) => {
-    using var conn = new SqliteConnection(DbPath);
-    conn.Open();
+    using var conn = new SqliteConnection(DbPath); conn.Open();
     using var cmd = conn.CreateCommand();
     cmd.CommandText = "UPDATE apps_registry SET IsAutoStart=@state WHERE Id=@id";
     cmd.Parameters.AddWithValue("@state", state); cmd.Parameters.AddWithValue("@id", id);
-    cmd.ExecuteNonQuery();
-    return Results.Ok();
+    cmd.ExecuteNonQuery(); return Results.Ok();
 });
 
 app.MapGet("/api/apps/{id}/config", (string id) => {
-    using var conn = new SqliteConnection(DbPath);
-    conn.Open();
+    using var conn = new SqliteConnection(DbPath); conn.Open();
     using var cmd = conn.CreateCommand();
     cmd.CommandText = "SELECT ConfigPath, ConfigKeys FROM apps_registry WHERE Id=@id";
     cmd.Parameters.AddWithValue("@id", id);
@@ -209,7 +251,6 @@ app.MapGet("/api/apps/{id}/config", (string id) => {
         var content = File.ReadAllText(path);
         foreach (var k in keys.Select(x => x.Trim()))
         {
-            // 🌟 直接匹配等号后面的整行内容，不做任何额外截断
             var m = Regex.Match(content, $@"{k}=([^\n\r]*)");
             dict[k] = m.Success ? m.Groups[1].Value : "";
         }
@@ -218,8 +259,7 @@ app.MapGet("/api/apps/{id}/config", (string id) => {
 });
 
 app.MapPost("/api/apps/{id}/config", async (string id, Dictionary<string, string> payload) => {
-    using var conn = new SqliteConnection(DbPath);
-    conn.Open();
+    using var conn = new SqliteConnection(DbPath); conn.Open();
     using var cmd = conn.CreateCommand();
     cmd.CommandText = "SELECT ConfigPath FROM apps_registry WHERE Id=@id";
     cmd.Parameters.AddWithValue("@id", id);
@@ -227,10 +267,7 @@ app.MapPost("/api/apps/{id}/config", async (string id, Dictionary<string, string
     if (!string.IsNullOrEmpty(path) && File.Exists(path))
     {
         var content = await File.ReadAllTextAsync(path);
-        foreach (var kv in payload)
-        {
-            content = Regex.Replace(content, $@"{kv.Key}=[^\n\r]*", _ => $"{kv.Key}={kv.Value}");
-        }
+        foreach (var kv in payload) content = Regex.Replace(content, $@"{kv.Key}=[^\n\r]*", _ => $"{kv.Key}={kv.Value}");
         await File.WriteAllTextAsync(path, content);
         return Results.Ok();
     }
@@ -238,8 +275,7 @@ app.MapPost("/api/apps/{id}/config", async (string id, Dictionary<string, string
 });
 
 app.MapGet("/api/apps/{id}/logs", (string id) => {
-    using var conn = new SqliteConnection(DbPath);
-    conn.Open();
+    using var conn = new SqliteConnection(DbPath); conn.Open();
     using var cmd = conn.CreateCommand();
     cmd.CommandText = "SELECT LogPath FROM apps_registry WHERE Id=@id";
     cmd.Parameters.AddWithValue("@id", id);
@@ -258,28 +294,33 @@ app.MapGet("/api/cron", () => {
     var list = new List<CronEntity>();
     try
     {
-        using var p = Process.Start(new ProcessStartInfo { FileName = "/bin/bash", Arguments = "-c \"crontab -l 2>/dev/null\"", RedirectStandardOutput = true, UseShellExecute = false });
-        var output = p?.StandardOutput.ReadToEnd() ?? "";
-        foreach (var l in output.Split('\n', StringSplitOptions.RemoveEmptyEntries))
-        {
-            if (l.TrimStart().StartsWith("#")) continue;
-            var parts = l.Split(new[] { ' ', '\t' }, 6, StringSplitOptions.RemoveEmptyEntries);
-            if (parts.Length >= 6) list.Add(new CronEntity(Convert.ToBase64String(Encoding.UTF8.GetBytes(l)), "任务", string.Join(" ", parts.Take(5)), parts[5]));
-        }
+        using var conn = new SqliteConnection(DbPath); conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT Id, Name, Schedule, Command FROM cron_registry";
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read()) list.Add(new CronEntity(reader.GetString(0), reader.GetString(1), reader.GetString(2), reader.GetString(3)));
     }
     catch { }
     return list;
 });
 
 app.MapPost("/api/cron", (CronRequest req) => {
-    Process.Start("/bin/bash", $"-c \"(crontab -l 2>/dev/null; echo '{req.Schedule} {req.Command}') | crontab -\"");
-    return Results.Ok();
+    var id = Convert.ToBase64String(Encoding.UTF8.GetBytes($"{req.Schedule} {req.Command}"));
+    using var conn = new SqliteConnection(DbPath); conn.Open();
+    using var cmd = conn.CreateCommand();
+    cmd.CommandText = "INSERT OR REPLACE INTO cron_registry VALUES (@id, '任务', @sch, @cmd)";
+    cmd.Parameters.AddWithValue("@id", id); cmd.Parameters.AddWithValue("@sch", req.Schedule); cmd.Parameters.AddWithValue("@cmd", req.Command);
+    cmd.ExecuteNonQuery();
+    Process.Start("/bin/bash", $"-c \"(crontab -l 2>/dev/null; echo '{req.Schedule} {req.Command}') | crontab -\""); return Results.Ok();
 });
 
 app.MapDelete("/api/cron/{id}", (string id) => {
+    using var conn = new SqliteConnection(DbPath); conn.Open();
+    using var cmd = conn.CreateCommand();
+    cmd.CommandText = "DELETE FROM cron_registry WHERE Id=@id";
+    cmd.Parameters.AddWithValue("@id", id); cmd.ExecuteNonQuery();
     var lineToRemove = Encoding.UTF8.GetString(Convert.FromBase64String(id));
-    Process.Start("/bin/bash", $"-c \"crontab -l | grep -vF '{lineToRemove}' | crontab -\"");
-    return Results.Ok();
+    Process.Start("/bin/bash", $"-c \"crontab -l | grep -vF '{lineToRemove}' | crontab -\""); return Results.Ok();
 });
 
 app.MapGet("/api/system/info", () => {
@@ -287,55 +328,30 @@ app.MapGet("/api/system/info", () => {
     return Results.Ok(new SystemInfo(rawVersion.Split('+')[0], "NativeAOT-.NET10", "UCG-Fiber"));
 });
 
-// 🌟 新增：获取全局设置接口
 app.MapGet("/api/system/config", () => Results.Ok(sysConfig));
 
-// 🌟 新增：保存全局设置并平滑重启接口
 app.MapPost("/api/system/config", async (AppConfig newConfig) => {
-    sysConfig.Port = newConfig.Port;
-    sysConfig.AdminToken = newConfig.AdminToken;
-    sysConfig.LocalProxy = newConfig.LocalProxy;
+    sysConfig.Port = newConfig.Port; sysConfig.AdminToken = newConfig.AdminToken; sysConfig.LocalProxy = newConfig.LocalProxy;
     await File.WriteAllTextAsync(ConfigPath, JsonSerializer.Serialize(sysConfig, AppJsonContext.Default.AppConfig));
-    // 写入后，调用 systemd-run 脱壳重启服务，保证接口能正常返回 200 OK
-    Process.Start("systemd-run", $"--unit=sc_restarter --collect bash -c \"sleep 1 && systemctl restart {ServiceName}\"");
-    return Results.Ok();
+    Process.Start("systemd-run", $"--unit=sc_restarter --collect bash -c \"sleep 1 && systemctl restart {ServiceName}\""); return Results.Ok();
 });
 
 app.MapPost("/api/system/upgrade", () => {
     var proxy = sysConfig.LocalProxy;
     var scriptUrl = "https://raw.githubusercontent.com/fw867/unifi-softcenterstore/master/install.sh";
     if (File.Exists("/tmp/sc_update.log")) File.Delete("/tmp/sc_update.log");
-
-    string curlCmd;
-    if (!string.IsNullOrEmpty(proxy))
-    {
-        curlCmd = $"curl -x {proxy} -sSL {scriptUrl} | bash -s '{proxy}' > /tmp/sc_update.log 2>&1";
-    }
-    else
-    {
-        curlCmd = $"curl -sSL {scriptUrl} | bash > /tmp/sc_update.log 2>&1";
-    }
-
-    Process.Start("systemd-run", $"--unit=sc_updater --collect bash -c \"sleep 1 && {curlCmd}\"");
-    return Results.Ok();
+    string curlCmd = !string.IsNullOrEmpty(proxy) ? $"curl -x {proxy} -sSL {scriptUrl} | bash -s '{proxy}' > /tmp/sc_update.log 2>&1" : $"curl -sSL {scriptUrl} | bash > /tmp/sc_update.log 2>&1";
+    Process.Start("systemd-run", $"--unit=sc_updater --collect bash -c \"sleep 1 && {curlCmd}\""); return Results.Ok();
 });
 
 app.MapGet("/api/system/upgrade/log", () => {
-    if (File.Exists("/tmp/sc_update.log"))
-    {
-        return Results.Ok(new LogResponse(File.ReadAllText("/tmp/sc_update.log")));
-    }
+    if (File.Exists("/tmp/sc_update.log")) return Results.Ok(new LogResponse(File.ReadAllText("/tmp/sc_update.log")));
     return Results.Ok(new LogResponse("正在准备更新环境..."));
 });
 
 app.Run($"http://0.0.0.0:{sysConfig.Port}");
 
-public record AppConfig
-{
-    public int Port { get; set; } = 9958;
-    public string AdminToken { get; set; } = "Your_Secret_Token_Here";
-    public string LocalProxy { get; set; } = "";
-}
+public record AppConfig { public int Port { get; set; } = 9958; public string AdminToken { get; set; } = "Your_Secret_Token_Here"; public string LocalProxy { get; set; } = ""; }
 public record AppEntity(string Id, string Name, string Type, string Icon, string StartCommand, string StopCommand, string StatusCommand, int IsAutoStart, bool IsRunning, string ConfigPath, string ConfigKeys, string LogPath, int SortOrder);
 public record AppOrderReq(string Id, int SortOrder);
 public record CronEntity(string Id, string Name, string Schedule, string Command);
