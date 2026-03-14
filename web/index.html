@@ -407,7 +407,8 @@
                     try {
                         const res = await fetch(url, { method, headers: { 'Authorization': token.value, 'Content-Type': 'application/json' }, body: body ? JSON.stringify(body) : null });
                         if (res.status === 401) throw new Error('令牌错误');
-                        return await res.json();
+                        const text = await res.text();
+                        return text ? JSON.parse(text) : { success: true };
                     } catch (e) { return null; }
                 };
 
@@ -535,7 +536,9 @@
                     }
                 };
 
-                const saveAutoStart = async (app) => { await callApi(`/api/apps/${app.id}/autostart?state=${app.autoStart ? 1 : 0}`, 'PUT'); };
+                const saveAutoStart = async (app) => {
+                    await callApi(`/api/apps/${app.id}/autostart/${app.autoStart ? 1 : 0}`, 'PUT');
+                };
                 const loadCronJobs = async () => {
                     const data = await callApi('/api/cron');
                     if (data) cronJobs.value = data.map(c => ({ id: c.id || c.Id, schedule: c.schedule || c.Schedule, command: c.command || c.Command }));

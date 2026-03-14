@@ -23,12 +23,15 @@ if (!string.IsNullOrEmpty(currentExe) && !File.Exists(ServicePath))
 Description=UniFi SoftCenter & Boot Manager
 After=network-online.target
 Wants=network-online.target
+
 [Service]
 Type=simple
 ExecStart={currentExe}
 WorkingDirectory=/data/softcenter
 Restart=always
 RestartSec=5
+KillMode=process
+
 [Install]
 WantedBy=multi-user.target";
     File.WriteAllText(ServicePath, serviceContent.Trim());
@@ -182,16 +185,13 @@ app.MapGet("/api/apps", () => {
 app.MapPost("/api/apps", (AppEntity a) => {
     using var conn = new SqliteConnection(DbPath); conn.Open();
     using var cmd = conn.CreateCommand();
-    // 🌟 插入包含 Version 和 Description
     cmd.CommandText = "INSERT OR REPLACE INTO apps_registry VALUES (@Id,@Name,@Type,@Icon,@Start,@Stop,@Status,@Auto,@CPath,@CKeys,@LPath,@SortOrder,@Ver,@Desc)";
     cmd.Parameters.AddWithValue("@Id", a.Id); cmd.Parameters.AddWithValue("@Name", a.Name); cmd.Parameters.AddWithValue("@Type", a.Type);
     cmd.Parameters.AddWithValue("@Icon", a.Icon ?? "box"); cmd.Parameters.AddWithValue("@Start", a.StartCommand); cmd.Parameters.AddWithValue("@Stop", a.StopCommand);
     cmd.Parameters.AddWithValue("@Status", a.StatusCommand); cmd.Parameters.AddWithValue("@Auto", a.IsAutoStart);
     cmd.Parameters.AddWithValue("@CPath", a.ConfigPath ?? ""); cmd.Parameters.AddWithValue("@CKeys", a.ConfigKeys ?? ""); cmd.Parameters.AddWithValue("@LPath", a.LogPath ?? "");
-    cmd.Parameters.AddWithValue("@SortOrder", a.SortOrder);
-    cmd.Parameters.AddWithValue("@Ver", a.Version ?? "1.0.0");
-    cmd.Parameters.AddWithValue("@Desc", a.Description ?? "");
-    cmd.ExecuteNonQuery(); return Results.Ok();
+    cmd.Parameters.AddWithValue("@SortOrder", a.SortOrder); cmd.Parameters.AddWithValue("@Ver", a.Version ?? "0.0.1"); cmd.Parameters.AddWithValue("@Desc", a.Description ?? "");
+    cmd.ExecuteNonQuery(); return Results.Ok(new { success = true });
 });
 
 app.MapDelete("/api/apps/{id}", (string id) => {
@@ -199,7 +199,7 @@ app.MapDelete("/api/apps/{id}", (string id) => {
     using var cmd = conn.CreateCommand();
     cmd.CommandText = "DELETE FROM apps_registry WHERE Id = @id";
     cmd.Parameters.AddWithValue("@id", id);
-    cmd.ExecuteNonQuery(); return Results.Ok();
+    cmd.ExecuteNonQuery(); return Results.Ok(new { success = true });
 });
 
 app.MapPost("/api/apps/reorder", (List<AppOrderReq> req) => {
@@ -210,7 +210,7 @@ app.MapPost("/api/apps/reorder", (List<AppOrderReq> req) => {
     var pId = cmd.Parameters.Add("@id", SqliteType.Text);
     var pSo = cmd.Parameters.Add("@so", SqliteType.Integer);
     foreach (var r in req) { pId.Value = r.Id; pSo.Value = r.SortOrder; cmd.ExecuteNonQuery(); }
-    tx.Commit(); return Results.Ok();
+    tx.Commit(); return Results.Ok(new { success = true });
 });
 
 app.MapPost("/api/apps/{id}/control", (string id, string action) => {
@@ -221,15 +221,32 @@ app.MapPost("/api/apps/{id}/control", (string id, string action) => {
     using var reader = cmd.ExecuteReader();
     if (!reader.Read()) return Results.NotFound();
     var exec = action == "start" ? reader.GetString(0) : (action == "stop" ? reader.GetString(1) : $"{reader.GetString(1)};sleep 1;{reader.GetString(0)}");
-    Process.Start("/bin/bash", $"-c \"{exec}\""); return Results.Ok();
+    Process.Start("/bin/bash", $"-c \"{exec}\""); return Results.Ok(new { success = true });
 });
 
-app.MapPut("/api/apps/{id}/autostart", (string id, int state) => {
+// 🌟 改用强绑定路由参数 {state:int}，解决 AOT 下取不到传参的问题
+app.MapPut("/api/apps/{id}/autostart/{state:int}", (string id, int state) => {
     using var conn = new SqliteConnection(DbPath); conn.Open();
+
+    using var cmdSel = conn.CreateCommand();
+    cmdSel.CommandText = "SELECT StartCommand FROM apps_registry WHERE Id=@id";
+    cmdSel.Parameters.AddWithValue("@id", id);
+    var startCmd = cmdSel.ExecuteScalar()?.ToString();
+
     using var cmd = conn.CreateCommand();
     cmd.CommandText = "UPDATE apps_registry SET IsAutoStart=@state WHERE Id=@id";
     cmd.Parameters.AddWithValue("@state", state); cmd.Parameters.AddWithValue("@id", id);
-    cmd.ExecuteNonQuery(); return Results.Ok();
+    cmd.ExecuteNonQuery();
+
+    // 🌟 如果是 Binary Core (带 systemctl)，顺手联动底层的自启注册！
+    if (!string.IsNullOrEmpty(startCmd) && startCmd.Contains("systemctl start"))
+    {
+        var serviceName = startCmd.Replace("systemctl start", "").Trim();
+        var action = state == 1 ? "enable" : "disable";
+        Process.Start(new ProcessStartInfo { FileName = "/bin/bash", Arguments = $"-c \"systemctl {action} {serviceName}\"", UseShellExecute = false, CreateNoWindow = true });
+    }
+
+    return Results.Ok(new { success = true });
 });
 
 app.MapGet("/api/apps/{id}/config", (string id) => {
@@ -265,7 +282,7 @@ app.MapPost("/api/apps/{id}/config", async (string id, Dictionary<string, string
         var content = await File.ReadAllTextAsync(path);
         foreach (var kv in payload) content = Regex.Replace(content, $@"{kv.Key}=[^\n\r]*", _ => $"{kv.Key}={kv.Value}");
         await File.WriteAllTextAsync(path, content);
-        return Results.Ok();
+        return Results.Ok(new { success = true });
     }
     return Results.NotFound();
 });
@@ -307,7 +324,7 @@ app.MapPost("/api/cron", (CronRequest req) => {
     cmd.CommandText = "INSERT OR REPLACE INTO cron_registry VALUES (@id, '任务', @sch, @cmd)";
     cmd.Parameters.AddWithValue("@id", id); cmd.Parameters.AddWithValue("@sch", req.Schedule); cmd.Parameters.AddWithValue("@cmd", req.Command);
     cmd.ExecuteNonQuery();
-    Process.Start("/bin/bash", $"-c \"(crontab -l 2>/dev/null; echo '{req.Schedule} {req.Command}') | crontab -\""); return Results.Ok();
+    Process.Start("/bin/bash", $"-c \"(crontab -l 2>/dev/null; echo '{req.Schedule} {req.Command}') | crontab -\""); return Results.Ok(new { success = true });
 });
 
 app.MapDelete("/api/cron/{id}", (string id) => {
@@ -316,7 +333,7 @@ app.MapDelete("/api/cron/{id}", (string id) => {
     cmd.CommandText = "DELETE FROM cron_registry WHERE Id=@id";
     cmd.Parameters.AddWithValue("@id", id); cmd.ExecuteNonQuery();
     var lineToRemove = Encoding.UTF8.GetString(Convert.FromBase64String(id));
-    Process.Start("/bin/bash", $"-c \"crontab -l | grep -vF '{lineToRemove}' | crontab -\""); return Results.Ok();
+    Process.Start("/bin/bash", $"-c \"crontab -l | grep -vF '{lineToRemove}' | crontab -\""); return Results.Ok(new { success = true });
 });
 
 app.MapGet("/api/system/info", () => {
@@ -329,7 +346,7 @@ app.MapGet("/api/system/config", () => Results.Ok(sysConfig));
 app.MapPost("/api/system/config", async (AppConfig newConfig) => {
     sysConfig.Port = newConfig.Port; sysConfig.AdminToken = newConfig.AdminToken; sysConfig.LocalProxy = newConfig.LocalProxy;
     await File.WriteAllTextAsync(ConfigPath, JsonSerializer.Serialize(sysConfig, AppJsonContext.Default.AppConfig));
-    Process.Start("systemd-run", $"--unit=sc_restarter --collect bash -c \"sleep 1 && systemctl restart {ServiceName}\""); return Results.Ok();
+    Process.Start("systemd-run", $"--unit=sc_restarter --collect bash -c \"sleep 1 && systemctl restart {ServiceName}\""); return Results.Ok(new { success = true });
 });
 
 app.MapPost("/api/system/upgrade", () => {
@@ -337,7 +354,7 @@ app.MapPost("/api/system/upgrade", () => {
     var scriptUrl = "https://raw.githubusercontent.com/fw867/unifi-softcenterstore/master/install.sh";
     if (File.Exists("/tmp/sc_update.log")) File.Delete("/tmp/sc_update.log");
     string curlCmd = !string.IsNullOrEmpty(proxy) ? $"curl -x {proxy} -sSL {scriptUrl} | bash -s '{proxy}' > /tmp/sc_update.log 2>&1" : $"curl -sSL {scriptUrl} | bash > /tmp/sc_update.log 2>&1";
-    Process.Start("systemd-run", $"--unit=sc_updater --collect bash -c \"sleep 1 && {curlCmd}\""); return Results.Ok();
+    Process.Start("systemd-run", $"--unit=sc_updater --collect bash -c \"sleep 1 && {curlCmd}\""); return Results.Ok(new { success = true });
 });
 
 app.MapGet("/api/system/upgrade/log", () => {
