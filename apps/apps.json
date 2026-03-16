@@ -27,7 +27,7 @@
         "IsAutoStart": 1,
         "ConfigPath": "/data/bin/koolss",
         "ConfigKeys": "V2RAY_CONFIG_FILE,ISP_DNS1,ISP_DNS2,v2ray_bypass,v2ray_acl_default_mode,v2ray_basic_dns_chromecast,v2ray_quic_reject,v2ray_udp,v2ray_udp_list",
-        "LogPath": "/tmp/xray_log.txt"
+        "LogPath": "/var/log/koolss.log"
     },
     {
         "Id": "wechat",
