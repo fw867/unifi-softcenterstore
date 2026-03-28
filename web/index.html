@@ -523,6 +523,7 @@
                 };
 
                 // 加载硬件探针并注入到 UI 状态
+                let hasCheckedUpdateOnce = false;
                 const loadSystemInfo = async () => {
                     const data = await callApi('/api/system/info');
                     if (data) {
@@ -533,7 +534,12 @@
                             SfpTemp: data.sfpTemp || data.SfpTemp || '--',
                             Uptime: data.uptime || data.Uptime || '--'
                         };
-                        checkUpdate();
+
+                        // 只有在初次加载获取到本地版本号后，才立刻查一次云端版本
+                        if (!hasCheckedUpdateOnce) {
+                            hasCheckedUpdateOnce = true;
+                            checkUpdate();
+                        }
                     }
                 };
 
@@ -557,14 +563,21 @@
                     if (data) cronJobs.value = data.map(c => ({ id: c.id || c.Id, schedule: c.schedule || c.Schedule, command: c.command || c.Command }));
                 };
 
-                // 每 3 秒不仅刷新应用状态，同时刷新硬件温度探针
+                // 每 3 秒不仅刷新应用状态，同时刷新硬件温度探针，将轮询计时器分离
                 let pollTimer = null;
+                let updateTimer = null;
+
                 const startPolling = () => {
+                    // 1. 本地状态轮询：每 3 秒刷新一次（温度、应用运行状态）
                     if (pollTimer) clearInterval(pollTimer);
                     pollTimer = setInterval(() => {
                         loadRealApps();
                         loadSystemInfo();
                     }, 3000);
+
+                    // 2. 云端版本轮询：每 5 分钟 (300000毫秒) 查一次更新，防止被 GitHub 封禁 API
+                    if (updateTimer) clearInterval(updateTimer);
+                    updateTimer = setInterval(checkUpdate, 300000);
                 };
 
                 const fetchOnlineStore = async () => {
