@@ -168,6 +168,18 @@ bool IsAppRunning(string cmdStr)
     catch { return false; }
 }
 
+// 执行 Bash 指令并获取文本输出的辅助方法
+string GetBashOutput(string cmd)
+{
+    try
+    {
+        using var p = Process.Start(new ProcessStartInfo { FileName = "/bin/bash", Arguments = $"-c \"{cmd}\"", RedirectStandardOutput = true, UseShellExecute = false, CreateNoWindow = true });
+        p?.WaitForExit(2000);
+        return p?.StandardOutput.ReadToEnd().Trim() ?? "";
+    }
+    catch { return ""; }
+}
+
 app.MapGet("/api/apps", () => {
     var apps = new List<AppEntity>();
     using var conn = new SqliteConnection(DbPath); conn.Open();
@@ -336,9 +348,38 @@ app.MapDelete("/api/cron/{id}", (string id) => {
     Process.Start("/bin/bash", $"-c \"crontab -l | grep -vF '{lineToRemove}' | crontab -\""); return Results.Ok(new { success = true });
 });
 
+// 通过探针获取实时硬件与运行状态
 app.MapGet("/api/system/info", () => {
     var rawVersion = Assembly.GetExecutingAssembly().GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion ?? "1.0.0-dev";
-    return Results.Ok(new SystemInfo(rawVersion.Split('+')[0], "NativeAOT-.NET10", "UCG-Fiber"));
+
+    // 1. CPU 温度
+    var cpuTempRaw = GetBashOutput("ubnt-systool cputemp 2>/dev/null");
+    var cpuTemp = string.IsNullOrEmpty(cpuTempRaw) ? "--" : cpuTempRaw + "°C";
+
+    // 2. 猫棒温度 (提取 temp1 的数值)
+    var sfpTempRaw = GetBashOutput("sensors 2>/dev/null | grep temp1 | awk '{print $2}'");
+    var sfpTemp = string.IsNullOrEmpty(sfpTempRaw) ? "--" : sfpTempRaw.Replace("+", "");
+
+    // 3. 运行时间 (正则表达式提取并转中文)
+    var uptimeRaw = GetBashOutput("uptime 2>/dev/null");
+    var uptime = "--";
+    if (!string.IsNullOrEmpty(uptimeRaw))
+    {
+        var match = Regex.Match(uptimeRaw, @"up\s+(.*?),\s+\d+\s+user");
+        if (match.Success)
+        {
+            var u = match.Groups[1].Value;
+            u = u.Replace("days,", "天").Replace("days", "天").Replace("day,", "天").Replace("day", "天").Replace("min,", "分钟").Replace("min", "分钟");
+            u = Regex.Match(u, @"\d+:\d+").Success ? Regex.Replace(u, @"(\d+):(\d+)", "$1小时$2分钟") : u;
+            uptime = u;
+        }
+        else
+        {
+            uptime = uptimeRaw;
+        }
+    }
+
+    return Results.Ok(new SystemInfo(rawVersion.Split('+')[0], "NativeAOT-.NET10", "UCG-Fiber", cpuTemp, sfpTemp, uptime));
 });
 
 app.MapGet("/api/system/config", () => Results.Ok(sysConfig));
@@ -370,7 +411,8 @@ public record AppOrderReq(string Id, int SortOrder);
 public record CronEntity(string Id, string Name, string Schedule, string Command);
 public record CronRequest(string Schedule, string Command);
 public record LogResponse(string Content);
-public record SystemInfo(string Version, string Runtime, string Device);
+// 🌟 记录类加入 CPU 温度、猫棒温度和运行时间
+public record SystemInfo(string Version, string Runtime, string Device, string CpuTemp, string SfpTemp, string Uptime);
 
 [JsonSerializable(typeof(AppConfig))]
 [JsonSerializable(typeof(AppEntity))]

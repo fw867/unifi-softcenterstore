@@ -85,7 +85,26 @@
             <div class="flex flex-col md:flex-row md:items-center justify-between mb-8">
                 <div>
                     <h2 class="text-3xl font-semibold mb-2">欢迎回来</h2>
-                    <p class="text-gray-500">UniFi Cloud Gateway Fiber 正在安全运行</p>
+
+                    <div class="flex flex-col sm:flex-row sm:items-center space-y-3 sm:space-y-0 sm:space-x-4 mt-2">
+                        <p class="text-gray-500">UniFi Cloud Gateway Fiber 正在安全运行</p>
+
+                        <div class="flex items-center space-x-2">
+                            <div class="flex items-center bg-white/60 border border-gray-200 rounded-lg px-2.5 py-1 shadow-sm transition-all" title="CPU 温度">
+                                <i data-lucide="cpu" class="w-3.5 h-3.5 text-blue-500 mr-1.5"></i>
+                                <span class="text-xs font-mono text-gray-600 font-semibold">{{ sysInfo.CpuTemp }}</span>
+                            </div>
+                            <div class="flex items-center bg-white/60 border border-gray-200 rounded-lg px-2.5 py-1 shadow-sm transition-all" title="光口猫棒温度">
+                                <i data-lucide="thermometer" class="w-3.5 h-3.5 text-orange-500 mr-1.5"></i>
+                                <span class="text-xs font-mono text-gray-600 font-semibold">{{ sysInfo.SfpTemp }}</span>
+                            </div>
+                            <div class="flex items-center bg-white/60 border border-gray-200 rounded-lg px-2.5 py-1 shadow-sm transition-all" title="系统连续运行时间">
+                                <i data-lucide="activity" class="w-3.5 h-3.5 text-green-500 mr-1.5"></i>
+                                <span class="text-xs font-mono text-gray-600 font-semibold">{{ sysInfo.Uptime }}</span>
+                            </div>
+                        </div>
+                    </div>
+
                 </div>
                 <div class="mt-4 md:mt-0 flex items-center bg-white border border-gray-200 rounded-full px-4 py-2 shadow-sm focus-within:ring-2 focus-within:ring-blue-500 transition-all w-full md:w-64">
                     <i data-lucide="search" class="w-4 h-4 text-gray-400 mr-2"></i>
@@ -222,12 +241,9 @@
                 <div class="overflow-y-auto flex-1 pr-2">
                     <div v-if="addTab === 'online'" class="space-y-4">
                         <div v-if="isFetchingStore" class="text-center py-8 text-gray-500">同步中...</div>
-
                         <div v-for="pkg in onlineStore" :key="pkg.id || pkg.Id" class="flex items-center justify-between p-4 bg-white/60 rounded-2xl border border-gray-100">
                             <div class="flex items-start space-x-4">
-                                <div class="w-12 h-12 bg-blue-100 text-blue-600 rounded-xl flex items-center justify-center shrink-0 mt-0.5">
-                                    <i :data-lucide="pkg.icon || pkg.Icon" class="w-6 h-6"></i>
-                                </div>
+                                <div class="w-12 h-12 bg-blue-100 text-blue-600 rounded-xl flex items-center justify-center shrink-0 mt-0.5"><i :data-lucide="pkg.icon || pkg.Icon" class="w-6 h-6"></i></div>
                                 <div>
                                     <div class="flex items-center space-x-2">
                                         <h4 class="font-semibold text-gray-800">{{ pkg.name || pkg.Name }}</h4>
@@ -236,23 +252,12 @@
                                     <p class="text-xs text-gray-500 mt-1.5 line-clamp-2 leading-relaxed">{{ pkg.description || pkg.Description || '暂无应用简介' }}</p>
                                 </div>
                             </div>
-
                             <div class="shrink-0 ml-4">
                                 <template v-if="getLocalApp(pkg.id || pkg.Id)">
-                                    <button v-if="isNewerVersion(getLocalApp(pkg.id || pkg.Id).version, pkg.version || pkg.Version)"
-                                            @click="installApp(pkg)"
-                                            class="btn-apple bg-blue-600 text-white px-5 py-2 rounded-xl text-sm font-medium shadow-sm hover:bg-blue-700">
-                                        升级
-                                    </button>
-                                    <button v-else disabled
-                                            class="bg-gray-100 text-gray-400 px-5 py-2 rounded-xl text-sm font-medium cursor-not-allowed border border-gray-200">
-                                        已安装
-                                    </button>
+                                    <button v-if="isNewerVersion(getLocalApp(pkg.id || pkg.Id).version, pkg.version || pkg.Version)" @click="installApp(pkg)" class="btn-apple bg-blue-600 text-white px-5 py-2 rounded-xl text-sm font-medium shadow-sm hover:bg-blue-700">升级</button>
+                                    <button v-else disabled class="bg-gray-100 text-gray-400 px-5 py-2 rounded-xl text-sm font-medium cursor-not-allowed border border-gray-200">已安装</button>
                                 </template>
-                                <button v-else @click="installApp(pkg)"
-                                        class="btn-apple bg-black text-white px-5 py-2 rounded-xl text-sm font-medium shadow-sm hover:bg-gray-800">
-                                    安装
-                                </button>
+                                <button v-else @click="installApp(pkg)" class="btn-apple bg-black text-white px-5 py-2 rounded-xl text-sm font-medium shadow-sm hover:bg-gray-800">安装</button>
                             </div>
                         </div>
                     </div>
@@ -349,7 +354,9 @@
             setup() {
                 const token = ref(localStorage.getItem('sc_token') || '');
                 const tokenInputType = ref('password');
-                const sysInfo = ref({ Version: '0.0.0' });
+
+                // 系统状态初始化
+                const sysInfo = ref({ Version: '0.0.0', CpuTemp: '--', SfpTemp: '--', Uptime: '--' });
                 const apps = ref([]);
                 const cronJobs = ref([]);
 
@@ -471,12 +478,15 @@
 
                     await callApi('/api/system/upgrade', 'POST');
 
+                    let errCount = 0;
                     let logTimer = setInterval(async () => {
                         try {
                             const controller = new AbortController();
                             const timeoutId = setTimeout(() => controller.abort(), 2000);
+
                             const res = await fetch('/api/system/upgrade/log?_t=' + Date.now(), {
-                                headers: { 'Authorization': token.value }, signal: controller.signal, cache: 'no-store'
+                                headers: { 'Authorization': token.value },
+                                signal: controller.signal, cache: 'no-store'
                             });
                             clearTimeout(timeoutId);
 
@@ -486,38 +496,43 @@
                                 const c = document.querySelector('.terminal-scroll');
                                 if (c) c.scrollTop = c.scrollHeight;
                             } else {
-                                clearInterval(logTimer);
-                                triggerDeathLog();
+                                throw new Error('Status Error');
                             }
                         } catch (e) {
-                            clearInterval(logTimer);
-                            triggerDeathLog();
+                            errCount++;
+                            if (errCount >= 3) {
+                                clearInterval(logTimer);
+                                upgradeLog.value += '\n\n[系统提示] 后端服务已主动挂起。\n[系统提示] 正在执行底层二进制文件覆盖与 Systemd 重启...\n[系统提示] 正在等待路由节点重新上线...';
+                                const c = document.querySelector('.terminal-scroll');
+                                if (c) c.scrollTop = c.scrollHeight;
+
+                                let retryTimer = setInterval(async () => {
+                                    try {
+                                        const res = await fetch('/api/system/info?_t=' + Date.now(), {
+                                    headers: { 'Authorization': token.value }, cache: 'no-store'
+                                        });
+                                        if (res.ok) {
+                                            clearInterval(retryTimer);
+                                            window.location.reload(true);
+                                        }
+                                    } catch (err) { }
+                                }, 2000);
+                            }
                         }
                     }, 1500);
-
-                    const triggerDeathLog = () => {
-                        upgradeLog.value += '\n\n[系统提示] 后端服务连接已断开，正在执行底层二进制文件覆盖...\n[系统提示] 正在等待路由节点重新上线...';
-                        const c = document.querySelector('.terminal-scroll');
-                        if (c) c.scrollTop = c.scrollHeight;
-                    };
-
-                    setTimeout(() => {
-                        let retryTimer = setInterval(async () => {
-                            try {
-                                const res = await fetch('/api/system/info?_t=' + Date.now(), {
-                                    headers: { 'Authorization': token.value }, cache: 'no-store'
-                                });
-                                if (res.ok) { clearInterval(retryTimer); window.location.reload(true); }
-                            } catch (err) { }
-                        }, 2000);
-                    }, 8000);
                 };
 
+                // 加载硬件探针并注入到 UI 状态
                 const loadSystemInfo = async () => {
                     const data = await callApi('/api/system/info');
                     if (data) {
                         const rawVersion = data.version || data.Version || '0.0.0';
-                        sysInfo.value = { Version: rawVersion.split('+')[0] };
+                        sysInfo.value = {
+                            Version: rawVersion.split('+')[0],
+                            CpuTemp: data.cpuTemp || data.CpuTemp || '--',
+                            SfpTemp: data.sfpTemp || data.SfpTemp || '--',
+                            Uptime: data.uptime || data.Uptime || '--'
+                        };
                         checkUpdate();
                     }
                 };
@@ -536,16 +551,21 @@
                     }
                 };
 
-                const saveAutoStart = async (app) => {
-                    await callApi(`/api/apps/${app.id}/autostart/${app.autoStart ? 1 : 0}`, 'PUT');
-                };
+                const saveAutoStart = async (app) => { await callApi(`/api/apps/${app.id}/autostart/${app.autoStart ? 1 : 0}`, 'PUT'); };
                 const loadCronJobs = async () => {
                     const data = await callApi('/api/cron');
                     if (data) cronJobs.value = data.map(c => ({ id: c.id || c.Id, schedule: c.schedule || c.Schedule, command: c.command || c.Command }));
                 };
 
+                // 每 3 秒不仅刷新应用状态，同时刷新硬件温度探针
                 let pollTimer = null;
-                const startPolling = () => { if (pollTimer) clearInterval(pollTimer); pollTimer = setInterval(loadRealApps, 3000); };
+                const startPolling = () => {
+                    if (pollTimer) clearInterval(pollTimer);
+                    pollTimer = setInterval(() => {
+                        loadRealApps();
+                        loadSystemInfo();
+                    }, 3000);
+                };
 
                 const fetchOnlineStore = async () => {
                     isFetchingStore.value = true;
