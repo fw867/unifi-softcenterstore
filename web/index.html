@@ -85,10 +85,8 @@
             <div class="flex flex-col md:flex-row md:items-center justify-between mb-8">
                 <div>
                     <h2 class="text-3xl font-semibold mb-2">欢迎回来</h2>
-
                     <div class="flex flex-col sm:flex-row sm:items-center space-y-3 sm:space-y-0 sm:space-x-4 mt-2">
                         <p class="text-gray-500">UniFi Cloud Gateway Fiber 正在安全运行</p>
-
                         <div class="flex items-center space-x-2">
                             <div class="flex items-center bg-white/60 border border-gray-200 rounded-lg px-2.5 py-1 shadow-sm transition-all" title="CPU 温度">
                                 <i data-lucide="cpu" class="w-3.5 h-3.5 text-blue-500 mr-1.5"></i>
@@ -104,7 +102,6 @@
                             </div>
                         </div>
                     </div>
-
                 </div>
                 <div class="mt-4 md:mt-0 flex items-center bg-white border border-gray-200 rounded-full px-4 py-2 shadow-sm focus-within:ring-2 focus-within:ring-blue-500 transition-all w-full md:w-64">
                     <i data-lucide="search" class="w-4 h-4 text-gray-400 mr-2"></i>
@@ -304,12 +301,17 @@
             <div class="glass w-full max-w-lg rounded-[2.5rem] p-8 shadow-2xl">
                 <h3 class="text-2xl font-semibold mb-2">配置 {{ activeApp.name }}</h3>
                 <p class="text-sm text-gray-500 mb-6 font-mono break-all text-xs">{{ activeApp.configPath }}</p>
+
                 <div class="space-y-4 mb-8 text-sm max-h-[50vh] overflow-y-auto pr-2">
-                    <div v-for="(val, key) in appConfig" :key="key">
-                        <label class="block text-gray-400 mb-2 ml-1 uppercase text-xs font-bold tracking-wider">{{ key.replace(/_/g, ' ') }}</label>
-                        <input v-model="appConfig[key]" class="w-full bg-white/60 border border-gray-200 rounded-xl px-4 py-3 focus:ring-2 focus:ring-blue-500 outline-none transition-all shadow-sm">
+                    <div v-for="(item, key) in appConfig" :key="key" class="mb-4">
+                        <div class="flex flex-col mb-1.5">
+                            <label class="text-gray-400 ml-1 uppercase text-xs font-bold tracking-wider">{{ key.replace(/_/g, ' ') }}</label>
+                            <p v-if="item.comment" class="text-xs text-blue-500/80 ml-1 mt-0.5 font-medium leading-relaxed">{{ item.comment }}</p>
+                        </div>
+                        <input v-model="item.value" class="w-full bg-white/60 border border-gray-200 rounded-xl px-4 py-3 focus:ring-2 focus:ring-blue-500 outline-none transition-all shadow-sm">
                     </div>
                 </div>
+
                 <div class="flex space-x-3">
                     <button @click="activeApp = null" class="btn-apple flex-1 py-3 text-gray-500 font-medium border rounded-2xl hover:bg-gray-50">取消</button>
                     <button @click="saveAppConfig" class="btn-apple flex-1 bg-black text-white py-3 rounded-2xl font-medium shadow-lg hover:bg-gray-800">保存并重启服务</button>
@@ -355,7 +357,6 @@
                 const token = ref(localStorage.getItem('sc_token') || '');
                 const tokenInputType = ref('password');
 
-                // 系统状态初始化
                 const sysInfo = ref({ Version: '0.0.0', CpuTemp: '--', SfpTemp: '--', Uptime: '--' });
                 const apps = ref([]);
                 const cronJobs = ref([]);
@@ -497,7 +498,6 @@
                                 const c = document.querySelector('.terminal-scroll');
                                 if (c) c.scrollTop = c.scrollHeight;
 
-                                // 检测到日志包含结束标志 [4/4]，直接触发刷新！
                                 if (logText.includes('[4/4]')) {
                                     clearInterval(logTimer);
                                     upgradeLog.value += '\n\n[系统提示] 检测到更新脚本已执行完毕，正在重启服务...';
@@ -512,7 +512,6 @@
                             }
                         } catch (e) {
                             errCount++;
-                            // 容错 3 次（针对那些重启速度慢，或者网络真的断开了的情况）
                             if (errCount >= 3) {
                                 clearInterval(logTimer);
                                 upgradeLog.value += '\n\n[系统提示] 后端服务已主动挂起。\n[系统提示] 正在执行底层二进制文件覆盖与 Systemd 重启...\n[系统提示] 正在等待路由节点重新上线...';
@@ -522,7 +521,7 @@
                                 let retryTimer = setInterval(async () => {
                                     try {
                                         const res = await fetch('/api/system/info?_t=' + Date.now(), {
-                                    headers: { 'Authorization': token.value }, cache: 'no-store'
+                                            headers: { 'Authorization': token.value }, cache: 'no-store'
                                         });
                                         if (res.ok) {
                                             clearInterval(retryTimer);
@@ -535,7 +534,6 @@
                     }, 1500);
                 };
 
-                // 加载硬件探针并注入到 UI 状态
                 let hasCheckedUpdateOnce = false;
                 const loadSystemInfo = async () => {
                     const data = await callApi('/api/system/info');
@@ -548,7 +546,6 @@
                             Uptime: data.uptime || data.Uptime || '--'
                         };
 
-                        // 只有在初次加载获取到本地版本号后，才立刻查一次云端版本
                         if (!hasCheckedUpdateOnce) {
                             hasCheckedUpdateOnce = true;
                             checkUpdate();
@@ -576,19 +573,16 @@
                     if (data) cronJobs.value = data.map(c => ({ id: c.id || c.Id, schedule: c.schedule || c.Schedule, command: c.command || c.Command }));
                 };
 
-                // 每 3 秒不仅刷新应用状态，同时刷新硬件温度探针，将轮询计时器分离
                 let pollTimer = null;
                 let updateTimer = null;
 
                 const startPolling = () => {
-                    // 1. 本地状态轮询：每 3 秒刷新一次（温度、应用运行状态）
                     if (pollTimer) clearInterval(pollTimer);
                     pollTimer = setInterval(() => {
                         loadRealApps();
                         loadSystemInfo();
                     }, 3000);
 
-                    // 2. 云端版本轮询：每 5 分钟 (300000毫秒) 查一次更新，防止被 GitHub 封禁 API
                     if (updateTimer) clearInterval(updateTimer);
                     updateTimer = setInterval(checkUpdate, 300000);
                 };
@@ -655,16 +649,31 @@
                     setTimeout(loadRealApps, 500);
                 };
 
+                // 适配包含 Value 和 Comment 的嵌套记录结构
                 const openConfig = async (app) => {
                     if (!app.configKeys) return;
                     activeApp.value = app; appConfig.value = {};
                     const data = await callApi(`/api/apps/${app.id}/config`);
-                    if (data) appConfig.value = data;
+                    if (data) {
+                        const normalized = {};
+                        for (let k in data) {
+                            normalized[k] = {
+                                value: data[k].value !== undefined ? data[k].value : data[k].Value,
+                                comment: data[k].comment !== undefined ? data[k].comment : data[k].Comment
+                            };
+                        }
+                        appConfig.value = normalized;
+                    }
                 };
 
+                // 保存配置时，只向后端发送实际的值 (脱壳)
                 const saveAppConfig = async () => {
                     if (!activeApp.value) return;
-                    await callApi(`/api/apps/${activeApp.value.id}/config`, 'POST', appConfig.value);
+                    const payload = {};
+                    for (const k in appConfig.value) {
+                        payload[k] = appConfig.value[k].value;
+                    }
+                    await callApi(`/api/apps/${activeApp.value.id}/config`, 'POST', payload);
                     await callApi(`/api/apps/${activeApp.value.id}/control?action=restart`, 'POST');
                     activeApp.value = null;
                 };

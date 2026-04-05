@@ -82,8 +82,6 @@ using (var conn = new SqliteConnection(DbPath))
             Id TEXT PRIMARY KEY, Name TEXT NOT NULL, Schedule TEXT NOT NULL, Command TEXT NOT NULL
         );";
     cmd.ExecuteNonQuery();
-
-    // 自动为旧数据库补充字段
     try { using var c1 = conn.CreateCommand(); c1.CommandText = "ALTER TABLE apps_registry ADD COLUMN SortOrder INTEGER DEFAULT 0;"; c1.ExecuteNonQuery(); } catch { }
     try { using var c2 = conn.CreateCommand(); c2.CommandText = "ALTER TABLE apps_registry ADD COLUMN Version TEXT DEFAULT '0.0.1';"; c2.ExecuteNonQuery(); } catch { }
     try { using var c3 = conn.CreateCommand(); c3.CommandText = "ALTER TABLE apps_registry ADD COLUMN Description TEXT DEFAULT '';"; c3.ExecuteNonQuery(); } catch { }
@@ -168,14 +166,12 @@ bool IsAppRunning(string cmdStr)
     catch { return false; }
 }
 
-// 执行 Bash 指令并获取文本输出的辅助方法
 string GetBashOutput(string cmd)
 {
     try
     {
         using var p = Process.Start(new ProcessStartInfo { FileName = "/bin/bash", Arguments = $"-c \"{cmd}\"", RedirectStandardOutput = true, UseShellExecute = false, CreateNoWindow = true });
-        p?.WaitForExit(2000);
-        return p?.StandardOutput.ReadToEnd().Trim() ?? "";
+        p?.WaitForExit(2000); return p?.StandardOutput.ReadToEnd().Trim() ?? "";
     }
     catch { return ""; }
 }
@@ -236,7 +232,6 @@ app.MapPost("/api/apps/{id}/control", (string id, string action) => {
     Process.Start("/bin/bash", $"-c \"{exec}\""); return Results.Ok(new { success = true });
 });
 
-// 🌟 改用强绑定路由参数 {state:int}，解决 AOT 下取不到传参的问题
 app.MapPut("/api/apps/{id}/autostart/{state:int}", (string id, int state) => {
     using var conn = new SqliteConnection(DbPath); conn.Open();
 
@@ -250,7 +245,6 @@ app.MapPut("/api/apps/{id}/autostart/{state:int}", (string id, int state) => {
     cmd.Parameters.AddWithValue("@state", state); cmd.Parameters.AddWithValue("@id", id);
     cmd.ExecuteNonQuery();
 
-    // 🌟 如果是 Binary Core (带 systemctl)，顺手联动底层的自启注册！
     if (!string.IsNullOrEmpty(startCmd) && startCmd.Contains("systemctl start"))
     {
         var serviceName = startCmd.Replace("systemctl start", "").Trim();
@@ -261,6 +255,7 @@ app.MapPut("/api/apps/{id}/autostart/{state:int}", (string id, int state) => {
     return Results.Ok(new { success = true });
 });
 
+// 🌟 修复：获取配置项时，向上扫描寻找注释，打包进 ConfigItem
 app.MapGet("/api/apps/{id}/config", (string id) => {
     using var conn = new SqliteConnection(DbPath); conn.Open();
     using var cmd = conn.CreateCommand();
@@ -270,14 +265,35 @@ app.MapGet("/api/apps/{id}/config", (string id) => {
     if (!reader.Read() || reader.IsDBNull(0) || reader.IsDBNull(1)) return Results.NotFound();
     var path = reader.GetString(0);
     var keys = reader.GetString(1).Split(',', StringSplitOptions.RemoveEmptyEntries);
-    var dict = new Dictionary<string, string>();
+    var dict = new Dictionary<string, ConfigItem>();
+
     if (File.Exists(path))
     {
-        var content = File.ReadAllText(path);
+        var lines = File.ReadAllLines(path);
         foreach (var k in keys.Select(x => x.Trim()))
         {
-            var m = Regex.Match(content, $@"{k}=([^\n\r]*)");
-            dict[k] = m.Success ? m.Groups[1].Value : "";
+            string val = "";
+            string comment = "";
+            for (int i = 0; i < lines.Length; i++)
+            {
+                var m = Regex.Match(lines[i], $@"{k}=([^\n\r]*)");
+                if (m.Success)
+                {
+                    val = m.Groups[1].Value;
+                    // 向上寻找最近的非空行，判断是否为 # 注释
+                    for (int j = i - 1; j >= 0; j--)
+                    {
+                        if (string.IsNullOrWhiteSpace(lines[j])) continue;
+                        if (lines[j].TrimStart().StartsWith("#"))
+                        {
+                            comment = lines[j].TrimStart().TrimStart('#').Trim();
+                        }
+                        break; // 找到一行非空行后立即停止扫描
+                    }
+                    break;
+                }
+            }
+            dict[k] = new ConfigItem(val, comment);
         }
     }
     return Results.Ok(dict);
@@ -348,19 +364,15 @@ app.MapDelete("/api/cron/{id}", (string id) => {
     Process.Start("/bin/bash", $"-c \"crontab -l | grep -vF '{lineToRemove}' | crontab -\""); return Results.Ok(new { success = true });
 });
 
-// 通过探针获取实时硬件与运行状态
 app.MapGet("/api/system/info", () => {
     var rawVersion = Assembly.GetExecutingAssembly().GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion ?? "1.0.0-dev";
 
-    // 1. CPU 温度
     var cpuTempRaw = GetBashOutput("ubnt-systool cputemp 2>/dev/null");
     var cpuTemp = string.IsNullOrEmpty(cpuTempRaw) ? "--" : cpuTempRaw + "°C";
 
-    // 2. 猫棒温度 (提取 temp1 的数值)
     var sfpTempRaw = GetBashOutput("sensors 2>/dev/null | grep temp1 | awk '{print $2}'");
     var sfpTemp = string.IsNullOrEmpty(sfpTempRaw) ? "--" : sfpTempRaw.Replace("+", "");
 
-    // 3. 运行时间 (正则表达式提取并转中文)
     var uptimeRaw = GetBashOutput("uptime 2>/dev/null");
     var uptime = "--";
     if (!string.IsNullOrEmpty(uptimeRaw))
@@ -373,10 +385,7 @@ app.MapGet("/api/system/info", () => {
             u = Regex.Match(u, @"\d+:\d+").Success ? Regex.Replace(u, @"(\d+):(\d+)", "$1小时$2分钟") : u;
             uptime = u;
         }
-        else
-        {
-            uptime = uptimeRaw;
-        }
+        else { uptime = uptimeRaw; }
     }
 
     return Results.Ok(new SystemInfo(rawVersion.Split('+')[0], "NativeAOT-.NET10", "UCG-Fiber", cpuTemp, sfpTemp, uptime));
@@ -411,8 +420,9 @@ public record AppOrderReq(string Id, int SortOrder);
 public record CronEntity(string Id, string Name, string Schedule, string Command);
 public record CronRequest(string Schedule, string Command);
 public record LogResponse(string Content);
-// 🌟 记录类加入 CPU 温度、猫棒温度和运行时间
 public record SystemInfo(string Version, string Runtime, string Device, string CpuTemp, string SfpTemp, string Uptime);
+
+public record ConfigItem(string Value, string Comment);
 
 [JsonSerializable(typeof(AppConfig))]
 [JsonSerializable(typeof(AppEntity))]
@@ -421,6 +431,8 @@ public record SystemInfo(string Version, string Runtime, string Device, string C
 [JsonSerializable(typeof(CronRequest))]
 [JsonSerializable(typeof(LogResponse))]
 [JsonSerializable(typeof(SystemInfo))]
+[JsonSerializable(typeof(ConfigItem))]
+[JsonSerializable(typeof(Dictionary<string, ConfigItem>))]
 [JsonSerializable(typeof(Dictionary<string, string>))]
 [JsonSerializable(typeof(List<AppEntity>))]
 [JsonSerializable(typeof(List<AppOrderReq>))]
