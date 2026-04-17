@@ -76,7 +76,7 @@ using (var conn = new SqliteConnection(DbPath))
             Id TEXT PRIMARY KEY, Name TEXT NOT NULL, Type TEXT NOT NULL, Icon TEXT DEFAULT 'box', 
             StartCommand TEXT NOT NULL, StopCommand TEXT NOT NULL, StatusCommand TEXT NOT NULL, 
             IsAutoStart INTEGER DEFAULT 0, ConfigPath TEXT, ConfigKeys TEXT, LogPath TEXT, SortOrder INTEGER DEFAULT 0,
-            Version TEXT DEFAULT '1.0.0', Description TEXT DEFAULT ''
+            Version TEXT DEFAULT '1.0.0', Description TEXT DEFAULT '', CustomCommands TEXT DEFAULT '[]'
         );
         CREATE TABLE IF NOT EXISTS cron_registry (
             Id TEXT PRIMARY KEY, Name TEXT NOT NULL, Schedule TEXT NOT NULL, Command TEXT NOT NULL
@@ -85,6 +85,7 @@ using (var conn = new SqliteConnection(DbPath))
     try { using var c1 = conn.CreateCommand(); c1.CommandText = "ALTER TABLE apps_registry ADD COLUMN SortOrder INTEGER DEFAULT 0;"; c1.ExecuteNonQuery(); } catch { }
     try { using var c2 = conn.CreateCommand(); c2.CommandText = "ALTER TABLE apps_registry ADD COLUMN Version TEXT DEFAULT '0.0.1';"; c2.ExecuteNonQuery(); } catch { }
     try { using var c3 = conn.CreateCommand(); c3.CommandText = "ALTER TABLE apps_registry ADD COLUMN Description TEXT DEFAULT '';"; c3.ExecuteNonQuery(); } catch { }
+    try { using var c4 = conn.CreateCommand(); c4.CommandText = "ALTER TABLE apps_registry ADD COLUMN CustomCommands TEXT DEFAULT '[]';"; c4.ExecuteNonQuery(); } catch { }
 }
 
 string bootLock = "/tmp/softcenter_booted.lock";
@@ -180,12 +181,12 @@ app.MapGet("/api/apps", () => {
     var apps = new List<AppEntity>();
     using var conn = new SqliteConnection(DbPath); conn.Open();
     using var cmd = conn.CreateCommand();
-    cmd.CommandText = "SELECT Id, Name, Type, Icon, StartCommand, StopCommand, StatusCommand, IsAutoStart, ConfigPath, ConfigKeys, LogPath, SortOrder, Version, Description FROM apps_registry ORDER BY SortOrder ASC, Id ASC";
+    cmd.CommandText = "SELECT Id, Name, Type, Icon, StartCommand, StopCommand, StatusCommand, IsAutoStart, ConfigPath, ConfigKeys, LogPath, SortOrder, Version, Description, CustomCommands FROM apps_registry ORDER BY SortOrder ASC, Id ASC";
     using var reader = cmd.ExecuteReader();
     while (reader.Read())
     {
         var sCmd = reader.GetString(6);
-        apps.Add(new AppEntity(reader.GetString(0), reader.GetString(1), reader.GetString(2), reader.GetString(3), reader.GetString(4), reader.GetString(5), sCmd, reader.GetInt32(7), IsAppRunning(sCmd), reader.IsDBNull(8) ? "" : reader.GetString(8), reader.IsDBNull(9) ? "" : reader.GetString(9), reader.IsDBNull(10) ? "" : reader.GetString(10), reader.IsDBNull(11) ? 0 : reader.GetInt32(11), reader.IsDBNull(12) ? "1.0.0" : reader.GetString(12), reader.IsDBNull(13) ? "" : reader.GetString(13)));
+        apps.Add(new AppEntity(reader.GetString(0), reader.GetString(1), reader.GetString(2), reader.GetString(3), reader.GetString(4), reader.GetString(5), sCmd, reader.GetInt32(7), IsAppRunning(sCmd), reader.IsDBNull(8) ? "" : reader.GetString(8), reader.IsDBNull(9) ? "" : reader.GetString(9), reader.IsDBNull(10) ? "" : reader.GetString(10), reader.IsDBNull(11) ? 0 : reader.GetInt32(11), reader.IsDBNull(12) ? "1.0.0" : reader.GetString(12), reader.IsDBNull(13) ? "" : reader.GetString(13), reader.IsDBNull(14) ? "[]" : reader.GetString(14)));
     }
     return apps;
 });
@@ -193,12 +194,13 @@ app.MapGet("/api/apps", () => {
 app.MapPost("/api/apps", (AppEntity a) => {
     using var conn = new SqliteConnection(DbPath); conn.Open();
     using var cmd = conn.CreateCommand();
-    cmd.CommandText = "INSERT OR REPLACE INTO apps_registry VALUES (@Id,@Name,@Type,@Icon,@Start,@Stop,@Status,@Auto,@CPath,@CKeys,@LPath,@SortOrder,@Ver,@Desc)";
+    cmd.CommandText = "INSERT OR REPLACE INTO apps_registry VALUES (@Id,@Name,@Type,@Icon,@Start,@Stop,@Status,@Auto,@CPath,@CKeys,@LPath,@SortOrder,@Ver,@Desc,@Custom)";
     cmd.Parameters.AddWithValue("@Id", a.Id); cmd.Parameters.AddWithValue("@Name", a.Name); cmd.Parameters.AddWithValue("@Type", a.Type);
     cmd.Parameters.AddWithValue("@Icon", a.Icon ?? "box"); cmd.Parameters.AddWithValue("@Start", a.StartCommand); cmd.Parameters.AddWithValue("@Stop", a.StopCommand);
     cmd.Parameters.AddWithValue("@Status", a.StatusCommand); cmd.Parameters.AddWithValue("@Auto", a.IsAutoStart);
     cmd.Parameters.AddWithValue("@CPath", a.ConfigPath ?? ""); cmd.Parameters.AddWithValue("@CKeys", a.ConfigKeys ?? ""); cmd.Parameters.AddWithValue("@LPath", a.LogPath ?? "");
     cmd.Parameters.AddWithValue("@SortOrder", a.SortOrder); cmd.Parameters.AddWithValue("@Ver", a.Version ?? "0.0.1"); cmd.Parameters.AddWithValue("@Desc", a.Description ?? "");
+    cmd.Parameters.AddWithValue("@Custom", a.CustomCommands ?? "[]");
     cmd.ExecuteNonQuery(); return Results.Ok(new { success = true });
 });
 
@@ -230,6 +232,19 @@ app.MapPost("/api/apps/{id}/control", (string id, string action) => {
     if (!reader.Read()) return Results.NotFound();
     var exec = action == "start" ? reader.GetString(0) : (action == "stop" ? reader.GetString(1) : $"{reader.GetString(1)};sleep 1;{reader.GetString(0)}");
     Process.Start("/bin/bash", $"-c \"{exec}\""); return Results.Ok(new { success = true });
+});
+
+app.MapPost("/api/apps/{id}/custom_command", (string id, CustomCommandReq req) => {
+    using var p = Process.Start(new ProcessStartInfo { 
+        FileName = "/bin/bash", 
+        Arguments = $"-c \"{req.Command}\"", 
+        RedirectStandardOutput = true, 
+        RedirectStandardError = true,
+        UseShellExecute = false 
+    });
+    p?.WaitForExit();
+    var output = p?.StandardOutput.ReadToEnd() + p?.StandardError.ReadToEnd();
+    return Results.Ok(new LogResponse(output ?? ""));
 });
 
 app.MapPut("/api/apps/{id}/autostart/{state:int}", (string id, int state) => {
@@ -415,10 +430,11 @@ app.MapGet("/api/system/upgrade/log", () => {
 app.Run($"http://0.0.0.0:{sysConfig.Port}");
 
 public record AppConfig { public int Port { get; set; } = 9958; public string AdminToken { get; set; } = "Your_Secret_Token_Here"; public string LocalProxy { get; set; } = ""; }
-public record AppEntity(string Id, string Name, string Type, string Icon, string StartCommand, string StopCommand, string StatusCommand, int IsAutoStart, bool IsRunning, string ConfigPath, string ConfigKeys, string LogPath, int SortOrder, string Version, string Description);
+public record AppEntity(string Id, string Name, string Type, string Icon, string StartCommand, string StopCommand, string StatusCommand, int IsAutoStart, bool IsRunning, string ConfigPath, string ConfigKeys, string LogPath, int SortOrder, string Version, string Description, string CustomCommands);
 public record AppOrderReq(string Id, int SortOrder);
 public record CronEntity(string Id, string Name, string Schedule, string Command);
 public record CronRequest(string Schedule, string Command);
+public record CustomCommandReq(string Command);
 public record LogResponse(string Content);
 public record SystemInfo(string Version, string Runtime, string Device, string CpuTemp, string SfpTemp, string Uptime);
 
@@ -429,6 +445,7 @@ public record ConfigItem(string Value, string Comment);
 [JsonSerializable(typeof(AppOrderReq))]
 [JsonSerializable(typeof(CronEntity))]
 [JsonSerializable(typeof(CronRequest))]
+[JsonSerializable(typeof(CustomCommandReq))]
 [JsonSerializable(typeof(LogResponse))]
 [JsonSerializable(typeof(SystemInfo))]
 [JsonSerializable(typeof(ConfigItem))]

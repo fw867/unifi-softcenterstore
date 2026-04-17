@@ -18,7 +18,7 @@
         "Id": "koolss",
         "Name": "V2Ray",
         "Type": "Binary Core",
-        "Version": "1.0.0",
+        "Version": "1.0.1",
         "Description": "V2ray代理，支持GFWList、大陆白名单，游戏、全局模式。",
         "Icon": "shield-check",
         "StartCommand": "systemctl start koolss",
@@ -27,7 +27,8 @@
         "IsAutoStart": 1,
         "ConfigPath": "/data/bin/koolss",
         "ConfigKeys": "V2RAY_CONFIG_FILE,ISP_DNS1,ISP_DNS2,v2ray_bypass,v2ray_acl_default_mode,v2ray_basic_dns_chromecast,v2ray_quic_reject,v2ray_udp,v2ray_udp_list",
-        "LogPath": "/var/log/koolss.log"
+        "LogPath": "/var/log/koolss.log",
+        "CustomCommands": "[{\"name\":\"升级xray\",\"command\":\"/data/bin/ssup\"},{\"name\":\"更新规则\",\"command\":\"/data/bin/ssrule\"}]"
     },
     {
         "Id": "wechat",
