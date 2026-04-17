@@ -111,7 +111,7 @@
 
             <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mb-12">
                 <div v-for="(app, index) in filteredApps" :key="app.id"
-                     draggable="true" @dragstart="onDragStart($event, index)" @dragover.prevent @dragenter.prevent @drop="onDrop($event, index)"
+                     draggable="true" @dragstart="onDragStart($event, index)" @dragover.prevent @dragenter.prevent @drop="onDrop($event, index)" @dragend="onDragEnd"
                      :class="{'opacity-50 border-dashed border-2 border-blue-400': draggedIndex === index}"
                      class="glass rounded-[2rem] p-6 shadow-sm hover:shadow-md transition-all relative flex flex-col min-h-[280px]">
 
@@ -383,7 +383,7 @@
                 const addTab = ref('online');
                 const isFetchingStore = ref(false);
                 const onlineStore = ref([]);
-                const newApp = ref({ Id: '', Name: '', Type: 'Local', Icon: 'box', ConfigPath: '', ConfigKeys: '', LogPath: '', StartCommand: '', StopCommand: '', StatusCommand: '', IsAutoStart: 0, SortOrder: 999, Version: '1.0.0', Description: '' });
+                const newApp = ref({ Id: '', Name: '', Type: 'Local', Icon: 'box', ConfigPath: '', ConfigKeys: '', LogPath: '', StartCommand: '', StopCommand: '', StatusCommand: '', IsAutoStart: 0, SortOrder: 999, Version: '1.0.0', Description: '', CustomCommands: '[]' });
 
                 const logModalApp = ref(null);
                 const logContent = ref('');
@@ -753,7 +753,7 @@
                 return {
                     token, tokenInputType, handleTokenSubmit, sysInfo, apps, cronJobs, activeApp, appConfig, showAddModal, addTab, isFetchingStore, onlineStore,
                     newApp, logModalApp, logContent, isLoadingLogs, cronModalApp, newCronReq, hasUpdate, latestVersion, isUpgrading, upgradeLog, doUpgrade,
-                    searchQuery, filteredApps, draggedIndex, getLocalApp, isNewerVersion, onDragStart, onDrop, deleteApp, toggleApp, restartApp, saveAutoStart, openAddModal: () => { showAddModal.value = true; fetchOnlineStore(); },
+                    searchQuery, filteredApps, draggedIndex, getLocalApp, isNewerVersion, onDragStart, onDragEnd, onDrop, deleteApp, toggleApp, restartApp, saveAutoStart, openAddModal: () => { showAddModal.value = true; fetchOnlineStore(); },
                     installApp, updateAppConfigFromCloud, showSystemLogs, showLogModal, refreshLogs, runCustomCommand, loadCronJobs, openConfig, saveAppConfig, showCronModal, submitCron, deleteCron,
                     showSettingsModal, sysConfigForm, isSavingSettings, openSettings, saveSettings, activeCmdMenu, showCronModalVisible
                 };
