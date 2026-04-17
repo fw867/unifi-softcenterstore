@@ -235,18 +235,17 @@ app.MapPost("/api/apps/{id}/control", (string id, string action) => {
 });
 
 app.MapPost("/api/apps/{id}/custom_command", (string id, CustomCommandReq req) => {
-    using var p = Process.Start(new ProcessStartInfo { 
-        FileName = "/bin/bash", 
-        Arguments = $"-c \"{req.Command}\"", 
-        RedirectStandardOutput = true, 
+    using var p = Process.Start(new ProcessStartInfo {
+        FileName = "/bin/bash",
+        Arguments = $"-c \"export TERM=xterm; {req.Command}\"",
+        RedirectStandardOutput = true,
         RedirectStandardError = true,
-        UseShellExecute = false 
+        UseShellExecute = false
     });
     p?.WaitForExit();
     var output = p?.StandardOutput.ReadToEnd() + p?.StandardError.ReadToEnd();
     return Results.Ok(new LogResponse(output ?? ""));
 });
-
 app.MapPut("/api/apps/{id}/autostart/{state:int}", (string id, int state) => {
     using var conn = new SqliteConnection(DbPath); conn.Open();
 
