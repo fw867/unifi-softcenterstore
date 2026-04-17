@@ -286,6 +286,7 @@
                         </div>
                         <input v-model="newApp.StartCommand" placeholder="启动命令" class="w-full bg-gray-100 rounded-xl px-4 py-2.5 outline-none font-mono text-xs">
                         <input v-model="newApp.StopCommand" placeholder="停止命令" class="w-full bg-gray-100 rounded-xl px-4 py-2.5 outline-none font-mono text-xs">
+                        <input v-model="newApp.CustomCommands" placeholder="自定义命令 (JSON格式，如: [{&quot;name&quot;:&quot;测试&quot;,&quot;command&quot;:&quot;echo 1&quot;}])" class="w-full bg-gray-100 rounded-xl px-4 py-2.5 outline-none font-mono text-xs">
                         <button @click="installApp(newApp)" class="btn-apple w-full bg-blue-600 text-white py-3 rounded-2xl font-medium">保存本地配置</button>
                     </div>
                 </div>
@@ -418,6 +419,7 @@
                 const getLocalApp = (id) => apps.value.find(a => a.id === id);
 
                 const onDragStart = (e, index) => { draggedIndex.value = index; e.dataTransfer.effectAllowed = 'move'; };
+                const onDragEnd = () => { draggedIndex.value = null; };
                 const onDrop = async (e, index) => {
                     if (draggedIndex.value === null || draggedIndex.value === index) return;
                     if (searchQuery.value) { alert('当前处于搜索模式，暂不支持拖拽排序。'); draggedIndex.value = null; return; }
