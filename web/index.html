@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -29,9 +30,9 @@
             transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
         }
 
-            .btn-apple:active {
-                transform: scale(0.96);
-            }
+        .btn-apple:active {
+            transform: scale(0.96);
+        }
 
         .terminal-scroll::-webkit-scrollbar {
             width: 8px;
@@ -48,34 +49,43 @@
         }
     </style>
 </head>
+
 <body class="antialiased">
     <div id="app" @click="activeCmdMenu = null" class="min-h-screen pb-20 relative">
         <nav class="sticky top-0 z-50 glass border-b border-gray-200 mb-8">
             <div class="safe-area px-6 h-16 flex items-center justify-between">
                 <div class="flex items-center space-x-3">
-                    <div class="w-8 h-8 bg-black rounded-lg flex items-center justify-center text-white"><i data-lucide="shield-check" class="w-5 h-5"></i></div>
+                    <div class="w-8 h-8 bg-black rounded-lg flex items-center justify-center text-white"><i
+                            data-lucide="shield-check" class="w-5 h-5"></i></div>
                     <div class="flex flex-col">
                         <span class="font-semibold text-lg tracking-tight leading-none">SoftCenter</span>
                         <div class="flex items-center space-x-2 mt-1">
                             <span class="text-[10px] text-gray-400 font-mono">Build {{ sysInfo.Version }}</span>
-                            <button v-if="hasUpdate" @click="doUpgrade" class="text-[10px] bg-blue-50 text-blue-600 px-2 py-0.5 rounded-full font-bold hover:bg-blue-100 transition-colors shadow-sm border border-blue-200">
+                            <button v-if="hasUpdate" @click="doUpgrade"
+                                class="text-[10px] bg-blue-50 text-blue-600 px-2 py-0.5 rounded-full font-bold hover:bg-blue-100 transition-colors shadow-sm border border-blue-200">
                                 发现新版 {{ latestVersion }}
                             </button>
                         </div>
                     </div>
                 </div>
                 <div class="flex items-center space-x-4">
-                    <button @click="openSettings" class="btn-apple bg-white text-gray-700 px-3 py-1.5 rounded-lg text-xs font-medium flex items-center shadow-sm border border-gray-200 hover:bg-gray-50 transition-colors">
+                    <button @click="goToRouterAdmin"
+                        class="btn-apple bg-white text-gray-700 px-3 py-1.5 rounded-lg text-xs font-medium flex items-center shadow-sm border border-gray-200 hover:bg-gray-50 transition-colors">
+                        <i data-lucide="router" class="w-4 h-4 mr-1.5 text-gray-500"></i> 路由后台
+                    </button>
+                    <button @click="openSettings"
+                        class="btn-apple bg-white text-gray-700 px-3 py-1.5 rounded-lg text-xs font-medium flex items-center shadow-sm border border-gray-200 hover:bg-gray-50 transition-colors">
                         <i data-lucide="settings" class="w-4 h-4 mr-1.5 text-gray-500"></i> 系统设置
                     </button>
-                    <button @click="showSystemLogs" class="btn-apple bg-black text-white px-3 py-1.5 rounded-lg text-xs font-medium flex items-center shadow-sm hover:bg-gray-800 transition-colors">
+                    <button @click="showSystemLogs"
+                        class="btn-apple bg-black text-white px-3 py-1.5 rounded-lg text-xs font-medium flex items-center shadow-sm hover:bg-gray-800 transition-colors">
                         <i data-lucide="terminal" class="w-4 h-4 mr-1.5"></i> 核心日志
                     </button>
                     <div class="flex items-center bg-gray-100 rounded-full px-3 py-1 border border-gray-200">
                         <i data-lucide="key" class="w-4 h-4 text-gray-400 mr-2"></i>
                         <input :type="tokenInputType" v-model="token" placeholder="输入访问令牌"
-                               @focus="tokenInputType = 'text'" @blur="handleTokenSubmit" @keyup.enter="handleTokenSubmit"
-                               class="bg-transparent border-none text-xs focus:outline-none w-32">
+                            @focus="tokenInputType = 'text'" @blur="handleTokenSubmit" @keyup.enter="handleTokenSubmit"
+                            class="bg-transparent border-none text-xs focus:outline-none w-32">
                     </div>
                 </div>
             </div>
@@ -88,83 +98,112 @@
                     <div class="flex flex-col sm:flex-row sm:items-center space-y-3 sm:space-y-0 sm:space-x-4 mt-2">
                         <p class="text-gray-500">UniFi Cloud Gateway Fiber 正在安全运行</p>
                         <div class="flex items-center space-x-2">
-                            <div class="flex items-center bg-white/60 border border-gray-200 rounded-lg px-2.5 py-1 shadow-sm transition-all" title="CPU 温度">
+                            <div class="flex items-center bg-white/60 border border-gray-200 rounded-lg px-2.5 py-1 shadow-sm transition-all"
+                                title="CPU 温度">
                                 <i data-lucide="cpu" class="w-3.5 h-3.5 text-blue-500 mr-1.5"></i>
                                 <span class="text-xs font-mono text-gray-600 font-semibold">{{ sysInfo.CpuTemp }}</span>
                             </div>
-                            <div class="flex items-center bg-white/60 border border-gray-200 rounded-lg px-2.5 py-1 shadow-sm transition-all" title="光口猫棒温度">
+                            <div class="flex items-center bg-white/60 border border-gray-200 rounded-lg px-2.5 py-1 shadow-sm transition-all"
+                                title="光口猫棒温度">
                                 <i data-lucide="thermometer" class="w-3.5 h-3.5 text-orange-500 mr-1.5"></i>
                                 <span class="text-xs font-mono text-gray-600 font-semibold">{{ sysInfo.SfpTemp }}</span>
                             </div>
-                            <div class="flex items-center bg-white/60 border border-gray-200 rounded-lg px-2.5 py-1 shadow-sm transition-all" title="系统连续运行时间">
+                            <div class="flex items-center bg-white/60 border border-gray-200 rounded-lg px-2.5 py-1 shadow-sm transition-all"
+                                title="系统连续运行时间">
                                 <i data-lucide="activity" class="w-3.5 h-3.5 text-green-500 mr-1.5"></i>
                                 <span class="text-xs font-mono text-gray-600 font-semibold">{{ sysInfo.Uptime }}</span>
                             </div>
                         </div>
                     </div>
                 </div>
-                <div class="mt-4 md:mt-0 flex items-center bg-white border border-gray-200 rounded-full px-4 py-2 shadow-sm focus-within:ring-2 focus-within:ring-blue-500 transition-all w-full md:w-64">
+                <div
+                    class="mt-4 md:mt-0 flex items-center bg-white border border-gray-200 rounded-full px-4 py-2 shadow-sm focus-within:ring-2 focus-within:ring-blue-500 transition-all w-full md:w-64">
                     <i data-lucide="search" class="w-4 h-4 text-gray-400 mr-2"></i>
-                    <input v-model="searchQuery" type="text" placeholder="搜索应用名称或ID..." class="bg-transparent border-none outline-none text-sm w-full text-gray-700">
+                    <input v-model="searchQuery" type="text" placeholder="搜索应用名称或ID..."
+                        class="bg-transparent border-none outline-none text-sm w-full text-gray-700">
                 </div>
             </div>
 
             <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mb-12">
-                <div v-for="(app, index) in filteredApps" :key="app.id"
-                     draggable="true" @dragstart="onDragStart($event, index)" @dragover.prevent @dragenter.prevent @drop="onDrop($event, index)" @dragend="onDragEnd"
-                     :class="{'opacity-50 border-dashed border-2 border-blue-400': draggedIndex === index}"
-                     class="glass rounded-[2rem] p-6 shadow-sm hover:shadow-md transition-all relative flex flex-col min-h-[280px]">
+                <div v-for="(app, index) in filteredApps" :key="app.id" draggable="true"
+                    @dragstart="onDragStart($event, index)" @dragover.prevent @dragenter.prevent
+                    @drop="onDrop($event, index)" @dragend="onDragEnd"
+                    :class="{'opacity-50 border-dashed border-2 border-blue-400': draggedIndex === index}"
+                    class="glass rounded-[2rem] p-6 shadow-sm hover:shadow-md transition-all relative flex flex-col min-h-[280px]">
 
-                    <div class="absolute top-5 right-5 cursor-move text-gray-300 hover:text-gray-500 transition-colors z-10" title="按住拖拽排序">
+                    <div class="absolute top-5 right-5 cursor-move text-gray-300 hover:text-gray-500 transition-colors z-10"
+                        title="按住拖拽排序">
                         <i data-lucide="grip-vertical" class="w-5 h-5"></i>
                     </div>
                     <div class="flex justify-between items-start mb-6">
-                        <div :class="app.isRunning ? 'bg-blue-600' : 'bg-gray-400'" class="w-14 h-14 rounded-2xl flex items-center justify-center text-white shadow-lg transition-colors">
+                        <div :class="app.isRunning ? 'bg-blue-600' : 'bg-gray-400'"
+                            class="w-14 h-14 rounded-2xl flex items-center justify-center text-white shadow-lg transition-colors">
                             <i :data-lucide="app.icon" class="w-7 h-7"></i>
                         </div>
                         <div class="flex items-center space-x-3 pr-6">
-                            <button @click="restartApp(app)" class="text-gray-400 hover:text-blue-500 transition-colors" title="重启应用">
+                            <button @click="restartApp(app)" class="text-gray-400 hover:text-blue-500 transition-colors"
+                                title="重启应用">
                                 <i data-lucide="rotate-cw" class="w-5 h-5"></i>
                             </button>
-                            <button @click="toggleApp(app)" :class="app.isRunning ? 'bg-[#34C759]' : 'bg-[#E9E9EA]'" class="w-12 h-7 rounded-full relative p-1 transition-colors">
-                                <div :class="app.isRunning ? 'translate-x-5' : 'translate-x-0'" class="w-5 h-5 bg-white rounded-full shadow-sm transform transition-transform"></div>
+                            <button @click="toggleApp(app)" :class="app.isRunning ? 'bg-[#34C759]' : 'bg-[#E9E9EA]'"
+                                class="w-12 h-7 rounded-full relative p-1 transition-colors">
+                                <div :class="app.isRunning ? 'translate-x-5' : 'translate-x-0'"
+                                    class="w-5 h-5 bg-white rounded-full shadow-sm transform transition-transform">
+                                </div>
                             </button>
                         </div>
                     </div>
 
                     <div class="flex items-center space-x-2 mb-1">
                         <h3 class="text-xl font-semibold">{{ app.name }}</h3>
-                        <span class="text-[10px] bg-gray-200 text-gray-600 px-1.5 py-0.5 rounded-md font-mono">v{{ app.version }}</span>
+                        <span class="text-[10px] bg-gray-200 text-gray-600 px-1.5 py-0.5 rounded-md font-mono">v{{
+                            app.version }}</span>
                     </div>
                     <p class="text-xs text-gray-400 font-medium uppercase tracking-widest mb-6">{{ app.type }}</p>
 
                     <div class="flex space-x-2 mt-auto">
-                        <button @click="openConfig(app)" class="btn-apple flex-1 bg-white border border-gray-200 py-2.5 rounded-xl text-sm font-medium hover:bg-gray-50 transition-all">配置</button>
-                        <button @click="showLogModal(app)" :disabled="!app.logPath" :class="!app.logPath ? 'opacity-50 cursor-not-allowed' : 'hover:bg-gray-50'" class="btn-apple px-3 bg-white border border-gray-200 py-2.5 rounded-xl transition-all group" title="查看日志">
+                        <button @click="openConfig(app)"
+                            class="btn-apple flex-1 bg-white border border-gray-200 py-2.5 rounded-xl text-sm font-medium hover:bg-gray-50 transition-all">配置</button>
+                        <button @click="showLogModal(app)" :disabled="!app.logPath"
+                            :class="!app.logPath ? 'opacity-50 cursor-not-allowed' : 'hover:bg-gray-50'"
+                            class="btn-apple px-3 bg-white border border-gray-200 py-2.5 rounded-xl transition-all group"
+                            title="查看日志">
                             <i data-lucide="file-text" class="w-4 h-4 text-gray-600"></i>
                         </button>
                         <div class="relative">
-                            <button @click.stop="activeCmdMenu = activeCmdMenu === app.id ? null : app.id" class="btn-apple px-3 bg-white border border-gray-200 py-2.5 rounded-xl hover:bg-gray-50 transition-all group" title="自定义命令">
+                            <button @click.stop="activeCmdMenu = activeCmdMenu === app.id ? null : app.id"
+                                class="btn-apple px-3 bg-white border border-gray-200 py-2.5 rounded-xl hover:bg-gray-50 transition-all group"
+                                title="自定义命令">
                                 <i data-lucide="terminal-square" class="w-4 h-4 text-gray-600"></i>
                             </button>
-                            <div v-if="activeCmdMenu === app.id" class="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-36 bg-white/90 backdrop-blur-md border border-gray-200 rounded-xl shadow-xl z-10 py-1 overflow-hidden">
-                                <div v-if="!app.customCommands || app.customCommands.length === 0" class="px-3 py-2 text-xs text-gray-400 text-center">暂无命令</div>
-                                <button v-for="cmd in app.customCommands" :key="cmd.name" @click.stop="runCustomCommand(app, cmd); activeCmdMenu = null" class="w-full text-left px-3 py-2 text-xs text-gray-700 hover:bg-blue-50 hover:text-blue-600 transition-colors">
+                            <div v-if="activeCmdMenu === app.id"
+                                class="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-36 bg-white/90 backdrop-blur-md border border-gray-200 rounded-xl shadow-xl z-10 py-1 overflow-hidden">
+                                <div v-if="!app.customCommands || app.customCommands.length === 0"
+                                    class="px-3 py-2 text-xs text-gray-400 text-center">暂无命令</div>
+                                <button v-for="cmd in app.customCommands" :key="cmd.name"
+                                    @click.stop="runCustomCommand(app, cmd); activeCmdMenu = null"
+                                    class="w-full text-left px-3 py-2 text-xs text-gray-700 hover:bg-blue-50 hover:text-blue-600 transition-colors">
                                     {{ cmd.name }}
                                 </button>
                             </div>
                         </div>
-                        <button @click="updateAppConfigFromCloud(app)" class="btn-apple px-3 bg-white border border-blue-100 py-2.5 rounded-xl hover:bg-blue-50 hover:border-blue-200 transition-all group" title="同步最新云端配置">
+                        <button @click="updateAppConfigFromCloud(app)"
+                            class="btn-apple px-3 bg-white border border-blue-100 py-2.5 rounded-xl hover:bg-blue-50 hover:border-blue-200 transition-all group"
+                            title="同步最新云端配置">
                             <i data-lucide="cloud-download" class="w-4 h-4 text-blue-400 group-hover:text-blue-600"></i>
                         </button>
-                        <button @click="deleteApp(app)" class="btn-apple px-3 bg-white border border-red-100 py-2.5 rounded-xl hover:bg-red-50 hover:border-red-200 transition-all group" title="移除应用">
+                        <button @click="deleteApp(app)"
+                            class="btn-apple px-3 bg-white border border-red-100 py-2.5 rounded-xl hover:bg-red-50 hover:border-red-200 transition-all group"
+                            title="移除应用">
                             <i data-lucide="trash-2" class="w-4 h-4 text-red-400 group-hover:text-red-600"></i>
                         </button>
                     </div>
                 </div>
 
-                <div @click="openAddModal" class="glass rounded-[2rem] p-6 flex flex-col items-center justify-center cursor-pointer border-2 border-dashed border-gray-300 hover:border-blue-500 hover:bg-white/50 transition-all min-h-[280px] group">
-                    <div class="w-16 h-16 bg-gray-100 rounded-full flex items-center justify-center text-gray-400 group-hover:text-blue-500 group-hover:bg-blue-50 transition-all mb-4">
+                <div @click="openAddModal"
+                    class="glass rounded-[2rem] p-6 flex flex-col items-center justify-center cursor-pointer border-2 border-dashed border-gray-300 hover:border-blue-500 hover:bg-white/50 transition-all min-h-[280px] group">
+                    <div
+                        class="w-16 h-16 bg-gray-100 rounded-full flex items-center justify-center text-gray-400 group-hover:text-blue-500 group-hover:bg-blue-50 transition-all mb-4">
                         <i data-lucide="plus" class="w-8 h-8"></i>
                     </div>
                     <h3 class="text-lg font-medium text-gray-500 group-hover:text-blue-600">添加新应用</h3>
@@ -175,7 +214,9 @@
                 <div class="flex items-center justify-between mb-6">
                     <div class="flex items-center space-x-3">
                         <h3 class="text-2xl font-semibold">系统定时任务 (Crontab)</h3>
-                        <button @click="showCronModal(null)" class="w-7 h-7 bg-blue-50 text-blue-600 rounded-full flex items-center justify-center hover:bg-blue-100 transition-colors shadow-sm" title="添加自定义定时任务">
+                        <button @click="showCronModal(null)"
+                            class="w-7 h-7 bg-blue-50 text-blue-600 rounded-full flex items-center justify-center hover:bg-blue-100 transition-colors shadow-sm"
+                            title="添加自定义定时任务">
                             <i data-lucide="plus" class="w-4 h-4"></i>
                         </button>
                     </div>
@@ -191,11 +232,14 @@
                             </tr>
                         </thead>
                         <tbody class="divide-y divide-gray-100">
-                            <tr v-if="cronJobs.length === 0"><td colspan="3" class="px-6 py-8 text-center text-gray-400 text-sm">暂无任务</td></tr>
+                            <tr v-if="cronJobs.length === 0">
+                                <td colspan="3" class="px-6 py-8 text-center text-gray-400 text-sm">暂无任务</td>
+                            </tr>
                             <tr v-for="job in cronJobs" :key="job.id" class="text-sm hover:bg-white/40">
                                 <td class="px-6 py-4"><code>{{ job.schedule }}</code></td>
                                 <td class="px-6 py-4 font-mono text-xs">{{ job.command }}</td>
-                                <td class="px-6 py-4 text-right"><button @click="deleteCron(job.id)" class="text-red-500 font-medium hover:underline">删除</button></td>
+                                <td class="px-6 py-4 text-right"><button @click="deleteCron(job.id)"
+                                        class="text-red-500 font-medium hover:underline">删除</button></td>
                             </tr>
                         </tbody>
                     </table>
@@ -205,35 +249,44 @@
 
         <footer class="absolute bottom-6 w-full flex justify-center items-center text-xs text-gray-400 space-x-4">
             <span>@fw867</span>
-            <a href="https://github.com/fw867/unifi-softcenterstore" target="_blank" class="hover:text-blue-500 transition-colors flex items-center">
+            <a href="https://github.com/fw867/unifi-softcenterstore" target="_blank"
+                class="hover:text-blue-500 transition-colors flex items-center">
                 <i data-lucide="github" class="w-3.5 h-3.5 mr-1"></i> GitHub
             </a>
         </footer>
 
-        <div v-if="showSettingsModal" class="fixed inset-0 z-[100] flex items-center justify-center p-6 bg-black/20 backdrop-blur-sm">
+        <div v-if="showSettingsModal"
+            class="fixed inset-0 z-[100] flex items-center justify-center p-6 bg-black/20 backdrop-blur-sm">
             <div class="glass w-full max-w-lg rounded-[2.5rem] p-8 shadow-2xl">
                 <div class="flex items-center space-x-3 mb-6">
-                    <div class="w-10 h-10 bg-gray-100 rounded-xl flex items-center justify-center"><i data-lucide="settings" class="w-5 h-5 text-gray-600"></i></div>
+                    <div class="w-10 h-10 bg-gray-100 rounded-xl flex items-center justify-center"><i
+                            data-lucide="settings" class="w-5 h-5 text-gray-600"></i></div>
                     <h3 class="text-2xl font-semibold">全局系统设置</h3>
                 </div>
                 <p class="text-sm text-gray-500 mb-6 border-b pb-4">修改设置后将自动重启底层服务并刷新页面，请确保输入的端口未被占用。</p>
                 <div class="space-y-5 mb-8 text-sm">
                     <div>
                         <label class="block text-gray-500 mb-2 ml-1 font-medium">面板访问端口</label>
-                        <input type="number" v-model="sysConfigForm.port" class="w-full bg-white/60 border border-gray-200 rounded-xl px-4 py-3 focus:ring-2 focus:ring-blue-500 outline-none transition-all shadow-sm">
+                        <input type="number" v-model="sysConfigForm.port"
+                            class="w-full bg-white/60 border border-gray-200 rounded-xl px-4 py-3 focus:ring-2 focus:ring-blue-500 outline-none transition-all shadow-sm">
                     </div>
                     <div>
                         <label class="block text-gray-500 mb-2 ml-1 font-medium">安全令牌 (Token)</label>
-                        <input type="text" v-model="sysConfigForm.adminToken" class="w-full bg-white/60 border border-gray-200 rounded-xl px-4 py-3 focus:ring-2 focus:ring-blue-500 outline-none transition-all shadow-sm">
+                        <input type="text" v-model="sysConfigForm.adminToken"
+                            class="w-full bg-white/60 border border-gray-200 rounded-xl px-4 py-3 focus:ring-2 focus:ring-blue-500 outline-none transition-all shadow-sm">
                     </div>
                     <div>
                         <label class="block text-gray-500 mb-2 ml-1 font-medium">全局更新代理 (V2Ray 等)</label>
-                        <input type="text" v-model="sysConfigForm.localProxy" placeholder="如: http://127.0.0.1:10809 (留空为直连)" class="w-full bg-white/60 border border-gray-200 rounded-xl px-4 py-3 focus:ring-2 focus:ring-blue-500 outline-none transition-all shadow-sm font-mono text-xs">
+                        <input type="text" v-model="sysConfigForm.localProxy"
+                            placeholder="如: http://127.0.0.1:10809 (留空为直连)"
+                            class="w-full bg-white/60 border border-gray-200 rounded-xl px-4 py-3 focus:ring-2 focus:ring-blue-500 outline-none transition-all shadow-sm font-mono text-xs">
                     </div>
                 </div>
                 <div class="flex space-x-3">
-                    <button @click="showSettingsModal = false" class="btn-apple flex-1 py-3 text-gray-500 font-medium border rounded-2xl hover:bg-gray-50">取消</button>
-                    <button @click="saveSettings" class="btn-apple flex-1 bg-black text-white py-3 rounded-2xl font-medium shadow-lg hover:bg-gray-800 flex justify-center items-center">
+                    <button @click="showSettingsModal = false"
+                        class="btn-apple flex-1 py-3 text-gray-500 font-medium border rounded-2xl hover:bg-gray-50">取消</button>
+                    <button @click="saveSettings"
+                        class="btn-apple flex-1 bg-black text-white py-3 rounded-2xl font-medium shadow-lg hover:bg-gray-800 flex justify-center items-center">
                         <i v-if="isSavingSettings" data-lucide="loader-2" class="w-4 h-4 mr-2 animate-spin"></i>
                         <span>保存并重启系统</span>
                     </button>
@@ -241,134 +294,193 @@
             </div>
         </div>
 
-        <div v-if="showAddModal" class="fixed inset-0 z-[100] flex items-center justify-center p-6 bg-black/20 backdrop-blur-sm">
+        <div v-if="showAddModal"
+            class="fixed inset-0 z-[100] flex items-center justify-center p-6 bg-black/20 backdrop-blur-sm">
             <div class="glass w-full max-w-2xl rounded-[2.5rem] p-8 shadow-2xl flex flex-col max-h-[90vh]">
                 <div class="flex justify-between items-center mb-6">
                     <h3 class="text-2xl font-semibold">应用库</h3>
                     <div class="flex space-x-2 bg-gray-100 p-1 rounded-xl">
-                        <button @click="addTab = 'online'" :class="addTab === 'online' ? 'bg-white shadow-sm' : 'text-gray-500'" class="px-4 py-1.5 rounded-lg text-sm font-medium transition-all">在线拉取</button>
-                        <button @click="addTab = 'local'" :class="addTab === 'local' ? 'bg-white shadow-sm' : 'text-gray-500'" class="px-4 py-1.5 rounded-lg text-sm font-medium transition-all">手动配置</button>
+                        <button @click="addTab = 'online'"
+                            :class="addTab === 'online' ? 'bg-white shadow-sm' : 'text-gray-500'"
+                            class="px-4 py-1.5 rounded-lg text-sm font-medium transition-all">在线拉取</button>
+                        <button @click="addTab = 'local'"
+                            :class="addTab === 'local' ? 'bg-white shadow-sm' : 'text-gray-500'"
+                            class="px-4 py-1.5 rounded-lg text-sm font-medium transition-all">手动配置</button>
                     </div>
                 </div>
 
                 <div class="overflow-y-auto flex-1 pr-2">
                     <div v-if="addTab === 'online'" class="space-y-4">
                         <div v-if="isFetchingStore" class="text-center py-8 text-gray-500">同步中...</div>
-                        <div v-for="pkg in onlineStore" :key="pkg.id || pkg.Id" class="flex items-center justify-between p-4 bg-white/60 rounded-2xl border border-gray-100">
+                        <div v-for="pkg in onlineStore" :key="pkg.id || pkg.Id"
+                            class="flex items-center justify-between p-4 bg-white/60 rounded-2xl border border-gray-100">
                             <div class="flex items-start space-x-4">
-                                <div class="w-12 h-12 bg-blue-100 text-blue-600 rounded-xl flex items-center justify-center shrink-0 mt-0.5"><i :data-lucide="pkg.icon || pkg.Icon" class="w-6 h-6"></i></div>
+                                <div
+                                    class="w-12 h-12 bg-blue-100 text-blue-600 rounded-xl flex items-center justify-center shrink-0 mt-0.5">
+                                    <i :data-lucide="pkg.icon || pkg.Icon" class="w-6 h-6"></i>
+                                </div>
                                 <div>
                                     <div class="flex items-center space-x-2">
                                         <h4 class="font-semibold text-gray-800">{{ pkg.name || pkg.Name }}</h4>
-                                        <span class="text-[10px] bg-gray-200 text-gray-600 px-1.5 py-0.5 rounded-md font-mono">v{{ pkg.version || pkg.Version || '1.0.0' }}</span>
+                                        <span
+                                            class="text-[10px] bg-gray-200 text-gray-600 px-1.5 py-0.5 rounded-md font-mono">v{{
+                                            pkg.version || pkg.Version || '1.0.0' }}</span>
                                     </div>
-                                    <p class="text-xs text-gray-500 mt-1.5 line-clamp-2 leading-relaxed">{{ pkg.description || pkg.Description || '暂无应用简介' }}</p>
+                                    <p class="text-xs text-gray-500 mt-1.5 line-clamp-2 leading-relaxed">{{
+                                        pkg.description || pkg.Description || '暂无应用简介' }}</p>
                                 </div>
                             </div>
                             <div class="shrink-0 ml-4">
                                 <template v-if="getLocalApp(pkg.id || pkg.Id)">
-                                    <button v-if="isNewerVersion(getLocalApp(pkg.id || pkg.Id).version, pkg.version || pkg.Version)" @click="installApp(pkg)" class="btn-apple bg-blue-600 text-white px-5 py-2 rounded-xl text-sm font-medium shadow-sm hover:bg-blue-700">升级</button>
-                                    <button v-else disabled class="bg-gray-100 text-gray-400 px-5 py-2 rounded-xl text-sm font-medium cursor-not-allowed border border-gray-200">已安装</button>
+                                    <button
+                                        v-if="isNewerVersion(getLocalApp(pkg.id || pkg.Id).version, pkg.version || pkg.Version)"
+                                        @click="installApp(pkg)"
+                                        class="btn-apple bg-blue-600 text-white px-5 py-2 rounded-xl text-sm font-medium shadow-sm hover:bg-blue-700">升级</button>
+                                    <button v-else disabled
+                                        class="bg-gray-100 text-gray-400 px-5 py-2 rounded-xl text-sm font-medium cursor-not-allowed border border-gray-200">已安装</button>
                                 </template>
-                                <button v-else @click="installApp(pkg)" class="btn-apple bg-black text-white px-5 py-2 rounded-xl text-sm font-medium shadow-sm hover:bg-gray-800">安装</button>
+                                <button v-else @click="installApp(pkg)"
+                                    class="btn-apple bg-black text-white px-5 py-2 rounded-xl text-sm font-medium shadow-sm hover:bg-gray-800">安装</button>
                             </div>
                         </div>
                     </div>
 
                     <div v-if="addTab === 'local'" class="space-y-4 text-sm mt-4">
                         <div class="grid grid-cols-2 gap-4">
-                            <input v-model="newApp.Id" placeholder="应用 ID" class="w-full bg-gray-100 rounded-xl px-4 py-2.5 outline-none">
-                            <input v-model="newApp.Name" placeholder="显示名称" class="w-full bg-gray-100 rounded-xl px-4 py-2.5 outline-none">
-                            <input v-model="newApp.Version" placeholder="版本号 (如 1.0.0)" class="w-full bg-gray-100 rounded-xl px-4 py-2.5 outline-none font-mono text-xs">
-                            <input v-model="newApp.Icon" placeholder="图标 (Lucide)" class="w-full bg-gray-100 rounded-xl px-4 py-2.5 outline-none font-mono text-xs">
+                            <input v-model="newApp.Id" placeholder="应用 ID"
+                                class="w-full bg-gray-100 rounded-xl px-4 py-2.5 outline-none">
+                            <input v-model="newApp.Name" placeholder="显示名称"
+                                class="w-full bg-gray-100 rounded-xl px-4 py-2.5 outline-none">
+                            <input v-model="newApp.Version" placeholder="版本号 (如 1.0.0)"
+                                class="w-full bg-gray-100 rounded-xl px-4 py-2.5 outline-none font-mono text-xs">
+                            <input v-model="newApp.Icon" placeholder="图标 (Lucide)"
+                                class="w-full bg-gray-100 rounded-xl px-4 py-2.5 outline-none font-mono text-xs">
                         </div>
-                        <input v-model="newApp.Description" placeholder="应用简介" class="w-full bg-gray-100 rounded-xl px-4 py-2.5 outline-none">
+                        <input v-model="newApp.Description" placeholder="应用简介"
+                            class="w-full bg-gray-100 rounded-xl px-4 py-2.5 outline-none">
                         <div class="grid grid-cols-2 gap-4">
-                            <input v-model="newApp.ConfigPath" placeholder="参数文件路径" class="w-full bg-gray-100 rounded-xl px-4 py-2.5 outline-none">
-                            <input v-model="newApp.ConfigKeys" placeholder="变量名 (逗号分隔)" class="w-full bg-gray-100 rounded-xl px-4 py-2.5 outline-none font-mono text-xs">
+                            <input v-model="newApp.ConfigPath" placeholder="参数文件路径"
+                                class="w-full bg-gray-100 rounded-xl px-4 py-2.5 outline-none">
+                            <input v-model="newApp.ConfigKeys" placeholder="变量名 (逗号分隔)"
+                                class="w-full bg-gray-100 rounded-xl px-4 py-2.5 outline-none font-mono text-xs">
                         </div>
                         <div class="grid grid-cols-2 gap-4">
-                            <input v-model="newApp.LogPath" placeholder="日志路径" class="w-full bg-gray-100 rounded-xl px-4 py-2.5 outline-none font-mono text-xs">
-                            <input v-model="newApp.StatusCommand" placeholder="状态探针命令" class="w-full bg-gray-100 rounded-xl px-4 py-2.5 outline-none font-mono text-xs">
+                            <input v-model="newApp.LogPath" placeholder="日志路径"
+                                class="w-full bg-gray-100 rounded-xl px-4 py-2.5 outline-none font-mono text-xs">
+                            <input v-model="newApp.StatusCommand" placeholder="状态探针命令"
+                                class="w-full bg-gray-100 rounded-xl px-4 py-2.5 outline-none font-mono text-xs">
                         </div>
-                        <input v-model="newApp.StartCommand" placeholder="启动命令" class="w-full bg-gray-100 rounded-xl px-4 py-2.5 outline-none font-mono text-xs">
-                        <input v-model="newApp.StopCommand" placeholder="停止命令" class="w-full bg-gray-100 rounded-xl px-4 py-2.5 outline-none font-mono text-xs">
-                        <input v-model="newApp.CustomCommands" placeholder="自定义命令 (JSON格式，如: [{&quot;name&quot;:&quot;测试&quot;,&quot;command&quot;:&quot;echo 1&quot;}])" class="w-full bg-gray-100 rounded-xl px-4 py-2.5 outline-none font-mono text-xs">
-                        <button @click="installApp(newApp)" class="btn-apple w-full bg-blue-600 text-white py-3 rounded-2xl font-medium">保存本地配置</button>
+                        <input v-model="newApp.StartCommand" placeholder="启动命令"
+                            class="w-full bg-gray-100 rounded-xl px-4 py-2.5 outline-none font-mono text-xs">
+                        <input v-model="newApp.StopCommand" placeholder="停止命令"
+                            class="w-full bg-gray-100 rounded-xl px-4 py-2.5 outline-none font-mono text-xs">
+                        <input v-model="newApp.CustomCommands"
+                            placeholder="自定义命令 (JSON格式，如: [{&quot;name&quot;:&quot;测试&quot;,&quot;command&quot;:&quot;echo 1&quot;}])"
+                            class="w-full bg-gray-100 rounded-xl px-4 py-2.5 outline-none font-mono text-xs">
+                        <button @click="installApp(newApp)"
+                            class="btn-apple w-full bg-blue-600 text-white py-3 rounded-2xl font-medium">保存本地配置</button>
                     </div>
                 </div>
-                <div class="flex space-x-3 mt-6"><button @click="showAddModal = false" class="btn-apple flex-1 py-3 font-medium border rounded-2xl hover:bg-white">取消</button></div>
+                <div class="flex space-x-3 mt-6"><button @click="showAddModal = false"
+                        class="btn-apple flex-1 py-3 font-medium border rounded-2xl hover:bg-white">取消</button></div>
             </div>
         </div>
 
-        <div v-if="logModalApp" class="fixed inset-0 z-[100] flex items-center justify-center p-6 bg-black/40 backdrop-blur-sm">
+        <div v-if="logModalApp"
+            class="fixed inset-0 z-[100] flex items-center justify-center p-6 bg-black/40 backdrop-blur-sm">
             <div class="w-full max-w-4xl bg-[#1e1e1e] rounded-[1.5rem] shadow-2xl flex flex-col h-[80vh]">
                 <div class="h-12 flex items-center justify-between px-4 bg-[#2d2d2d] rounded-t-[1.5rem]">
-                    <div class="flex space-x-2"><div @click="logModalApp = null" class="w-3 h-3 rounded-full bg-red-500 cursor-pointer"></div></div>
+                    <div class="flex space-x-2">
+                        <div @click="logModalApp = null" class="w-3 h-3 rounded-full bg-red-500 cursor-pointer"></div>
+                    </div>
                     <div class="text-gray-400 text-xs font-mono">{{ logModalApp.name }} 日志</div>
-                    <button @click="refreshLogs"><i data-lucide="refresh-cw" :class="{'animate-spin': isLoadingLogs}" class="w-4 h-4 text-white"></i></button>
+                    <button @click="refreshLogs"><i data-lucide="refresh-cw" :class="{'animate-spin': isLoadingLogs}"
+                            class="w-4 h-4 text-white"></i></button>
                 </div>
-                <div id="logContainer" class="flex-1 overflow-y-auto p-4 terminal-scroll bg-[#1e1e1e] rounded-b-[1.5rem]">
+                <div id="logContainer"
+                    class="flex-1 overflow-y-auto p-4 terminal-scroll bg-[#1e1e1e] rounded-b-[1.5rem]">
                     <pre class="text-[#00ff00] font-mono text-xs whitespace-pre-wrap break-all">{{ logContent }}</pre>
                 </div>
             </div>
         </div>
 
-        <div v-if="activeApp" class="fixed inset-0 z-[100] flex items-center justify-center p-6 bg-black/20 backdrop-blur-sm">
+        <div v-if="activeApp"
+            class="fixed inset-0 z-[100] flex items-center justify-center p-6 bg-black/20 backdrop-blur-sm">
             <div class="glass w-full max-w-lg rounded-[2.5rem] p-8 shadow-2xl">
                 <h3 class="text-2xl font-semibold mb-2">配置 {{ activeApp.name }}</h3>
-                <p v-if="activeApp.configPath" class="text-sm text-gray-500 mb-6 font-mono break-all text-xs">{{ activeApp.configPath }}</p>
+                <p v-if="activeApp.configPath" class="text-sm text-gray-500 mb-6 font-mono break-all text-xs">{{
+                    activeApp.configPath }}</p>
                 <div v-else class="mb-6"></div>
 
                 <div class="space-y-4 mb-8 text-sm max-h-[50vh] overflow-y-auto pr-2">
-                    <div class="flex justify-between items-center bg-white/60 p-4 rounded-xl border border-gray-200 shadow-sm mb-4">
+                    <div
+                        class="flex justify-between items-center bg-white/60 p-4 rounded-xl border border-gray-200 shadow-sm mb-4">
                         <span class="text-gray-700 font-medium">开机自启</span>
-                        <input type="checkbox" v-model="activeApp.autoStart" @change="saveAutoStart(activeApp)" class="accent-blue-600 w-5 h-5">
+                        <input type="checkbox" v-model="activeApp.autoStart" @change="saveAutoStart(activeApp)"
+                            class="accent-blue-600 w-5 h-5">
                     </div>
 
                     <template v-if="Object.keys(appConfig).length > 0">
                         <div v-for="(item, key) in appConfig" :key="key" class="mb-4">
                             <div class="flex flex-col mb-1.5">
-                                <label class="text-gray-400 ml-1 uppercase text-xs font-bold tracking-wider">{{ key.replace(/_/g, ' ') }}</label>
-                                <p v-if="item.comment" class="text-xs text-blue-500/80 ml-1 mt-0.5 font-medium leading-relaxed">{{ item.comment }}</p>
+                                <label class="text-gray-400 ml-1 uppercase text-xs font-bold tracking-wider">{{
+                                    key.replace(/_/g, ' ') }}</label>
+                                <p v-if="item.comment"
+                                    class="text-xs text-blue-500/80 ml-1 mt-0.5 font-medium leading-relaxed">{{
+                                    item.comment }}</p>
                             </div>
-                            <input v-model="item.value" class="w-full bg-white/60 border border-gray-200 rounded-xl px-4 py-3 focus:ring-2 focus:ring-blue-500 outline-none transition-all shadow-sm">
+                            <input v-model="item.value"
+                                class="w-full bg-white/60 border border-gray-200 rounded-xl px-4 py-3 focus:ring-2 focus:ring-blue-500 outline-none transition-all shadow-sm">
                         </div>
                     </template>
                     <div v-else-if="activeApp.configKeys" class="text-center text-gray-400 py-4 text-xs">正在加载配置...</div>
                 </div>
 
                 <div class="flex space-x-3">
-                    <button @click="activeApp = null" class="btn-apple flex-1 py-3 text-gray-500 font-medium border rounded-2xl hover:bg-gray-50">取消</button>
-                    <button @click="saveAppConfig" class="btn-apple flex-1 bg-black text-white py-3 rounded-2xl font-medium shadow-lg hover:bg-gray-800">{{ Object.keys(appConfig).length > 0 ? '保存并重启服务' : '完成' }}</button>
+                    <button @click="activeApp = null"
+                        class="btn-apple flex-1 py-3 text-gray-500 font-medium border rounded-2xl hover:bg-gray-50">取消</button>
+                    <button @click="saveAppConfig"
+                        class="btn-apple flex-1 bg-black text-white py-3 rounded-2xl font-medium shadow-lg hover:bg-gray-800">{{
+                        Object.keys(appConfig).length > 0 ? '保存并重启服务' : '完成' }}</button>
                 </div>
             </div>
         </div>
 
-        <div v-if="showCronModalVisible" @click.self="showCronModalVisible = false" class="fixed inset-0 z-[100] flex items-center justify-center p-6 bg-black/20 backdrop-blur-sm">
+        <div v-if="showCronModalVisible" @click.self="showCronModalVisible = false"
+            class="fixed inset-0 z-[100] flex items-center justify-center p-6 bg-black/20 backdrop-blur-sm">
             <div class="glass w-full max-w-lg rounded-[2.5rem] p-8 shadow-2xl">
-                <h3 class="text-2xl font-semibold mb-6">{{ cronModalApp ? `为 ${cronModalApp.name} 添加定时计划` : '添加自定义定时任务' }}</h3>
+                <h3 class="text-2xl font-semibold mb-6">{{ cronModalApp ? `为 ${cronModalApp.name} 添加定时计划` : '添加自定义定时任务'
+                    }}</h3>
                 <div class="space-y-4 mb-8 text-sm">
                     <div>
                         <label class="block text-gray-500 mb-2 ml-1">Cron 表达式 (如: 0 4 * * *)</label>
-                        <input v-model="newCronReq.schedule" placeholder="分 时 日 月 周" class="w-full bg-white/60 border border-gray-200 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-blue-500 transition-all shadow-sm">
+                        <input v-model="newCronReq.schedule" placeholder="分 时 日 月 周"
+                            class="w-full bg-white/60 border border-gray-200 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-blue-500 transition-all shadow-sm">
                     </div>
                     <div>
                         <label class="block text-gray-500 mb-2 ml-1">执行脚本</label>
-                        <input v-model="newCronReq.command" :readonly="!!cronModalApp" :class="cronModalApp ? 'bg-gray-100 text-gray-600 border-none' : 'bg-white/60 border border-gray-200 text-gray-800 focus:ring-2 focus:ring-blue-500'" placeholder="输入要执行的 Shell 命令或脚本路径" class="w-full rounded-xl px-4 py-3 outline-none font-mono text-xs transition-all shadow-sm">
+                        <input v-model="newCronReq.command" :readonly="!!cronModalApp"
+                            :class="cronModalApp ? 'bg-gray-100 text-gray-600 border-none' : 'bg-white/60 border border-gray-200 text-gray-800 focus:ring-2 focus:ring-blue-500'"
+                            placeholder="输入要执行的 Shell 命令或脚本路径"
+                            class="w-full rounded-xl px-4 py-3 outline-none font-mono text-xs transition-all shadow-sm">
                     </div>
                 </div>
                 <div class="flex space-x-3">
-                    <button @click="showCronModalVisible = false" class="btn-apple flex-1 py-3 text-gray-500 font-medium border rounded-2xl hover:bg-gray-50">取消</button>
-                    <button @click="submitCron" class="btn-apple flex-1 bg-blue-600 text-white py-3 rounded-2xl font-medium shadow-lg hover:bg-blue-700">添加至系统 Cron</button>
+                    <button @click="showCronModalVisible = false"
+                        class="btn-apple flex-1 py-3 text-gray-500 font-medium border rounded-2xl hover:bg-gray-50">取消</button>
+                    <button @click="submitCron"
+                        class="btn-apple flex-1 bg-blue-600 text-white py-3 rounded-2xl font-medium shadow-lg hover:bg-blue-700">添加至系统
+                        Cron</button>
                 </div>
             </div>
         </div>
 
-        <div v-if="isUpgrading" class="fixed inset-0 z-[200] flex flex-col items-center justify-center bg-black/80 backdrop-blur-md transition-all p-6">
+        <div v-if="isUpgrading"
+            class="fixed inset-0 z-[200] flex flex-col items-center justify-center bg-black/80 backdrop-blur-md transition-all p-6">
             <i data-lucide="loader-2" class="w-12 h-12 text-blue-500 animate-spin mb-4"></i>
             <h3 class="text-xl font-semibold mb-6 text-white">正在下载并部署系统...</h3>
-            <div class="w-full max-w-2xl bg-[#1e1e1e] rounded-[1rem] p-4 shadow-2xl border border-gray-700 h-64 overflow-y-auto terminal-scroll text-left">
+            <div
+                class="w-full max-w-2xl bg-[#1e1e1e] rounded-[1rem] p-4 shadow-2xl border border-gray-700 h-64 overflow-y-auto terminal-scroll text-left">
                 <pre class="text-[#00ff00] font-mono text-xs whitespace-pre-wrap">{{ upgradeLog }}</pre>
             </div>
             <p class="text-sm text-gray-400 font-mono mt-6">请勿刷新页面，系统恢复后将自动刷新</p>
@@ -732,16 +844,16 @@
                     logModalApp.value = { id: 'custom', name: `${app.name} - ${cmd.name}` };
                     logContent.value = '正在执行命令，请稍候...';
                     isLoadingLogs.value = true;
-                    
+
                     const data = await callApi(`/api/apps/${app.id}/custom_command`, 'POST', { command: cmd.command });
                     logContent.value = data?.Content || data?.content || '命令执行完成，无输出';
                     isLoadingLogs.value = false;
                     nextTick(() => { const c = document.getElementById('logContainer'); if (c) c.scrollTop = c.scrollHeight; });
                 };
 
-                const showCronModal = (app) => { 
-                    cronModalApp.value = app; 
-                    newCronReq.value = { schedule: '0 4 * * *', command: app ? (app.startCommand || app.StartCommand) : '' }; 
+                const showCronModal = (app) => {
+                    cronModalApp.value = app;
+                    newCronReq.value = { schedule: '0 4 * * *', command: app ? (app.startCommand || app.StartCommand) : '' };
                     showCronModalVisible.value = true;
                 };
                 const submitCron = async () => {
@@ -757,6 +869,10 @@
                     loadCronJobs();
                 };
 
+                const goToRouterAdmin = () => {
+                    window.open(`https://${window.location.hostname}`, '_blank');
+                };
+
                 onMounted(() => { if (token.value) handleTokenSubmit(); lucide.createIcons(); });
 
                 return {
@@ -764,10 +880,11 @@
                     newApp, logModalApp, logContent, isLoadingLogs, cronModalApp, newCronReq, hasUpdate, latestVersion, isUpgrading, upgradeLog, doUpgrade,
                     searchQuery, filteredApps, draggedIndex, getLocalApp, isNewerVersion, onDragStart, onDragEnd, onDrop, deleteApp, toggleApp, restartApp, saveAutoStart, openAddModal: () => { showAddModal.value = true; fetchOnlineStore(); },
                     installApp, updateAppConfigFromCloud, showSystemLogs, showLogModal, refreshLogs, runCustomCommand, loadCronJobs, openConfig, saveAppConfig, showCronModal, submitCron, deleteCron,
-                    showSettingsModal, sysConfigForm, isSavingSettings, openSettings, saveSettings, activeCmdMenu, showCronModalVisible
+                    showSettingsModal, sysConfigForm, isSavingSettings, openSettings, saveSettings, activeCmdMenu, showCronModalVisible, goToRouterAdmin
                 };
             }
         }).mount('#app');
     </script>
 </body>
+
 </html>
