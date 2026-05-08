@@ -47,51 +47,109 @@
             background: #444;
             border-radius: 8px;
         }
+        
+        /* 移动端响应式样式 */
+        @media (max-width: 768px) {
+            .safe-area {
+                padding-left: 12px;
+                padding-right: 12px;
+            }
+            
+            .glass {
+                background: rgba(255, 255, 255, 0.9);
+                backdrop-filter: saturate(180%) blur(10px);
+            }
+        }
     </style>
 </head>
 
 <body class="antialiased">
     <div id="app" @click="activeCmdMenu = null" class="min-h-screen pb-20 relative">
-        <nav class="sticky top-0 z-50 glass border-b border-gray-200 mb-8">
-            <div class="safe-area px-6 h-16 flex items-center justify-between">
-                <div class="flex items-center space-x-3">
-                    <div class="w-8 h-8 bg-black rounded-lg flex items-center justify-center text-white"><i
-                            data-lucide="shield-check" class="w-5 h-5"></i></div>
-                    <div class="flex flex-col">
-                        <span class="font-semibold text-lg tracking-tight leading-none">SoftCenter</span>
-                        <div class="flex items-center space-x-2 mt-1">
-                            <span class="text-[10px] text-gray-400 font-mono">Build {{ sysInfo.Version }}</span>
-                            <button v-if="hasUpdate" @click="doUpgrade"
-                                class="text-[10px] bg-blue-50 text-blue-600 px-2 py-0.5 rounded-full font-bold hover:bg-blue-100 transition-colors shadow-sm border border-blue-200">
-                                发现新版 {{ latestVersion }}
-                            </button>
+        <nav class="sticky top-0 z-50 glass border-b border-gray-200 mb-4 md:mb-8">
+            <div class="safe-area px-3 md:px-6 py-2 md:py-0 md:h-16">
+                <!-- 桌面端布局 -->
+                <div class="hidden md:flex items-center justify-between h-full">
+                    <div class="flex items-center space-x-3">
+                        <div class="w-8 h-8 bg-black rounded-lg flex items-center justify-center text-white"><i
+                                data-lucide="shield-check" class="w-5 h-5"></i></div>
+                        <div class="flex flex-col">
+                            <span class="font-semibold text-lg tracking-tight leading-none">SoftCenter</span>
+                            <div class="flex items-center space-x-2 mt-1">
+                                <span class="text-[10px] text-gray-400 font-mono">Build {{ sysInfo.Version }}</span>
+                                <button v-if="hasUpdate" @click="doUpgrade"
+                                    class="text-[10px] bg-blue-50 text-blue-600 px-2 py-0.5 rounded-full font-bold hover:bg-blue-100 transition-colors shadow-sm border border-blue-200">
+                                    发现新版 {{ latestVersion }}
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="flex items-center space-x-4">
+                        <button @click="goToRouterAdmin"
+                            class="btn-apple bg-white text-gray-700 px-3 py-1.5 rounded-lg text-xs font-medium flex items-center shadow-sm border border-gray-200 hover:bg-gray-50 transition-colors">
+                            <i data-lucide="router" class="w-4 h-4 mr-1.5 text-gray-500"></i> 路由后台
+                        </button>
+                        <button @click="openSettings"
+                            class="btn-apple bg-white text-gray-700 px-3 py-1.5 rounded-lg text-xs font-medium flex items-center shadow-sm border border-gray-200 hover:bg-gray-50 transition-colors">
+                            <i data-lucide="settings" class="w-4 h-4 mr-1.5 text-gray-500"></i> 系统设置
+                        </button>
+                        <button @click="showSystemLogs"
+                            class="btn-apple bg-black text-white px-3 py-1.5 rounded-lg text-xs font-medium flex items-center shadow-sm hover:bg-gray-800 transition-colors">
+                            <i data-lucide="terminal" class="w-4 h-4 mr-1.5"></i> 核心日志
+                        </button>
+                        <div class="flex items-center bg-gray-100 rounded-full px-3 py-1 border border-gray-200">
+                            <i data-lucide="key" class="w-4 h-4 text-gray-400 mr-2"></i>
+                            <input :type="tokenInputType" v-model="token" placeholder="输入访问令牌"
+                                @focus="tokenInputType = 'text'" @blur="handleTokenSubmit" @keyup.enter="handleTokenSubmit"
+                                class="bg-transparent border-none text-xs focus:outline-none w-32">
                         </div>
                     </div>
                 </div>
-                <div class="flex items-center space-x-4">
-                    <button @click="goToRouterAdmin"
-                        class="btn-apple bg-white text-gray-700 px-3 py-1.5 rounded-lg text-xs font-medium flex items-center shadow-sm border border-gray-200 hover:bg-gray-50 transition-colors">
-                        <i data-lucide="router" class="w-4 h-4 mr-1.5 text-gray-500"></i> 路由后台
-                    </button>
-                    <button @click="openSettings"
-                        class="btn-apple bg-white text-gray-700 px-3 py-1.5 rounded-lg text-xs font-medium flex items-center shadow-sm border border-gray-200 hover:bg-gray-50 transition-colors">
-                        <i data-lucide="settings" class="w-4 h-4 mr-1.5 text-gray-500"></i> 系统设置
-                    </button>
-                    <button @click="showSystemLogs"
-                        class="btn-apple bg-black text-white px-3 py-1.5 rounded-lg text-xs font-medium flex items-center shadow-sm hover:bg-gray-800 transition-colors">
-                        <i data-lucide="terminal" class="w-4 h-4 mr-1.5"></i> 核心日志
-                    </button>
-                    <div class="flex items-center bg-gray-100 rounded-full px-3 py-1 border border-gray-200">
-                        <i data-lucide="key" class="w-4 h-4 text-gray-400 mr-2"></i>
+                
+                <!-- 移动端布局 -->
+                <div class="md:hidden">
+                    <!-- 第一行：Logo和版本信息 -->
+                    <div class="flex items-center justify-between mb-2">
+                        <div class="flex items-center space-x-2">
+                            <div class="w-7 h-7 bg-black rounded-lg flex items-center justify-center text-white">
+                                <i data-lucide="shield-check" class="w-4 h-4"></i>
+                            </div>
+                            <span class="font-semibold text-base tracking-tight leading-none">SoftCenter</span>
+                            <span class="text-[10px] text-gray-400 font-mono">v{{ sysInfo.Version }}</span>
+                        </div>
+                        <button v-if="hasUpdate" @click="doUpgrade"
+                            class="text-[10px] bg-blue-50 text-blue-600 px-2 py-0.5 rounded-full font-bold hover:bg-blue-100 transition-colors shadow-sm border border-blue-200">
+                            发现新版
+                        </button>
+                    </div>
+                    
+                    <!-- 第二行：按钮组 -->
+                    <div class="flex items-center space-x-2 overflow-x-auto pb-2">
+                        <button @click="goToRouterAdmin"
+                            class="btn-apple bg-white text-gray-700 px-3 py-1.5 rounded-lg text-xs font-medium flex items-center shadow-sm border border-gray-200 hover:bg-gray-50 transition-colors whitespace-nowrap shrink-0">
+                            <i data-lucide="router" class="w-3.5 h-3.5 mr-1 text-gray-500"></i> 路由后台
+                        </button>
+                        <button @click="openSettings"
+                            class="btn-apple bg-white text-gray-700 px-3 py-1.5 rounded-lg text-xs font-medium flex items-center shadow-sm border border-gray-200 hover:bg-gray-50 transition-colors whitespace-nowrap shrink-0">
+                            <i data-lucide="settings" class="w-3.5 h-3.5 mr-1 text-gray-500"></i> 系统设置
+                        </button>
+                        <button @click="showSystemLogs"
+                            class="btn-apple bg-black text-white px-3 py-1.5 rounded-lg text-xs font-medium flex items-center shadow-sm hover:bg-gray-800 transition-colors whitespace-nowrap shrink-0">
+                            <i data-lucide="terminal" class="w-3.5 h-3.5 mr-1"></i> 核心日志
+                        </button>
+                    </div>
+                    
+                    <!-- 第三行：令牌输入 -->
+                    <div class="flex items-center bg-gray-100 rounded-full px-3 py-1.5 border border-gray-200 mt-1">
+                        <i data-lucide="key" class="w-3.5 h-3.5 text-gray-400 mr-2"></i>
                         <input :type="tokenInputType" v-model="token" placeholder="输入访问令牌"
                             @focus="tokenInputType = 'text'" @blur="handleTokenSubmit" @keyup.enter="handleTokenSubmit"
-                            class="bg-transparent border-none text-xs focus:outline-none w-32">
+                            class="bg-transparent border-none text-xs focus:outline-none w-full">
                     </div>
                 </div>
             </div>
         </nav>
 
-        <main class="safe-area px-6">
+        <main class="safe-area px-4 md:px-6">
             <div class="flex flex-col md:flex-row md:items-center justify-between mb-8">
                 <div>
                     <h2 class="text-3xl font-semibold mb-2">欢迎回来</h2>
