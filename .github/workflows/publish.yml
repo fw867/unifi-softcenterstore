@@ -19,8 +19,11 @@ jobs:
     steps:
     - name: Prepare Container Environment
       env:
-        DEBIAN_FRONTEND: noninteractive 
+        DEBIAN_FRONTEND: noninteractive
       run: |
+        # debian:11 security 源的 Valid-Until 过期会导致 apt update 失败
+        rm -rf /var/lib/apt/lists/*
+        printf 'Acquire::Check-Valid-Until "false";\nAcquire::Retries "3";\n' > /etc/apt/apt.conf.d/99ci-apt
         dpkg --add-architecture arm64
         apt-get update
         apt-get install -y git curl zip unzip clang gcc gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu zlib1g-dev:arm64 ca-certificates libicu-dev
