@@ -3,16 +3,83 @@
         "Id": "tomodem",
         "Name": "光猫助手",
         "Type": "Shell Script",
-        "Version": "1.0.0",
+        "Version": "1.1.0",
         "Description": "配置路由和光猫IP，完美解决内网和光猫互通问题。",
         "Icon": "router",
         "StartCommand": "/data/bin/tomodem start",
         "StopCommand": "/data/bin/tomodem stop",
         "StatusCommand": "iptables -L FORWARD | grep -c \"softcenter:tomodem\" > /dev/null",
         "IsAutoStart": 1,
-        "ConfigPath": "/data/bin/tomodem",
-        "ConfigKeys": "tomodem_ip,tomodem_eth,ethip1,ethip2",
-        "LogPath": "/var/log/tomodem.log"
+        "ConfigPath": "/data/apps/tomodem/config.env",
+        "ConfigKeys": "",
+        "LogPath": "/var/log/tomodem.log",
+        "ConfigSchema": {
+            "Sections": [
+                {
+                    "Title": "网络基础",
+                    "Fields": [
+                        {
+                            "Key": "tomodem_ip",
+                            "Label": "光猫管理 IP",
+                            "Type": "ip",
+                            "Default": "192.168.1.1",
+                            "Placeholder": "192.168.1.1",
+                            "Required": true,
+                            "Help": "光猫后台地址，通常为 192.168.1.1"
+                        },
+                        {
+                            "Key": "tomodem_eth",
+                            "Label": "内网网口",
+                            "Type": "select",
+                            "Default": "eth0",
+                            "Options": [
+                                { "Label": "LAN1 (eth0)", "Value": "eth0" },
+                                { "Label": "LAN2 (eth1)", "Value": "eth1" },
+                                { "Label": "SFP+ (eth2)", "Value": "eth2" }
+                            ],
+                            "Help": "连接光猫或内网交换的网口"
+                        },
+                        {
+                            "Key": "ethip1",
+                            "Label": "路由侧地址段",
+                            "Type": "text",
+                            "Default": "192.168.1.2",
+                            "Placeholder": "192.168.1.2",
+                            "Help": "路由在光猫网段的临时地址"
+                        },
+                        {
+                            "Key": "ethip2",
+                            "Label": "放行目标地址",
+                            "Type": "text",
+                            "Default": "192.168.1.1",
+                            "Placeholder": "192.168.1.1",
+                            "Help": "需要互通的光猫 IP"
+                        }
+                    ]
+                },
+                {
+                    "Title": "行为选项",
+                    "Fields": [
+                        {
+                            "Key": "auto_fix",
+                            "Label": "拨号后自动放行",
+                            "Type": "switch",
+                            "Default": "1",
+                            "Help": "WAN 重拨后自动重新写入 iptables 规则"
+                        },
+                        {
+                            "Key": "retry_count",
+                            "Label": "重试次数",
+                            "Type": "number",
+                            "Default": "3",
+                            "Min": 1,
+                            "Max": 10,
+                            "Help": "探测失败时的最大重试次数"
+                        }
+                    ]
+                }
+            ]
+        }
     },
     {
         "Id": "koolss",
@@ -25,25 +92,163 @@
         "StopCommand": "systemctl stop koolss",
         "StatusCommand": "systemctl is-active --quiet koolss",
         "IsAutoStart": 1,
-        "ConfigPath": "/data/bin/koolss",
-        "ConfigKeys": "V2RAY_CONFIG_FILE,ISP_DNS1,ISP_DNS2,v2ray_bypass,v2ray_acl_default_mode,v2ray_basic_dns_chromecast,v2ray_quic_reject,v2ray_udp,v2ray_udp_list",
+        "ConfigPath": "/data/apps/koolss/config.env",
+        "ConfigKeys": "",
         "LogPath": "/var/log/koolss.log",
-        "CustomCommands": "[{\"name\":\"升级xray\",\"command\":\"/data/bin/ssup\"},{\"name\":\"更新规则\",\"command\":\"/data/bin/ssrule\"}]"
+        "CustomCommands": "[{\"name\":\"升级xray\",\"command\":\"/data/bin/ssup\"},{\"name\":\"更新规则\",\"command\":\"/data/bin/ssrule\"}]",
+        "ConfigSchema": {
+            "Sections": [
+                {
+                    "Title": "核心配置",
+                    "Fields": [
+                        {
+                            "Key": "V2RAY_CONFIG_FILE",
+                            "Label": "配置文件路径",
+                            "Type": "path",
+                            "Default": "/data/koolss/config.json",
+                            "Monospace": true,
+                            "Help": "V2Ray / Xray 主配置文件"
+                        },
+                        {
+                            "Key": "v2ray_udp",
+                            "Label": "启用 UDP 转发",
+                            "Type": "switch",
+                            "Default": "1"
+                        },
+                        {
+                            "Key": "v2ray_udp_list",
+                            "Label": "UDP 端口列表",
+                            "Type": "text",
+                            "Default": "",
+                            "Placeholder": "如 1:65535 或留空",
+                            "VisibleWhen": "v2ray_udp=1",
+                            "Help": "需要转发的 UDP 端口范围"
+                        }
+                    ]
+                },
+                {
+                    "Title": "DNS",
+                    "Fields": [
+                        {
+                            "Key": "ISP_DNS1",
+                            "Label": "运营商 DNS 1",
+                            "Type": "ip",
+                            "Default": "223.5.5.5"
+                        },
+                        {
+                            "Key": "ISP_DNS2",
+                            "Label": "运营商 DNS 2",
+                            "Type": "ip",
+                            "Default": "119.29.29.29"
+                        },
+                        {
+                            "Key": "v2ray_basic_dns_chromecast",
+                            "Label": "Chromecast DNS 分流",
+                            "Type": "switch",
+                            "Default": "0"
+                        }
+                    ]
+                },
+                {
+                    "Title": "分流模式",
+                    "Fields": [
+                        {
+                            "Key": "v2ray_acl_default_mode",
+                            "Label": "默认代理模式",
+                            "Type": "select",
+                            "Default": "gfw",
+                            "Options": [
+                                { "Label": "GFW 名单", "Value": "gfw" },
+                                { "Label": "大陆白名单", "Value": "chn" },
+                                { "Label": "全局代理", "Value": "global" },
+                                { "Label": "不代理", "Value": "direct" }
+                            ]
+                        },
+                        {
+                            "Key": "v2ray_bypass",
+                            "Label": "直连域名/IP",
+                            "Type": "textarea",
+                            "Default": "",
+                            "Rows": 4,
+                            "Monospace": true,
+                            "Placeholder": "每行一条，支持域名或 CIDR"
+                        },
+                        {
+                            "Key": "v2ray_quic_reject",
+                            "Label": "拦截 QUIC",
+                            "Type": "switch",
+                            "Default": "0"
+                        }
+                    ]
+                }
+            ]
+        }
     },
     {
         "Id": "wechat",
         "Name": "微信通知",
         "Type": "Shell Script",
-        "Version": "1.0.0",
+        "Version": "1.1.0",
         "Description": "路由重新拨号后通过企业微信通知新IP。",
         "Icon": "message-circle",
         "StartCommand": "/data/bin/wechat start",
         "StopCommand": "/data/bin/wechat stop",
         "StatusCommand": "[ -f \"/etc/ppp/ip-up.d/wechat\" ]",
         "IsAutoStart": 1,
-        "ConfigPath": "/data/bin/wechat",
-        "ConfigKeys": "wan_interface_name",
-        "LogPath": "/var/log/wechat.log"
+        "ConfigPath": "/data/apps/wechat/config.env",
+        "ConfigKeys": "",
+        "LogPath": "/var/log/wechat.log",
+        "ConfigSchema": {
+            "Sections": [
+                {
+                    "Title": "通知渠道",
+                    "Fields": [
+                        {
+                            "Key": "wan_interface_name",
+                            "Label": "WAN 接口",
+                            "Type": "select",
+                            "Default": "eth0",
+                            "Options": [
+                                { "Label": "eth0", "Value": "eth0" },
+                                { "Label": "eth1", "Value": "eth1" },
+                                { "Label": "ppp0", "Value": "ppp0" }
+                            ]
+                        },
+                        {
+                            "Key": "corpid",
+                            "Label": "企业 ID",
+                            "Type": "text",
+                            "Default": "",
+                            "Required": true,
+                            "Placeholder": "ww 开头的企业微信 ID"
+                        },
+                        {
+                            "Key": "corpsecret",
+                            "Label": "应用 Secret",
+                            "Type": "password",
+                            "Default": "",
+                            "Required": true,
+                            "Secret": true,
+                            "Help": "保存后写入 config.env，请勿泄露"
+                        },
+                        {
+                            "Key": "agentid",
+                            "Label": "AgentId",
+                            "Type": "number",
+                            "Default": "1000001",
+                            "Min": 1
+                        },
+                        {
+                            "Key": "touser",
+                            "Label": "接收人",
+                            "Type": "text",
+                            "Default": "@all",
+                            "Help": "@all 或成员 userid，多个用 | 分隔"
+                        }
+                    ]
+                }
+            ]
+        }
     },
     {
         "Id": "ddnso",
@@ -56,8 +261,40 @@
         "StopCommand": "systemctl stop ddnsto",
         "StatusCommand": "systemctl is-active --quiet ddnsto",
         "IsAutoStart": 1,
-        "ConfigPath": "/etc/systemd/system/ddnsto.service",
-        "ConfigKeys": "ExecStart",
-        "LogPath": "/var/log/ddnsto.log"
+        "ConfigPath": "/data/apps/ddnsto/config.env",
+        "ConfigKeys": "",
+        "LogPath": "/var/log/ddnsto.log",
+        "ConfigSchema": {
+            "Sections": [
+                {
+                    "Title": "穿透参数",
+                    "Fields": [
+                        {
+                            "Key": "DDNSTO_TOKEN",
+                            "Label": "DDNSTO Token",
+                            "Type": "password",
+                            "Default": "",
+                            "Required": true,
+                            "Secret": true,
+                            "Help": "来自 DDNSTO 控制台的设备 Token"
+                        },
+                        {
+                            "Key": "DDNSTO_SERVER",
+                            "Label": "服务端地址",
+                            "Type": "text",
+                            "Default": "https://www.ddnsto.com",
+                            "Monospace": true
+                        },
+                        {
+                            "Key": "DDNSTO_WORKDIR",
+                            "Label": "工作目录",
+                            "Type": "path",
+                            "Default": "/data/ddnsto",
+                            "Monospace": true
+                        }
+                    ]
+                }
+            ]
+        }
     }
 ]

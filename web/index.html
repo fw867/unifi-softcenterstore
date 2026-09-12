@@ -417,11 +417,14 @@
                         <input v-model="newApp.Description" placeholder="应用简介"
                             class="w-full bg-gray-100 rounded-xl px-4 py-2.5 outline-none">
                         <div class="grid grid-cols-2 gap-4">
-                            <input v-model="newApp.ConfigPath" placeholder="参数文件路径"
+                            <input v-model="newApp.ConfigPath" placeholder="配置路径 (Schema 时建议 /data/apps/<id>/config.env)"
                                 class="w-full bg-gray-100 rounded-xl px-4 py-2.5 outline-none">
-                            <input v-model="newApp.ConfigKeys" placeholder="变量名 (逗号分隔)"
+                            <input v-model="newApp.ConfigKeys" placeholder="旧版变量名 (逗号分隔，Schema 可留空)"
                                 class="w-full bg-gray-100 rounded-xl px-4 py-2.5 outline-none font-mono text-xs">
                         </div>
+                        <textarea v-model="newApp.ConfigSchema" rows="6"
+                            placeholder='ConfigSchema JSON (推荐)，例如: {"Sections":[{"Title":"基础","Fields":[{"Key":"host","Label":"主机","Type":"text","Default":"1.1.1.1"}]}]}'
+                            class="w-full bg-gray-100 rounded-xl px-4 py-2.5 outline-none font-mono text-xs resize-y"></textarea>
                         <div class="grid grid-cols-2 gap-4">
                             <input v-model="newApp.LogPath" placeholder="日志路径"
                                 class="w-full bg-gray-100 rounded-xl px-4 py-2.5 outline-none font-mono text-xs">
@@ -464,21 +467,122 @@
 
         <div v-if="activeApp"
             class="fixed inset-0 z-[100] flex items-center justify-center p-6 bg-black/20 backdrop-blur-sm">
-            <div class="glass w-full max-w-lg rounded-[2.5rem] p-8 shadow-2xl">
+            <div class="glass w-full max-w-xl rounded-[2.5rem] p-8 shadow-2xl flex flex-col max-h-[90vh]">
                 <h3 class="text-2xl font-semibold mb-2">配置 {{ activeApp.name }}</h3>
-                <p v-if="activeApp.configPath" class="text-sm text-gray-500 mb-6 font-mono break-all text-xs">{{
+                <p v-if="activeApp.configPath" class="text-sm text-gray-500 mb-4 font-mono break-all text-xs">{{
                     activeApp.configPath }}</p>
-                <div v-else class="mb-6"></div>
+                <p v-else class="mb-4"></p>
 
-                <div class="space-y-4 mb-8 text-sm max-h-[50vh] overflow-y-auto pr-2">
+                <div class="space-y-4 mb-6 text-sm overflow-y-auto pr-2" style="max-height: 55vh;">
                     <div
-                        class="flex justify-between items-center bg-white/60 p-4 rounded-xl border border-gray-200 shadow-sm mb-4">
+                        class="flex justify-between items-center bg-white/60 p-4 rounded-xl border border-gray-200 shadow-sm">
                         <span class="text-gray-700 font-medium">开机自启</span>
-                        <input type="checkbox" v-model="activeApp.autoStart" @change="saveAutoStart(activeApp)"
-                            class="accent-blue-600 w-5 h-5">
+                        <button type="button" @click="toggleAutoStartInModal"
+                            :class="activeApp.autoStart ? 'bg-blue-600' : 'bg-gray-300'"
+                            class="w-12 h-7 rounded-full relative p-1 transition-colors shrink-0">
+                            <div :class="activeApp.autoStart ? 'translate-x-5' : 'translate-x-0'"
+                                class="w-5 h-5 bg-white rounded-full shadow-sm transform transition-transform"></div>
+                        </button>
                     </div>
 
-                    <template v-if="Object.keys(appConfig).length > 0">
+                    <!-- Schema 驱动表单 -->
+                    <template v-if="configMode === 'schema'">
+                        <div v-for="(section, si) in schemaSections" :key="si" class="mb-2">
+                            <div class="flex items-center justify-between mb-2 mt-1 px-1">
+                                <h4 class="text-xs font-bold text-gray-400 uppercase tracking-wider">{{ section.Title ||
+                                    section.title }}</h4>
+                                <button type="button" v-if="(section.Fields || section.fields || []).length > 3"
+                                    @click="toggleSection(si)"
+                                    class="text-[11px] text-blue-500 hover:underline">
+                                    {{ collapsedSections[si] ? '展开' : '收起' }}
+                                </button>
+                            </div>
+                            <div v-show="!collapsedSections[si]" class="space-y-3">
+                                <div v-for="field in (section.Fields || section.fields || [])" :key="fieldKey(field)"
+                                    v-show="isFieldVisible(field)">
+                                    <div class="flex items-baseline justify-between mb-1.5 px-1">
+                                        <label class="text-gray-600 text-sm font-medium">
+                                            {{ fieldLabel(field) }}
+                                            <span v-if="fieldRequired(field)" class="text-red-400 ml-0.5">*</span>
+                                        </label>
+                                        <span v-if="fieldType(field) === 'switch'"
+                                            class="text-[11px] text-gray-400 font-mono">{{
+                                            switchLabel(field) }}</span>
+                                    </div>
+                                    <p v-if="fieldHelp(field)" class="text-xs text-blue-500/80 px-1 mb-1.5 leading-relaxed">
+                                        {{ fieldHelp(field) }}
+                                    </p>
+
+                                    <!-- switch -->
+                                    <div v-if="fieldType(field) === 'switch'"
+                                        class="flex justify-end bg-white/60 border border-gray-200 rounded-xl px-3 py-2.5 shadow-sm">
+                                        <button type="button" @click="toggleSwitchField(field)"
+                                            :class="isTruthy(configValues[fieldKey(field)]) ? 'bg-blue-600' : 'bg-gray-300'"
+                                            class="w-12 h-7 rounded-full relative p-1 transition-colors">
+                                            <div :class="isTruthy(configValues[fieldKey(field)]) ? 'translate-x-5' : 'translate-x-0'"
+                                                class="w-5 h-5 bg-white rounded-full shadow-sm transform transition-transform"></div>
+                                        </button>
+                                    </div>
+
+                                    <!-- select -->
+                                    <select v-else-if="fieldType(field) === 'select'" v-model="configValues[fieldKey(field)]"
+                                        class="w-full bg-white/60 border border-gray-200 rounded-xl px-4 py-3 focus:ring-2 focus:ring-blue-500 outline-none transition-all shadow-sm">
+                                        <option v-for="opt in fieldOptions(field)" :key="opt.value" :value="opt.value">
+                                            {{ opt.label }}</option>
+                                    </select>
+
+                                    <!-- multi-select -->
+                                    <div v-else-if="fieldType(field) === 'multi-select'"
+                                        class="bg-white/60 border border-gray-200 rounded-xl px-3 py-3 shadow-sm space-y-2">
+                                        <label v-for="opt in fieldOptions(field)" :key="opt.value"
+                                            class="flex items-center space-x-2 cursor-pointer">
+                                            <input type="checkbox" :value="opt.value"
+                                                :checked="multiSelected(field).includes(opt.value)"
+                                                @change="toggleMulti(field, opt.value)"
+                                                class="accent-blue-600 w-4 h-4">
+                                            <span class="text-gray-700">{{ opt.label }}</span>
+                                        </label>
+                                    </div>
+
+                                    <!-- textarea -->
+                                    <textarea v-else-if="fieldType(field) === 'textarea'"
+                                        v-model="configValues[fieldKey(field)]" :rows="fieldRows(field)"
+                                        :placeholder="fieldPlaceholder(field)"
+                                        :class="fieldMonospace(field) ? 'font-mono text-xs' : ''"
+                                        class="w-full bg-white/60 border border-gray-200 rounded-xl px-4 py-3 focus:ring-2 focus:ring-blue-500 outline-none transition-all shadow-sm resize-y"></textarea>
+
+                                    <!-- password -->
+                                    <input v-else-if="fieldType(field) === 'password'"
+                                        v-model="configValues[fieldKey(field)]" type="password"
+                                        :placeholder="fieldPlaceholder(field) || '••••••••'"
+                                        class="w-full bg-white/60 border border-gray-200 rounded-xl px-4 py-3 focus:ring-2 focus:ring-blue-500 outline-none transition-all shadow-sm font-mono">
+
+                                    <!-- number / port -->
+                                    <input v-else-if="fieldType(field) === 'number' || fieldType(field) === 'port'"
+                                        v-model="configValues[fieldKey(field)]" type="number"
+                                        :min="fieldMin(field)" :max="fieldMax(field)"
+                                        :placeholder="fieldPlaceholder(field)"
+                                        class="w-full bg-white/60 border border-gray-200 rounded-xl px-4 py-3 focus:ring-2 focus:ring-blue-500 outline-none transition-all shadow-sm">
+
+                                    <!-- text / ip / path -->
+                                    <input v-else v-model="configValues[fieldKey(field)]"
+                                        :placeholder="fieldPlaceholder(field)"
+                                        :class="fieldMonospace(field) || ['ip','path'].includes(fieldType(field)) ? 'font-mono text-xs' : ''"
+                                        class="w-full bg-white/60 border border-gray-200 rounded-xl px-4 py-3 focus:ring-2 focus:ring-blue-500 outline-none transition-all shadow-sm">
+
+                                    <p v-if="configErrors[fieldKey(field)]"
+                                        class="text-xs text-red-500 mt-1 px-1 font-medium">
+                                        {{ configErrors[fieldKey(field)] }}</p>
+                                </div>
+                            </div>
+                        </div>
+                        <div v-if="schemaSections.length === 0" class="text-center text-gray-400 py-4 text-xs">
+                            该应用未声明配置项
+                        </div>
+                    </template>
+
+                    <!-- 旧版 ConfigKeys 文本列表 -->
+                    <template v-else-if="configMode === 'legacy'">
                         <div v-for="(item, key) in appConfig" :key="key" class="mb-4">
                             <div class="flex flex-col mb-1.5">
                                 <label class="text-gray-400 ml-1 uppercase text-xs font-bold tracking-wider">{{
@@ -491,15 +595,18 @@
                                 class="w-full bg-white/60 border border-gray-200 rounded-xl px-4 py-3 focus:ring-2 focus:ring-blue-500 outline-none transition-all shadow-sm">
                         </div>
                     </template>
-                    <div v-else-if="activeApp.configKeys" class="text-center text-gray-400 py-4 text-xs">正在加载配置...</div>
+                    <div v-else-if="activeApp.configKeys || activeApp.configSchema"
+                        class="text-center text-gray-400 py-4 text-xs">正在加载配置...</div>
                 </div>
 
-                <div class="flex space-x-3">
+                <div class="flex space-x-3 pt-2">
                     <button @click="activeApp = null"
                         class="btn-apple flex-1 py-3 text-gray-500 font-medium border rounded-2xl hover:bg-gray-50">取消</button>
-                    <button @click="saveAppConfig"
-                        class="btn-apple flex-1 bg-black text-white py-3 rounded-2xl font-medium shadow-lg hover:bg-gray-800">{{
-                        Object.keys(appConfig).length > 0 ? '保存并重启服务' : '完成' }}</button>
+                    <button @click="saveAppConfig" :disabled="isSavingConfig"
+                        class="btn-apple flex-1 bg-black text-white py-3 rounded-2xl font-medium shadow-lg hover:bg-gray-800 flex justify-center items-center disabled:opacity-60">
+                        <i v-if="isSavingConfig" data-lucide="loader-2" class="w-4 h-4 mr-2 animate-spin"></i>
+                        <span>{{ (configMode === 'schema' || Object.keys(appConfig).length > 0) ? '保存并重启服务' : '完成' }}</span>
+                    </button>
                 </div>
             </div>
         </div>
@@ -561,7 +668,7 @@
                 const addTab = ref('online');
                 const isFetchingStore = ref(false);
                 const onlineStore = ref([]);
-                const newApp = ref({ Id: '', Name: '', Type: 'Local', Icon: 'box', ConfigPath: '', ConfigKeys: '', LogPath: '', StartCommand: '', StopCommand: '', StatusCommand: '', IsAutoStart: 0, SortOrder: 999, Version: '1.0.0', Description: '', CustomCommands: '[]' });
+                const newApp = ref({ Id: '', Name: '', Type: 'Local', Icon: 'box', ConfigPath: '', ConfigKeys: '', ConfigSchema: '', LogPath: '', StartCommand: '', StopCommand: '', StatusCommand: '', IsAutoStart: 0, SortOrder: 999, Version: '1.0.0', Description: '', CustomCommands: '[]' });
 
                 const logModalApp = ref(null);
                 const logContent = ref('');
@@ -569,6 +676,12 @@
 
                 const activeApp = ref(null);
                 const appConfig = ref({});
+                const configMode = ref('idle'); // idle | loading | schema | legacy
+                const configSchema = ref(null);
+                const configValues = ref({});
+                const configErrors = ref({});
+                const collapsedSections = ref({});
+                const isSavingConfig = ref(false);
 
                 const showCronModalVisible = ref(false);
                 const activeCmdMenu = ref(null);
@@ -759,7 +872,14 @@
                             id: i.id || i.Id, name: i.name || i.Name, type: i.type || i.Type, icon: i.icon || i.Icon || 'box',
                             startCommand: i.startCommand || i.StartCommand, autoStart: (i.isAutoStart !== undefined ? i.isAutoStart : i.IsAutoStart) === 1,
                             isRunning: i.isRunning !== undefined ? i.isRunning : i.IsRunning, configPath: i.configPath || i.ConfigPath || '',
-                            configKeys: i.configKeys || i.ConfigKeys || '', logPath: i.logPath || i.LogPath || '', sortOrder: i.sortOrder !== undefined ? i.sortOrder : i.SortOrder,
+                            configKeys: i.configKeys || i.ConfigKeys || '',
+                            configSchema: (() => {
+                                const raw = i.configSchema !== undefined ? i.configSchema : i.ConfigSchema;
+                                if (!raw) return null;
+                                if (typeof raw === 'object') return raw;
+                                try { return JSON.parse(raw); } catch { return null; }
+                            })(),
+                            logPath: i.logPath || i.LogPath || '', sortOrder: i.sortOrder !== undefined ? i.sortOrder : i.SortOrder,
                             version: i.version || i.Version || '1.0.0', description: i.description || i.Description || '',
                             customCommands: (() => { try { return JSON.parse(i.customCommands || i.CustomCommands || '[]'); } catch { return []; } })()
                         }));
@@ -813,7 +933,8 @@
                             ConfigPath: onlineApp.ConfigPath || onlineApp.configPath || '', ConfigKeys: onlineApp.ConfigKeys || onlineApp.configKeys || '',
                             LogPath: onlineApp.LogPath || onlineApp.logPath || '', SortOrder: app.sortOrder,
                             Version: onlineApp.Version || onlineApp.version || '0.0.1', Description: onlineApp.Description || onlineApp.description || '',
-                            CustomCommands: typeof onlineApp.CustomCommands === 'string' ? onlineApp.CustomCommands : (typeof onlineApp.customCommands === 'string' ? onlineApp.customCommands : JSON.stringify(onlineApp.CustomCommands || onlineApp.customCommands || []))
+                            CustomCommands: typeof onlineApp.CustomCommands === 'string' ? onlineApp.CustomCommands : (typeof onlineApp.customCommands === 'string' ? onlineApp.customCommands : JSON.stringify(onlineApp.CustomCommands || onlineApp.customCommands || [])),
+                            ConfigSchema: serializeSchema(onlineApp.ConfigSchema ?? onlineApp.configSchema)
                         };
 
                         await callApi('/api/apps', 'POST', appData);
@@ -831,7 +952,8 @@
                         ConfigPath: p.ConfigPath || p.configPath || '', ConfigKeys: p.ConfigKeys || p.configKeys || '',
                         LogPath: p.LogPath || p.logPath || '', SortOrder: p.SortOrder || apps.value.length,
                         Version: p.Version || p.version || '0.0.1', Description: p.Description || p.description || '',
-                        CustomCommands: typeof p.CustomCommands === 'string' ? p.CustomCommands : (typeof p.customCommands === 'string' ? p.customCommands : JSON.stringify(p.CustomCommands || p.customCommands || []))
+                        CustomCommands: typeof p.CustomCommands === 'string' ? p.CustomCommands : (typeof p.customCommands === 'string' ? p.customCommands : JSON.stringify(p.CustomCommands || p.customCommands || [])),
+                        ConfigSchema: serializeSchema(p.ConfigSchema ?? p.configSchema)
                     };
                     if (!appData.Id || !appData.StartCommand) { alert('应用信息不完整'); return; }
                     await callApi('/api/apps', 'POST', appData);
@@ -856,33 +978,232 @@
                     setTimeout(loadRealApps, 500);
                 };
 
-                // 适配包含 Value 和 Comment 的嵌套记录结构
+                // ---- Schema 驱动表单辅助 ----
+                const serializeSchema = (s) => {
+                    if (!s) return '';
+                    if (typeof s === 'string') return s;
+                    try { return JSON.stringify(s); } catch { return ''; }
+                };
+
+                const pick = (obj, ...names) => {
+                    if (!obj || typeof obj !== 'object') return undefined;
+                    for (const n of names) {
+                        if (obj[n] !== undefined && obj[n] !== null) return obj[n];
+                        const lower = n.charAt(0).toLowerCase() + n.slice(1);
+                        if (obj[lower] !== undefined && obj[lower] !== null) return obj[lower];
+                    }
+                    return undefined;
+                };
+
+                const fieldKey = (f) => pick(f, 'Key', 'key') || '';
+                const fieldLabel = (f) => pick(f, 'Label', 'label') || fieldKey(f);
+                const fieldType = (f) => (pick(f, 'Type', 'type') || 'text').toString().toLowerCase();
+                const fieldHelp = (f) => pick(f, 'Help', 'help') || '';
+                const fieldPlaceholder = (f) => pick(f, 'Placeholder', 'placeholder') || '';
+                const fieldRequired = (f) => {
+                    const v = pick(f, 'Required', 'required');
+                    return v === true || v === 1 || v === '1';
+                };
+                const fieldMin = (f) => pick(f, 'Min', 'min');
+                const fieldMax = (f) => pick(f, 'Max', 'max');
+                const fieldRows = (f) => pick(f, 'Rows', 'rows') || 4;
+                const fieldMonospace = (f) => {
+                    const v = pick(f, 'Monospace', 'monospace');
+                    return v === true || v === 1 || v === '1';
+                };
+                const fieldOptions = (f) => {
+                    const opts = pick(f, 'Options', 'options') || [];
+                    return opts.map(o => ({
+                        label: pick(o, 'Label', 'label') || pick(o, 'Value', 'value') || '',
+                        value: String(pick(o, 'Value', 'value') ?? '')
+                    }));
+                };
+
+                const schemaSections = computed(() => {
+                    const s = configSchema.value;
+                    if (!s) return [];
+                    return pick(s, 'Sections', 'sections') || [];
+                });
+
+                const allSchemaFields = computed(() => {
+                    const fields = [];
+                    for (const section of schemaSections.value) {
+                        for (const f of (pick(section, 'Fields', 'fields') || [])) fields.push(f);
+                    }
+                    return fields;
+                });
+
+                const isTruthy = (v) => v === true || v === 1 || v === '1' || v === 'true';
+                const switchLabel = (f) => isTruthy(configValues.value[fieldKey(f)]) ? '开' : '关';
+
+                const isFieldVisible = (f) => {
+                    const rule = pick(f, 'VisibleWhen', 'visibleWhen');
+                    if (!rule) return true;
+                    const [k, ...rest] = String(rule).split('=');
+                    const expected = rest.join('=');
+                    const actual = configValues.value[k];
+                    if (expected === undefined || expected === '') return !!actual && actual !== '0' && actual !== 'false';
+                    return String(actual) === expected;
+                };
+
+                const toggleSection = (si) => {
+                    collapsedSections.value[si] = !collapsedSections.value[si];
+                };
+
+                const toggleSwitchField = (f) => {
+                    const k = fieldKey(f);
+                    configValues.value[k] = isTruthy(configValues.value[k]) ? '0' : '1';
+                };
+
+                const multiSelected = (f) => {
+                    const v = configValues.value[fieldKey(f)];
+                    if (!v) return [];
+                    return String(v).split(',').map(x => x.trim()).filter(Boolean);
+                };
+
+                const toggleMulti = (f, value) => {
+                    const k = fieldKey(f);
+                    const set = new Set(multiSelected(f));
+                    if (set.has(value)) set.delete(value); else set.add(value);
+                    configValues.value[k] = [...set].join(',');
+                };
+
+                const toggleAutoStartInModal = async () => {
+                    if (!activeApp.value) return;
+                    activeApp.value.autoStart = !activeApp.value.autoStart;
+                    await saveAutoStart(activeApp.value);
+                };
+
+                const clientValidateSchema = () => {
+                    const errors = {};
+                    for (const f of allSchemaFields.value) {
+                        if (!isFieldVisible(f)) continue;
+                        const k = fieldKey(f);
+                        const raw = configValues.value[k];
+                        const val = raw === undefined || raw === null ? '' : String(raw).trim();
+                        const label = fieldLabel(f);
+                        const type = fieldType(f);
+                        if (fieldRequired(f) && !val) { errors[k] = `${label} 不能为空`; continue; }
+                        if (!val) continue;
+                        if (type === 'number' || type === 'port') {
+                            const n = Number(val);
+                            if (Number.isNaN(n)) { errors[k] = `${label} 必须是数字`; continue; }
+                            const min = fieldMin(f); const max = fieldMax(f);
+                            if (min !== undefined && min !== null && n < Number(min)) { errors[k] = `${label} 不能小于 ${min}`; continue; }
+                            if (max !== undefined && max !== null && n > Number(max)) { errors[k] = `${label} 不能大于 ${max}`; continue; }
+                            if (type === 'port' && (n < 1 || n > 65535)) { errors[k] = `${label} 必须是 1-65535`; }
+                        }
+                        if (type === 'ip' && !/^(\d{1,3}\.){3}\d{1,3}$/.test(val) && !/^[0-9a-fA-F:]+$/.test(val)) {
+                            errors[k] = `${label} 不是合法的 IP`;
+                        }
+                    }
+                    configErrors.value = errors;
+                    return Object.keys(errors).length === 0;
+                };
+
+                // 打开配置：优先 Schema，其次 legacy
                 const openConfig = async (app) => {
-                    activeApp.value = app; appConfig.value = {};
-                    if (!app.configKeys) return;
+                    activeApp.value = app;
+                    appConfig.value = {};
+                    configValues.value = {};
+                    configErrors.value = {};
+                    collapsedSections.value = {};
+                    configSchema.value = app.configSchema || null;
+                    configMode.value = 'loading';
+
+                    if (!app.configKeys && !app.configSchema) {
+                        configMode.value = 'idle';
+                        return;
+                    }
+
                     const data = await callApi(`/api/apps/${app.id}/config`);
-                    if (data) {
+                    if (!data) { configMode.value = app.configSchema ? 'schema' : 'legacy'; return; }
+
+                    const mode = data.mode || data.Mode;
+                    if (mode === 'schema' || (data.schema || data.Schema || app.configSchema)) {
+                        configMode.value = 'schema';
+                        const schema = data.schema || data.Schema || app.configSchema;
+                        configSchema.value = typeof schema === 'string' ? (() => { try { return JSON.parse(schema); } catch { return null; } })() : schema;
+                        const values = data.values || data.Values || {};
+                        const merged = {};
+                        for (const f of allSchemaFields.value) {
+                            const k = fieldKey(f);
+                            if (!k) continue;
+                            const def = pick(f, 'Default', 'default');
+                            merged[k] = values[k] !== undefined ? String(values[k]) : (def !== undefined && def !== null ? String(def) : '');
+                            if (fieldType(f) === 'switch') merged[k] = isTruthy(merged[k]) ? '1' : '0';
+                        }
+                        for (const k in values) {
+                            if (merged[k] === undefined) merged[k] = String(values[k]);
+                        }
+                        configValues.value = merged;
+                    } else {
+                        configMode.value = 'legacy';
+                        const legacy = data.legacy || data.Legacy || data;
                         const normalized = {};
-                        for (let k in data) {
+                        const source = (legacy && typeof legacy === 'object' && !Array.isArray(legacy)) ? legacy : {};
+                        for (let k in source) {
+                            if (!source[k] || typeof source[k] !== 'object') {
+                                normalized[k] = { value: source[k] != null ? String(source[k]) : '', comment: '' };
+                                continue;
+                            }
                             normalized[k] = {
-                                value: data[k].value !== undefined ? data[k].value : data[k].Value,
-                                comment: data[k].comment !== undefined ? data[k].comment : data[k].Comment
+                                value: source[k].value !== undefined ? source[k].value : source[k].Value,
+                                comment: source[k].comment !== undefined ? source[k].comment : source[k].Comment
                             };
+                        }
+                        // 后端可能直接返回 legacy 字典（旧兼容）
+                        if (data.mode === undefined && data.Mode === undefined) {
+                            for (let k in data) {
+                                if (k === 'mode' || k === 'schema' || k === 'values' || k === 'legacy') continue;
+                                if (data[k] && typeof data[k] === 'object' && ('value' in data[k] || 'Value' in data[k])) {
+                                    normalized[k] = {
+                                        value: data[k].value !== undefined ? data[k].value : data[k].Value,
+                                        comment: data[k].comment !== undefined ? data[k].comment : data[k].Comment
+                                    };
+                                }
+                            }
                         }
                         appConfig.value = normalized;
                     }
+                    nextTick(() => lucide.createIcons());
                 };
 
-                // 保存配置时，只向后端发送实际的值 (脱壳)
+                // 保存配置
                 const saveAppConfig = async () => {
                     if (!activeApp.value) return;
-                    const payload = {};
-                    for (const k in appConfig.value) {
-                        payload[k] = appConfig.value[k].value;
+                    isSavingConfig.value = true;
+                    try {
+                        let payload = {};
+                        if (configMode.value === 'schema') {
+                            if (!clientValidateSchema()) {
+                                isSavingConfig.value = false;
+                                return;
+                            }
+                            payload = { ...configValues.value };
+                        } else if (configMode.value === 'legacy') {
+                            for (const k in appConfig.value) payload[k] = appConfig.value[k].value;
+                        } else {
+                            activeApp.value = null;
+                            return;
+                        }
+
+                        const res = await callApi(`/api/apps/${activeApp.value.id}/config`, 'POST', payload);
+                        if (res && res.errors) {
+                            configErrors.value = res.errors;
+                            isSavingConfig.value = false;
+                            return;
+                        }
+                        if (res === null) {
+                            alert('保存失败：网络错误或令牌无效');
+                            isSavingConfig.value = false;
+                            return;
+                        }
+                        await callApi(`/api/apps/${activeApp.value.id}/control?action=restart`, 'POST');
+                        activeApp.value = null;
+                    } finally {
+                        isSavingConfig.value = false;
                     }
-                    await callApi(`/api/apps/${activeApp.value.id}/config`, 'POST', payload);
-                    await callApi(`/api/apps/${activeApp.value.id}/control?action=restart`, 'POST');
-                    activeApp.value = null;
                 };
 
                 const showSystemLogs = async () => { logModalApp.value = { id: 'sys', name: '系统核心' }; await refreshLogs(); };
@@ -934,7 +1255,12 @@
                 onMounted(() => { if (token.value) handleTokenSubmit(); lucide.createIcons(); });
 
                 return {
-                    token, tokenInputType, handleTokenSubmit, sysInfo, apps, cronJobs, activeApp, appConfig, showAddModal, addTab, isFetchingStore, onlineStore,
+                    token, tokenInputType, handleTokenSubmit, sysInfo, apps, cronJobs, activeApp, appConfig,
+                    configMode, configSchema, configValues, configErrors, collapsedSections, isSavingConfig,
+                    schemaSections, fieldKey, fieldLabel, fieldType, fieldHelp, fieldPlaceholder, fieldRequired,
+                    fieldMin, fieldMax, fieldRows, fieldMonospace, fieldOptions, isTruthy, switchLabel,
+                    isFieldVisible, toggleSection, toggleSwitchField, multiSelected, toggleMulti, toggleAutoStartInModal,
+                    showAddModal, addTab, isFetchingStore, onlineStore,
                     newApp, logModalApp, logContent, isLoadingLogs, cronModalApp, newCronReq, hasUpdate, latestVersion, isUpgrading, upgradeLog, doUpgrade,
                     searchQuery, filteredApps, draggedIndex, getLocalApp, isNewerVersion, onDragStart, onDragEnd, onDrop, deleteApp, toggleApp, restartApp, saveAutoStart, openAddModal: () => { showAddModal.value = true; fetchOnlineStore(); },
                     installApp, updateAppConfigFromCloud, showSystemLogs, showLogModal, refreshLogs, runCustomCommand, loadCronJobs, openConfig, saveAppConfig, showCronModal, submitCron, deleteCron,

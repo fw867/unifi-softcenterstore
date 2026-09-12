@@ -13,7 +13,7 @@ UniFi SoftCenter 是一个专为 UniFi OS (如 UCG-Fiber) 及类 Debian 路由�
 * **⚙️ 全局设置 UI 化**：彻底告别 SSH！直接在 Web 面板修改访问端口、安全 Token，以及配置全局下载代理（如 V2Ray 本地节点），保存后自动平滑重启生效。
 * **☁️ 云端应用库与同步**：支持从 GitHub 云端一键拉取并安装适配好的软路由插件（如光猫助手、DDNSTO、微信通知）。更支持**一键同步云端最新配置**，平滑覆盖本地参数而不丢失自启状态。
 * **📦 极简应用管理**：支持一键启停任意底层 Shell 脚本或二进制核心程序，并可视化配置开机自启。
-* **🛠️ 动态参数热更新**：支持底层正则解析，在 Web 弹窗中直接修改应用的底层变量参数（免改文件），一键保存并平滑重启服务。
+* **🛠️ Schema 驱动个性化设置页**：插件用 JSON Schema 声明配置项，面板自动渲染开关 / 下拉 / 数字 / 密码 / 多行等控件，支持分组、联动（`VisibleWhen`）与前后端双重校验。保存后写入 `/data/apps/<id>/config.env`，脚本 `source` 即可取参；未声明 Schema 的旧插件仍兼容 ConfigKeys 正则解析。
 * **📜 极客级终端日志**：内置全屏“黑客瀑布流”日志查看器，支持实时拉取应用日志 (`tail`) 及系统核心底层守护日志 (`journalctl`)。
 * **⏰ 彻底接管 Crontab**：在界面上直接管理 Linux 系统的定时任务，支持标准的 Cron 表达式添加与精准解析删除。
 * **🔄 极客化在线 OTA 升级**：带实时终端日志输出的无感升级机制。自动通过配置的代理拉取最新版本，后端执行脱壳覆盖，双线程心跳探测自动刷新页面。
@@ -67,13 +67,108 @@ CI/CD: GitHub Actions (使用 debian:11 容器进行交叉编译，彻底解决 
 │   └── libe_sqlite3.so        # 原生 SQLite 运行库
 ├── on_boot.d/                  # SoftCenter 专属应用开机自启脚本目录
 ├── config.json                 # 面板端口与 Token 配置文件 (可在Web端修改)
-├── manager.db                  # 应用与 Cron 注册表数据库 (SQLite)
+├── manager.db                  # 应用与 Cron 注册表数据库 (SQLite，含 ConfigSchema)
 └── web/                        # 静态 Web 资源
-    └── index.html             # 前端单页应用 (Vue 3)
+    └── index.html             # 前端单页应用 (Vue 3 + Schema FormRenderer)
+
+/data/apps/<app-id>/
+└── config.env                  # Schema 插件的参数文件（面板写入，脚本 source）
 
 /data/on_boot.d/
 └── 99-softcenter.sh            # 系统的底层防丢钩子 (固件升级自愈核心)
 ```
+
+## 📐 ConfigSchema 编写指南（插件作者）
+
+在 `apps/apps.json` 的应用条目里声明 `ConfigSchema`，面板会自动渲染个性化设置页：
+
+```json
+{
+  "Id": "tomodem",
+  "ConfigPath": "/data/apps/tomodem/config.env",
+  "ConfigSchema": {
+    "Sections": [
+      {
+        "Title": "网络基础",
+        "Fields": [
+          {
+            "Key": "tomodem_ip",
+            "Label": "光猫管理 IP",
+            "Type": "ip",
+            "Default": "192.168.1.1",
+            "Required": true,
+            "Help": "光猫后台地址"
+          },
+          {
+            "Key": "tomodem_eth",
+            "Label": "内网网口",
+            "Type": "select",
+            "Default": "eth0",
+            "Options": [
+              { "Label": "LAN1", "Value": "eth0" },
+              { "Label": "LAN2", "Value": "eth1" }
+            ]
+          },
+          {
+            "Key": "auto_fix",
+            "Label": "拨号后自动放行",
+            "Type": "switch",
+            "Default": "1"
+          },
+          {
+            "Key": "udp_list",
+            "Label": "UDP 端口列表",
+            "Type": "text",
+            "VisibleWhen": "auto_fix=1",
+            "Help": "仅在开启自动放行时显示"
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+### 字段类型
+
+| Type | 控件 | 额外属性 |
+|------|------|----------|
+| `text` | 文本框 | `Placeholder`, `Monospace` |
+| `password` | 密码框 | `Secret` |
+| `number` | 数字 | `Min`, `Max` |
+| `port` | 端口 | 1–65535 |
+| `ip` | IP 地址 | IPv4 / IPv6 校验 |
+| `path` | 路径 | `Monospace` |
+| `switch` | 开关 | 存储为 `1` / `0` |
+| `select` | 下拉 | `Options: [{Label, Value}]` |
+| `multi-select` | 多选 | 存储为逗号分隔 |
+| `textarea` | 多行 | `Rows`, `Monospace` |
+
+通用属性：`Key`, `Label`, `Default`, `Required`, `Help`, `VisibleWhen`（如 `key=value`）。
+
+### 脚本侧取参
+
+保存后写入 `/data/apps/<id>/config.env`：
+
+```bash
+# SoftCenter generated config for tomodem
+tomodem_ip=192.168.1.1
+tomodem_eth=eth0
+auto_fix=1
+```
+
+Shell 脚本开头直接 source：
+
+```bash
+#!/bin/bash
+CONFIG=/data/apps/tomodem/config.env
+[ -f "$CONFIG" ] && source "$CONFIG"
+echo "connecting to ${tomodem_ip:-192.168.1.1} via ${tomodem_eth:-eth0}"
+```
+
+systemd 服务可用 `EnvironmentFile=/data/apps/<id>/config.env`。
+
+---
 
 ## 🤝 贡献与反馈
 
