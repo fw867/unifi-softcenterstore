@@ -3,6 +3,9 @@ using System.IO;
 using System.Linq;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Net;
+using System.Net.Http;
+using System.Security.Cryptography;
 using System.Text.RegularExpressions;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
@@ -52,6 +55,8 @@ var app = builder.Build();
 const string BaseDir = "/data/softcenter";
 const string DbPath = $"Data Source={BaseDir}/manager.db";
 const string ConfigPath = $"{BaseDir}/config.json";
+const string BinDir = $"{BaseDir}/bin";
+const string RepoRawBase = "https://raw.githubusercontent.com/fw867/unifi-softcenterstore/master/";
 
 if (!Directory.Exists(BaseDir)) Directory.CreateDirectory(BaseDir);
 if (!Directory.Exists($"{BaseDir}/web")) Directory.CreateDirectory($"{BaseDir}/web");
@@ -77,7 +82,7 @@ using (var conn = new SqliteConnection(DbPath))
             Id TEXT PRIMARY KEY, Name TEXT NOT NULL, Type TEXT NOT NULL, Icon TEXT DEFAULT 'box', 
             StartCommand TEXT NOT NULL, StopCommand TEXT NOT NULL, StatusCommand TEXT NOT NULL, 
             IsAutoStart INTEGER DEFAULT 0, ConfigPath TEXT, ConfigKeys TEXT, LogPath TEXT, SortOrder INTEGER DEFAULT 0,
-            Version TEXT DEFAULT '1.0.0', Description TEXT DEFAULT '', CustomCommands TEXT DEFAULT '[]', ConfigSchema TEXT DEFAULT ''
+            Version TEXT DEFAULT '1.0.0', Description TEXT DEFAULT '', CustomCommands TEXT DEFAULT '[]', ConfigSchema TEXT DEFAULT '', Files TEXT DEFAULT '[]'
         );
         CREATE TABLE IF NOT EXISTS cron_registry (
             Id TEXT PRIMARY KEY, Name TEXT NOT NULL, Schedule TEXT NOT NULL, Command TEXT NOT NULL
@@ -88,6 +93,7 @@ using (var conn = new SqliteConnection(DbPath))
     try { using var c3 = conn.CreateCommand(); c3.CommandText = "ALTER TABLE apps_registry ADD COLUMN Description TEXT DEFAULT '';"; c3.ExecuteNonQuery(); } catch { }
     try { using var c4 = conn.CreateCommand(); c4.CommandText = "ALTER TABLE apps_registry ADD COLUMN CustomCommands TEXT DEFAULT '[]';"; c4.ExecuteNonQuery(); } catch { }
     try { using var c5 = conn.CreateCommand(); c5.CommandText = "ALTER TABLE apps_registry ADD COLUMN ConfigSchema TEXT DEFAULT '';"; c5.ExecuteNonQuery(); } catch { }
+    try { using var c6 = conn.CreateCommand(); c6.CommandText = "ALTER TABLE apps_registry ADD COLUMN Files TEXT DEFAULT '[]';"; c6.ExecuteNonQuery(); } catch { }
 }
 
 string bootLock = "/tmp/softcenter_booted.lock";
@@ -365,12 +371,12 @@ app.MapGet("/api/apps", () => {
     var apps = new List<AppEntity>();
     using var conn = new SqliteConnection(DbPath); conn.Open();
     using var cmd = conn.CreateCommand();
-    cmd.CommandText = "SELECT Id, Name, Type, Icon, StartCommand, StopCommand, StatusCommand, IsAutoStart, ConfigPath, ConfigKeys, LogPath, SortOrder, Version, Description, CustomCommands, ConfigSchema FROM apps_registry ORDER BY SortOrder ASC, Id ASC";
+    cmd.CommandText = "SELECT Id, Name, Type, Icon, StartCommand, StopCommand, StatusCommand, IsAutoStart, ConfigPath, ConfigKeys, LogPath, SortOrder, Version, Description, CustomCommands, ConfigSchema, Files FROM apps_registry ORDER BY SortOrder ASC, Id ASC";
     using var reader = cmd.ExecuteReader();
     while (reader.Read())
     {
         var sCmd = reader.GetString(6);
-        apps.Add(new AppEntity(reader.GetString(0), reader.GetString(1), reader.GetString(2), reader.GetString(3), reader.GetString(4), reader.GetString(5), sCmd, reader.GetInt32(7), IsAppRunning(sCmd), reader.IsDBNull(8) ? "" : reader.GetString(8), reader.IsDBNull(9) ? "" : reader.GetString(9), reader.IsDBNull(10) ? "" : reader.GetString(10), reader.IsDBNull(11) ? 0 : reader.GetInt32(11), reader.IsDBNull(12) ? "1.0.0" : reader.GetString(12), reader.IsDBNull(13) ? "" : reader.GetString(13), reader.IsDBNull(14) ? "[]" : reader.GetString(14), reader.IsDBNull(15) ? "" : reader.GetString(15)));
+        apps.Add(new AppEntity(reader.GetString(0), reader.GetString(1), reader.GetString(2), reader.GetString(3), reader.GetString(4), reader.GetString(5), sCmd, reader.GetInt32(7), IsAppRunning(sCmd), reader.IsDBNull(8) ? "" : reader.GetString(8), reader.IsDBNull(9) ? "" : reader.GetString(9), reader.IsDBNull(10) ? "" : reader.GetString(10), reader.IsDBNull(11) ? 0 : reader.GetInt32(11), reader.IsDBNull(12) ? "1.0.0" : reader.GetString(12), reader.IsDBNull(13) ? "" : reader.GetString(13), reader.IsDBNull(14) ? "[]" : reader.GetString(14), reader.IsDBNull(15) ? "" : reader.GetString(15), reader.IsDBNull(16) ? "[]" : reader.GetString(16)));
     }
     return apps;
 });
@@ -378,13 +384,13 @@ app.MapGet("/api/apps", () => {
 app.MapPost("/api/apps", (AppEntity a) => {
     using var conn = new SqliteConnection(DbPath); conn.Open();
     using var cmd = conn.CreateCommand();
-    cmd.CommandText = "INSERT OR REPLACE INTO apps_registry VALUES (@Id,@Name,@Type,@Icon,@Start,@Stop,@Status,@Auto,@CPath,@CKeys,@LPath,@SortOrder,@Ver,@Desc,@Custom,@Schema)";
+    cmd.CommandText = "INSERT OR REPLACE INTO apps_registry VALUES (@Id,@Name,@Type,@Icon,@Start,@Stop,@Status,@Auto,@CPath,@CKeys,@LPath,@SortOrder,@Ver,@Desc,@Custom,@Schema,@Files)";
     cmd.Parameters.AddWithValue("@Id", a.Id); cmd.Parameters.AddWithValue("@Name", a.Name); cmd.Parameters.AddWithValue("@Type", a.Type);
     cmd.Parameters.AddWithValue("@Icon", a.Icon ?? "box"); cmd.Parameters.AddWithValue("@Start", a.StartCommand); cmd.Parameters.AddWithValue("@Stop", a.StopCommand);
     cmd.Parameters.AddWithValue("@Status", a.StatusCommand); cmd.Parameters.AddWithValue("@Auto", a.IsAutoStart);
     cmd.Parameters.AddWithValue("@CPath", a.ConfigPath ?? ""); cmd.Parameters.AddWithValue("@CKeys", a.ConfigKeys ?? ""); cmd.Parameters.AddWithValue("@LPath", a.LogPath ?? "");
     cmd.Parameters.AddWithValue("@SortOrder", a.SortOrder); cmd.Parameters.AddWithValue("@Ver", a.Version ?? "0.0.1"); cmd.Parameters.AddWithValue("@Desc", a.Description ?? "");
-    cmd.Parameters.AddWithValue("@Custom", a.CustomCommands ?? "[]"); cmd.Parameters.AddWithValue("@Schema", a.ConfigSchema ?? "");
+    cmd.Parameters.AddWithValue("@Custom", a.CustomCommands ?? "[]"); cmd.Parameters.AddWithValue("@Schema", a.ConfigSchema ?? ""); cmd.Parameters.AddWithValue("@Files", a.Files ?? "[]");
     cmd.ExecuteNonQuery(); return Results.Ok(new { success = true });
 });
 
@@ -416,6 +422,55 @@ app.MapPost("/api/apps/{id}/control", (string id, string action) => {
     if (!reader.Read()) return Results.NotFound();
     var exec = action == "start" ? reader.GetString(0) : (action == "stop" ? reader.GetString(1) : $"{reader.GetString(1)};sleep 1;{reader.GetString(0)}");
     Process.Start("/bin/bash", $"-c \"{exec}\""); return Results.Ok(new { success = true });
+});
+
+// 从云端下载插件运行文件并校验 SHA256，写入 /data/softcenter/bin
+app.MapPost("/api/apps/{id}/install", async (string id) => {
+    using var conn = new SqliteConnection(DbPath); conn.Open();
+    using var cmd = conn.CreateCommand();
+    cmd.CommandText = "SELECT Files FROM apps_registry WHERE Id=@id";
+    cmd.Parameters.AddWithValue("@id", id);
+    var filesJson = cmd.ExecuteScalar()?.ToString();
+    if (string.IsNullOrWhiteSpace(filesJson)) return Results.Ok(new InstallResult(true, new List<string> { "无运行文件需要下载" }, null));
+
+    List<AppFileItem>? files;
+    try { files = JsonSerializer.Deserialize(filesJson, AppJsonContext.Default.ListAppFileItem); }
+    catch { return Results.BadRequest(new InstallResult(false, null, "Files JSON 无效")); }
+    if (files is null || files.Count == 0) return Results.Ok(new InstallResult(true, new List<string> { "无运行文件需要下载" }, null));
+
+    Directory.CreateDirectory(BinDir);
+    var logs = new List<string>();
+    var handler = new HttpClientHandler();
+    if (!string.IsNullOrWhiteSpace(sysConfig.LocalProxy))
+        handler.Proxy = new WebProxy(sysConfig.LocalProxy);
+    using var http = new HttpClient(handler) { Timeout = TimeSpan.FromMinutes(5) };
+
+    foreach (var f in files)
+    {
+        if (string.IsNullOrWhiteSpace(f.Name) || string.IsNullOrWhiteSpace(f.Path) || string.IsNullOrWhiteSpace(f.Sha256))
+            return Results.BadRequest(new InstallResult(false, logs, $"文件清单不完整: {f.Name}"));
+
+        var url = RepoRawBase + f.Path.TrimStart('/');
+        byte[] bytes;
+        try { bytes = await http.GetByteArrayAsync(url); }
+        catch (Exception ex) { return Results.BadRequest(new InstallResult(false, logs, $"下载失败 {f.Name}: {ex.Message}")); }
+
+        string hash;
+        using (var sha = SHA256.Create())
+            hash = Convert.ToHexString(sha.ComputeHash(bytes)).ToLowerInvariant();
+        if (!string.Equals(hash, f.Sha256.Trim().ToLowerInvariant(), StringComparison.Ordinal))
+        {
+            logs.Add($"校验失败 {f.Name}: 期望 {f.Sha256} 实际 {hash}");
+            return Results.BadRequest(new InstallResult(false, logs, $"SHA256 校验失败: {f.Name}"));
+        }
+
+        var dest = Path.Combine(BinDir, f.Name);
+        await File.WriteAllBytesAsync(dest, bytes);
+        var mode = string.IsNullOrWhiteSpace(f.Mode) ? "0755" : f.Mode;
+        Process.Start("/bin/bash", $"-c \"chmod {mode} {dest}\"")?.WaitForExit();
+        logs.Add($"已安装 {f.Name} → {dest} ({hash[..12]}…)");
+    }
+    return Results.Ok(new InstallResult(true, logs, null));
 });
 
 app.MapPost("/api/apps/{id}/custom_command", (string id, CustomCommandReq req) => {
@@ -689,7 +744,9 @@ app.MapGet("/api/system/upgrade/log", () => {
 app.Run($"http://0.0.0.0:{sysConfig.Port}");
 
 public record AppConfig { public int Port { get; set; } = 9958; public string AdminToken { get; set; } = "Your_Secret_Token_Here"; public string LocalProxy { get; set; } = ""; }
-public record AppEntity(string Id, string Name, string Type, string Icon, string StartCommand, string StopCommand, string StatusCommand, int IsAutoStart, bool IsRunning, string ConfigPath, string ConfigKeys, string LogPath, int SortOrder, string Version, string Description, string CustomCommands, string ConfigSchema = "");
+public record AppEntity(string Id, string Name, string Type, string Icon, string StartCommand, string StopCommand, string StatusCommand, int IsAutoStart, bool IsRunning, string ConfigPath, string ConfigKeys, string LogPath, int SortOrder, string Version, string Description, string CustomCommands, string ConfigSchema = "", string Files = "[]");
+public record AppFileItem(string Name, string Path, string Sha256, string Mode = "0755");
+public record InstallResult(bool Success, List<string>? Logs, string? Error);
 public record AppOrderReq(string Id, int SortOrder);
 public record CronEntity(string Id, string Name, string Schedule, string Command);
 public record CronRequest(string Schedule, string Command);
@@ -703,6 +760,8 @@ public record ConfigSaveResult(bool Success, Dictionary<string, string>? Errors,
 
 [JsonSerializable(typeof(AppConfig))]
 [JsonSerializable(typeof(AppEntity))]
+[JsonSerializable(typeof(AppFileItem))]
+[JsonSerializable(typeof(InstallResult))]
 [JsonSerializable(typeof(AppOrderReq))]
 [JsonSerializable(typeof(CronEntity))]
 [JsonSerializable(typeof(CronRequest))]
@@ -715,7 +774,9 @@ public record ConfigSaveResult(bool Success, Dictionary<string, string>? Errors,
 [JsonSerializable(typeof(Dictionary<string, ConfigItem>))]
 [JsonSerializable(typeof(Dictionary<string, string>))]
 [JsonSerializable(typeof(List<AppEntity>))]
+[JsonSerializable(typeof(List<AppFileItem>))]
 [JsonSerializable(typeof(List<AppOrderReq>))]
 [JsonSerializable(typeof(List<CronEntity>))]
 [JsonSerializable(typeof(IEnumerable<CronEntity>))]
+[JsonSerializable(typeof(List<string>))]
 internal partial class AppJsonContext : JsonSerializerContext { }

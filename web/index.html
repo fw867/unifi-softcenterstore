@@ -668,7 +668,7 @@
                 const addTab = ref('online');
                 const isFetchingStore = ref(false);
                 const onlineStore = ref([]);
-                const newApp = ref({ Id: '', Name: '', Type: 'Local', Icon: 'box', ConfigPath: '', ConfigKeys: '', ConfigSchema: '', LogPath: '', StartCommand: '', StopCommand: '', StatusCommand: '', IsAutoStart: 0, SortOrder: 999, Version: '1.0.0', Description: '', CustomCommands: '[]' });
+                const newApp = ref({ Id: '', Name: '', Type: 'Local', Icon: 'box', ConfigPath: '', ConfigKeys: '', ConfigSchema: '', Files: '[]', LogPath: '', StartCommand: '', StopCommand: '', StatusCommand: '', IsAutoStart: 0, SortOrder: 999, Version: '1.0.0', Description: '', CustomCommands: '[]' });
 
                 const logModalApp = ref(null);
                 const logContent = ref('');
@@ -879,6 +879,12 @@
                                 if (typeof raw === 'object') return raw;
                                 try { return JSON.parse(raw); } catch { return null; }
                             })(),
+                            files: (() => {
+                                const raw = i.files !== undefined ? i.files : i.Files;
+                                if (!raw) return [];
+                                if (Array.isArray(raw)) return raw;
+                                try { return JSON.parse(raw); } catch { return []; }
+                            })(),
                             logPath: i.logPath || i.LogPath || '', sortOrder: i.sortOrder !== undefined ? i.sortOrder : i.SortOrder,
                             version: i.version || i.Version || '1.0.0', description: i.description || i.Description || '',
                             customCommands: (() => { try { return JSON.parse(i.customCommands || i.CustomCommands || '[]'); } catch { return []; } })()
@@ -934,17 +940,36 @@
                             LogPath: onlineApp.LogPath || onlineApp.logPath || '', SortOrder: app.sortOrder,
                             Version: onlineApp.Version || onlineApp.version || '0.0.1', Description: onlineApp.Description || onlineApp.description || '',
                             CustomCommands: typeof onlineApp.CustomCommands === 'string' ? onlineApp.CustomCommands : (typeof onlineApp.customCommands === 'string' ? onlineApp.customCommands : JSON.stringify(onlineApp.CustomCommands || onlineApp.customCommands || [])),
-                            ConfigSchema: serializeSchema(onlineApp.ConfigSchema ?? onlineApp.configSchema)
+                            ConfigSchema: serializeSchema(onlineApp.ConfigSchema ?? onlineApp.configSchema),
+                            Files: serializeFiles(onlineApp.Files ?? onlineApp.files)
                         };
 
                         await callApi('/api/apps', 'POST', appData);
-                        alert(`🎉 "${app.name}" 的底层配置已成功同步为云端最新版本！`);
+                        const filesRaw = onlineApp.Files ?? onlineApp.files ?? [];
+                        const hasFiles = Array.isArray(filesRaw) ? filesRaw.length > 0 : !!filesRaw && filesRaw !== '[]';
+                        if (hasFiles) {
+                            const installRes = await callApi(`/api/apps/${app.id}/install`, 'POST');
+                            if (!installRes || installRes.success === false || installRes.Success === false) {
+                                const err = (installRes && (installRes.error || installRes.Error)) || '校验或写入失败';
+                                alert(`配置已同步，但运行文件更新失败：${err}`);
+                                loadRealApps();
+                                return;
+                            }
+                        }
+                        alert(`🎉 "${app.name}" 的底层配置与运行文件已同步为云端最新版本！`);
                         loadRealApps();
                     } catch (e) { alert('同步失败：无法连接到云端应用库网络。'); }
                 };
 
+                const serializeFiles = (f) => {
+                    if (!f) return '[]';
+                    if (typeof f === 'string') return f;
+                    try { return JSON.stringify(f); } catch { return '[]'; }
+                };
+
                 const installApp = async (p) => {
                     if (!p) return;
+                    const filesRaw = p.Files ?? p.files ?? [];
                     const appData = {
                         Id: p.Id || p.id, Name: p.Name || p.name, Type: p.Type || p.type || 'Local', Icon: p.Icon || p.icon || 'box',
                         StartCommand: p.StartCommand || p.startCommand, StopCommand: p.StopCommand || p.stopCommand,
@@ -953,12 +978,27 @@
                         LogPath: p.LogPath || p.logPath || '', SortOrder: p.SortOrder || apps.value.length,
                         Version: p.Version || p.version || '0.0.1', Description: p.Description || p.description || '',
                         CustomCommands: typeof p.CustomCommands === 'string' ? p.CustomCommands : (typeof p.customCommands === 'string' ? p.customCommands : JSON.stringify(p.CustomCommands || p.customCommands || [])),
-                        ConfigSchema: serializeSchema(p.ConfigSchema ?? p.configSchema)
+                        ConfigSchema: serializeSchema(p.ConfigSchema ?? p.configSchema),
+                        Files: serializeFiles(filesRaw)
                     };
                     if (!appData.Id || !appData.StartCommand) { alert('应用信息不完整'); return; }
-                    await callApi('/api/apps', 'POST', appData);
+                    const saved = await callApi('/api/apps', 'POST', appData);
+                    if (!saved) { alert('注册应用失败'); return; }
+
+                    const hasFiles = Array.isArray(filesRaw) ? filesRaw.length > 0 : !!filesRaw && filesRaw !== '[]';
+                    if (hasFiles) {
+                        const installRes = await callApi(`/api/apps/${appData.Id}/install`, 'POST');
+                        if (!installRes) { alert('插件文件下载失败'); return; }
+                        if (installRes.success === false || installRes.Success === false) {
+                            const err = installRes.error || installRes.Error || '校验或写入失败';
+                            const logs = installRes.logs || installRes.Logs || [];
+                            alert(`安装运行文件失败：${err}\n${logs.join('\n')}`);
+                            return;
+                        }
+                    }
                     showAddModal.value = false;
                     loadRealApps();
+                    alert(`"${appData.Name}" 安装完成`);
                 };
 
                 const deleteApp = async (app) => {

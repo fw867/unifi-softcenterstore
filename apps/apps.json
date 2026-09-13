@@ -6,13 +6,21 @@
         "Version": "1.2.0",
         "Description": "配置路由和光猫IP，完美解决内网和光猫互通问题。",
         "Icon": "router",
-        "StartCommand": "/data/bin/tomodem start",
-        "StopCommand": "/data/bin/tomodem stop",
+        "StartCommand": "/data/softcenter/bin/tomodem start",
+        "StopCommand": "/data/softcenter/bin/tomodem stop",
         "StatusCommand": "iptables -L FORWARD | grep -c \"softcenter:tomodem\" > /dev/null",
         "IsAutoStart": 1,
         "ConfigPath": "/data/softcenter/config/tomodem.env",
         "ConfigKeys": "",
         "LogPath": "/var/log/tomodem.log",
+        "Files": [
+            {
+                "Name": "tomodem",
+                "Path": "apps/tomodem/tomodem",
+                "Sha256": "1037407f1c18f0c238ef51bb6d3fe5eb2818971ee6a34f6e1ad0020c504e7eea",
+                "Mode": "0755"
+            }
+        ],
         "ConfigSchema": {
             "Sections": [
                 {
@@ -33,13 +41,34 @@
                             "Type": "select",
                             "Default": "eth0",
                             "Options": [
-                                { "Label": "eth0", "Value": "eth0" },
-                                { "Label": "eth1", "Value": "eth1" },
-                                { "Label": "eth2", "Value": "eth2" },
-                                { "Label": "eth3", "Value": "eth3" },
-                                { "Label": "eth4", "Value": "eth4" },
-                                { "Label": "eth5", "Value": "eth5" },
-                                { "Label": "eth6", "Value": "eth6" }
+                                {
+                                    "Label": "eth0",
+                                    "Value": "eth0"
+                                },
+                                {
+                                    "Label": "eth1",
+                                    "Value": "eth1"
+                                },
+                                {
+                                    "Label": "eth2",
+                                    "Value": "eth2"
+                                },
+                                {
+                                    "Label": "eth3",
+                                    "Value": "eth3"
+                                },
+                                {
+                                    "Label": "eth4",
+                                    "Value": "eth4"
+                                },
+                                {
+                                    "Label": "eth5",
+                                    "Value": "eth5"
+                                },
+                                {
+                                    "Label": "eth6",
+                                    "Value": "eth6"
+                                }
                             ],
                             "Help": "路由连接光猫的网口"
                         }
@@ -125,10 +154,22 @@
                             "Type": "select",
                             "Default": "gfw",
                             "Options": [
-                                { "Label": "GFW 名单", "Value": "gfw" },
-                                { "Label": "大陆白名单", "Value": "chn" },
-                                { "Label": "全局代理", "Value": "global" },
-                                { "Label": "不代理", "Value": "direct" }
+                                {
+                                    "Label": "GFW 名单",
+                                    "Value": "gfw"
+                                },
+                                {
+                                    "Label": "大陆白名单",
+                                    "Value": "chn"
+                                },
+                                {
+                                    "Label": "全局代理",
+                                    "Value": "global"
+                                },
+                                {
+                                    "Label": "不代理",
+                                    "Value": "direct"
+                                }
                             ]
                         },
                         {
@@ -155,62 +196,45 @@
         "Id": "wechat",
         "Name": "微信通知",
         "Type": "Shell Script",
-        "Version": "1.1.0",
-        "Description": "路由重新拨号后通过企业微信通知新IP。",
+        "Version": "1.2.0",
+        "Description": "路由重新拨号后通过企业微信机器人通知新IP。",
         "Icon": "message-circle",
-        "StartCommand": "/data/bin/wechat start",
-        "StopCommand": "/data/bin/wechat stop",
+        "StartCommand": "/data/softcenter/bin/wechat start",
+        "StopCommand": "/data/softcenter/bin/wechat stop",
         "StatusCommand": "[ -f \"/etc/ppp/ip-up.d/wechat\" ]",
         "IsAutoStart": 1,
         "ConfigPath": "/data/softcenter/config/wechat.env",
         "ConfigKeys": "",
         "LogPath": "/var/log/wechat.log",
+        "Files": [
+            {
+                "Name": "wechat",
+                "Path": "apps/wechat/wechat",
+                "Sha256": "28a310c052ceaa9a374c2e71c1c3786454ea925fd3dcb702860cbd968db88b7f",
+                "Mode": "0755"
+            }
+        ],
         "ConfigSchema": {
             "Sections": [
                 {
-                    "Title": "通知渠道",
+                    "Title": "企业微信机器人",
                     "Fields": [
                         {
-                            "Key": "wan_interface_name",
-                            "Label": "WAN 接口",
-                            "Type": "select",
-                            "Default": "eth0",
-                            "Options": [
-                                { "Label": "eth0", "Value": "eth0" },
-                                { "Label": "eth1", "Value": "eth1" },
-                                { "Label": "ppp0", "Value": "ppp0" }
-                            ]
-                        },
-                        {
-                            "Key": "corpid",
-                            "Label": "企业 ID",
-                            "Type": "text",
-                            "Default": "",
-                            "Required": true,
-                            "Placeholder": "ww 开头的企业微信 ID"
-                        },
-                        {
-                            "Key": "corpsecret",
-                            "Label": "应用 Secret",
+                            "Key": "WEBHOOK_KEY",
+                            "Label": "Webhook Key",
                             "Type": "password",
                             "Default": "",
                             "Required": true,
                             "Secret": true,
-                            "Help": "保存后写入 config.env，请勿泄露"
+                            "Help": "企业微信群机器人 webhook 的 key"
                         },
                         {
-                            "Key": "agentid",
-                            "Label": "AgentId",
-                            "Type": "number",
-                            "Default": "1000001",
-                            "Min": 1
-                        },
-                        {
-                            "Key": "touser",
-                            "Label": "接收人",
+                            "Key": "Routing_Remarks",
+                            "Label": "路由备注",
                             "Type": "text",
-                            "Default": "@all",
-                            "Help": "@all 或成员 userid，多个用 | 分隔"
+                            "Default": "",
+                            "Placeholder": "如：家宽 / 公司出口",
+                            "Help": "通知卡片标题前缀，可留空"
                         }
                     ]
                 }

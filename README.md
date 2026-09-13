@@ -62,16 +62,25 @@ CI/CD: GitHub Actions (ubuntu:20.04 容器交叉编译，目标 GLIBC 2.31，匹
 
 ```text
 /data/softcenter/
-├── bin/                        # 核心程序目录
+├── bin/                        # 插件运行文件目录（安装时下载校验写入）
 │   ├── SoftCenterManager      # 核心二进制守护进程 (Native AOT)
-│   └── libe_sqlite3.so        # 原生 SQLite 运行库
+│   ├── libe_sqlite3.so        # 原生 SQLite 运行库
+│   └── <app-id>               # 各插件 shell/二进制
 ├── on_boot.d/                  # SoftCenter 专属应用开机自启脚本目录
 ├── config.json                 # 面板端口与 Token 配置文件 (可在Web端修改)
 ├── config/                     # Schema 插件参数目录
 │   └── <app-id>.env           # 面板写入，脚本 source
-├── manager.db                  # 应用与 Cron 注册表数据库 (SQLite，含 ConfigSchema)
+├── manager.db                  # 应用与 Cron 注册表数据库 (SQLite，含 ConfigSchema/Files)
 └── web/                        # 静态 Web 资源
     └── index.html             # 前端单页应用 (Vue 3 + Schema FormRenderer)
+
+仓库侧插件源文件：
+apps/
+├── apps.json                   # 应用清单（含 ConfigSchema / Files+Sha256）
+├── tomodem/tomodem
+└── wechat/wechat
+
+修改插件脚本后执行：pwsh tools/hash-apps.ps1  （或 ./tools/hash-apps.sh）刷新 SHA256
 
 /data/on_boot.d/
 └── 99-softcenter.sh            # 系统的底层防丢钩子 (固件升级自愈核心)

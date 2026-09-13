@@ -1,0 +1,113 @@
+#!/bin/sh
+
+# UniFi SoftCenter · 微信通知
+# 面板配置：WEBHOOK_KEY、Routing_Remarks → /data/softcenter/config/wechat.env
+
+CONFIG="/data/softcenter/config/wechat.env"
+[ -f "$CONFIG" ] && . "$CONFIG"
+
+# 企业微信机器人 Key（必填）
+WEBHOOK_KEY="${WEBHOOK_KEY:-}"
+# 通知标题前缀备注（可选，如 路由器 / 家宽）
+Routing_Remarks="${Routing_Remarks:-}"
+
+# WAN口名称由钩子传入
+wan_interface_name=$2
+
+log_date() {
+    local msg="$1"
+    echo "【$(date '+%Y年%m月%d日 %H:%M:%S')】: $msg" >> /var/log/wechat.log
+}
+
+send_wechat(){
+    if [ -z "$WEBHOOK_KEY" ]; then
+        echo "错误，未配置 WEBHOOK_KEY，请在软件中心保存微信通知配置！"
+        log_date "错误，未配置 WEBHOOK_KEY"
+        exit 1
+    fi
+
+    if [ -z "$wan_interface_name" ]; then
+        echo "错误，未传递 Wan 口名称！"
+        log_date "错误，未传递 Wan 口名称，请使用如 wechat update ppp0 格式运行！"
+        exit 1
+    fi
+
+    # UDM 适配版的 IP 获取方式
+    wan_interface_external_ip=$(ip -4 addr show dev "$wan_interface_name" 2>/dev/null | awk '/inet/ {print $2}' | cut -d/ -f1)
+
+    if [ -z "$wan_interface_external_ip" ]; then
+        echo "错误，未获取到 $wan_interface_name 口IP地址！"
+        log_date "错误，未获取到 $wan_interface_name 口IP地址！"
+        exit 1
+    fi
+    log_date "重连端口：$wan_interface_name IP地址：$wan_interface_external_ip"
+
+    CURRENT_TIME=$(date '+%Y-%m-%d %H:%M:%S')
+    
+    # 巧妙利用换行符 \n 和特殊的符号实现类似列表的对齐效果
+    # 并在 picurl 中加入了一张默认的科技/网络主题背景图
+    JSON_PAYLOAD=$(cat <<EOF
+{
+    "msgtype": "news",
+    "news": {
+        "articles": [
+            {
+                "title": "🌐$Routing_Remarks WAN口重新拨号",
+                "description": "最新IP地址：$wan_interface_external_ip\n\n🔹 拨号接口：$wan_interface_name\n🔹 最新外网：$wan_interface_external_ip\n🔹 更新时间：$CURRENT_TIME\n\n💡 点击本卡片可直接登录路由器后台",
+                "url": "http://192.168.1.1",
+                "picurl": "https://images.svc.ui.com/?u=https%3A%2F%2Fcdn.ecomm.ui.com%2Fproducts%2F48cf74fa-0456-4c5f-bbcc-c1a1ffdc11f9%2F6c630939-0717-4f9b-aa9c-3a39dbf26458.png&q=75&w=1080"
+            }
+        ]
+    }
+}
+EOF
+)
+
+    # 纯正的 Webhook 机器人接口
+    WeChat_notification=$(curl -s "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=$WEBHOOK_KEY" \
+      -H 'Content-Type: application/json' \
+      -d "$JSON_PAYLOAD")
+
+    if echo "$WeChat_notification" | grep -q '"errcode":0'; then
+        log_date "Wan口IP机器人图文卡片发送成功！"    
+    else
+        log_date "错误，微信机器人发送失败！"
+        log_date "API返回详情: ${WeChat_notification}"
+    fi
+}
+
+set_autostart(){
+    mkdir -p /etc/ppp/ip-up.d
+    
+    cat > /etc/ppp/ip-up.d/wechat << "END"
+#!/bin/sh
+/data/softcenter/bin/wechat update "$PPP_IFACE"
+END
+    chmod a+x /etc/ppp/ip-up.d/wechat
+    log_date "设置系统服务成功！" 
+}
+
+stop_wechat(){
+    if [ -f "/etc/ppp/ip-up.d/wechat" ]; then
+        rm -f /etc/ppp/ip-up.d/wechat
+        log_date "删除系统服务成功！" 
+    else
+        log_date "未发现系统服务，无需删除。"
+    fi
+}
+
+case ${1} in
+start)
+    set_autostart
+    ;;
+update)
+    send_wechat
+    ;;
+stop)
+    stop_wechat
+    ;;
+*)
+    echo "用法: $0 {start|update|stop} [接口名称]"
+    exit 1
+    ;;
+esac

@@ -1,0 +1,41 @@
+name: Update App File Hashes
+
+on:
+  push:
+    branches:
+      - master
+      - main
+    paths:
+      - 'apps/**'
+      - '!apps/apps.json'
+      - 'tools/hash-apps.sh'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  refresh-hashes:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Recompute SHA256 for plugin files
+        run: |
+          chmod +x tools/hash-apps.sh
+          ./tools/hash-apps.sh
+
+      - name: Commit updated apps.json
+        run: |
+          if git diff --quiet -- apps/apps.json; then
+            echo "apps.json 无变化，跳过提交"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add apps/apps.json
+          git commit -m "chore: 自动刷新插件文件 SHA256 [skip ci]"
+          git push

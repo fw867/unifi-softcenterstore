@@ -1,0 +1,96 @@
+#!/bin/sh
+
+# UniFi SoftCenter · 光猫助手
+# 面板配置：tomodem_ip、tomodem_eth → /data/softcenter/config/tomodem.env
+
+CONFIG="/data/softcenter/config/tomodem.env"
+[ -f "$CONFIG" ] && . "$CONFIG"
+
+# 光猫 IP
+tomodem_ip="${tomodem_ip:-192.168.11.1}"
+# 路由连接光猫的网卡
+tomodem_eth="${tomodem_eth:-eth4}"
+
+# 由光猫 IP 自动推算：路由侧地址 / 广播地址
+ethip1=$(echo "$tomodem_ip" | awk -F. '{print $1"."$2"."$3".2"}')
+ethip2=$(echo "$tomodem_ip" | awk -F. '{print $1"."$2"."$3".255"}')
+
+log_date() {
+	echo "【$(date +%Y年%m月%d日\ %X)】: $1" >> /var/log/tomodem.log
+}
+
+set_eth() {
+	local runstatus
+	runstatus=$(ifconfig "$tomodem_eth" 2>/dev/null | grep "$tomodem_ip")
+	[ -n "$runstatus" ] || {
+		ifconfig "$tomodem_eth" "$ethip1" netmask 255.255.255.0 broadcast "$ethip2" >/dev/null 2>&1
+		log_date "PPPOE重新拨号，添加网口IP"
+	}
+}
+
+set_autostart() {
+	log_date "系统启动，添加系统服务"
+	[ -f "/etc/ppp/ip-up.d/tomodem" ] || {
+		cat > /etc/ppp/ip-up.d/tomodem << "END"
+#!/bin/sh
+
+/data/softcenter/bin/tomodem up
+END
+		chmod a+x /etc/ppp/ip-up.d/tomodem
+		log_date "系统服务添加成功！"
+	}
+}
+
+set_forwarding() {
+	iptables -I FORWARD -d "$tomodem_ip" -m comment --comment "softcenter:tomodem" -j ACCEPT >/dev/null 2>&1
+	iptables -t nat -I POSTROUTING -d "$tomodem_ip" -m comment --comment "softcenter:tomodem" -j MASQUERADE >/dev/null 2>&1
+	log_date "防火墙规则添加成功！"
+}
+
+clean_nat() {
+	forwarding_exist=$(iptables -L FORWARD | grep -c "softcenter:tomodem")
+	if [ -n "$forwarding_exist" ]; then
+		until [ "$forwarding_exist" = 0 ]; do
+			relay_nu=$(iptables -L FORWARD -v -n --line-numbers | grep "softcenter:tomodem" | awk '{print $1}' | head -1)
+			[ -n "$relay_nu" ] && iptables -D FORWARD "$relay_nu" >/dev/null 2>&1
+			forwarding_exist=$(expr "$forwarding_exist" - 1)
+		done
+	fi
+	postrouting_exist=$(iptables -t nat -L POSTROUTING | grep -c "softcenter:tomodem")
+	if [ -n "$postrouting_exist" ]; then
+		until [ "$postrouting_exist" = 0 ]; do
+			relay1_nu=$(iptables -t nat -L POSTROUTING -v -n --line-numbers | grep "softcenter:tomodem" | awk '{print $1}' | head -1)
+			[ -n "$relay1_nu" ] && iptables -t nat -D POSTROUTING "$relay1_nu" >/dev/null 2>&1
+			postrouting_exist=$(expr "$postrouting_exist" - 1)
+		done
+	fi
+	ip -f inet addr delete "$ethip1/24" dev "$tomodem_eth" >/dev/null 2>&1
+	[ -f "/etc/ppp/ip-up.d/tomodem" ] && rm -rf /etc/ppp/ip-up.d/tomodem
+	log_date "系统服务清理完成！"
+}
+
+start_tomodem() {
+	set_eth
+	set_forwarding
+	set_autostart
+}
+
+stop_tomodem() {
+	clean_nat
+}
+
+case ${1} in
+start)
+	start_tomodem
+	;;
+up)
+	set_eth
+	;;
+stop)
+	stop_tomodem
+	;;
+*)
+	echo "Usage: $0 {start|stop|up}"
+	exit 1
+	;;
+esac
