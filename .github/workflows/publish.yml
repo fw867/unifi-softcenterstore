@@ -21,18 +21,23 @@ jobs:
       env:
         DEBIAN_FRONTEND: noninteractive
       run: |
-        # Debian 11 (bullseye) 已 EOL：deb.debian.org 包 404，
-        # archive.debian.org 也没有 bullseye-security Release。
-        # CI 只需 main 里的交叉编译工具，去掉 security 源即可。
+        # Debian 11 已 EOL：live 源 404，archive 源又与镜像内已装包版本不一致。
+        # 用 snapshot 固定一套完整源；只装 amd64 交叉工具，不再 add-architecture arm64，
+        # 避免 multiarch 依赖地狱。AOT 由 ILCompiler + clang -target aarch64 完成。
+        SNAP=20240701T000000Z
         printf '%s\n' \
-          'deb http://archive.debian.org/debian bullseye main' \
-          'deb http://archive.debian.org/debian bullseye-updates main' \
+          "deb http://snapshot.debian.org/archive/debian/${SNAP} bullseye main" \
+          "deb http://snapshot.debian.org/archive/debian/${SNAP} bullseye-updates main" \
+          "deb http://snapshot.debian.org/archive/debian-security/${SNAP} bullseye-security main" \
           > /etc/apt/sources.list
         rm -rf /var/lib/apt/lists/*
-        printf 'Acquire::Check-Valid-Until "false";\nAcquire::Retries "3";\n' > /etc/apt/apt.conf.d/99ci-apt
-        dpkg --add-architecture arm64
+        printf 'Acquire::Check-Valid-Until "false";\nAcquire::Retries "5";\nAcquire::http::Pipeline-Depth "0";\n' \
+          > /etc/apt/apt.conf.d/99ci-apt
         apt-get update
-        apt-get install -y git curl zip unzip clang gcc gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu zlib1g-dev:arm64 ca-certificates libicu-dev
+        apt-get install -y --no-install-recommends \
+          git curl zip unzip ca-certificates \
+          clang zlib1g-dev \
+          gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu
 
     - name: Checkout Code
       uses: actions/checkout@v4
