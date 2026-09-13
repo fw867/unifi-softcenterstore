@@ -3,7 +3,7 @@
         "Id": "tomodem",
         "Name": "光猫助手",
         "Type": "Shell Script",
-        "Version": "1.1.0",
+        "Version": "1.2.0",
         "Description": "配置路由和光猫IP，完美解决内网和光猫互通问题。",
         "Icon": "router",
         "StartCommand": "/data/bin/tomodem start",
@@ -16,7 +16,7 @@
         "ConfigSchema": {
             "Sections": [
                 {
-                    "Title": "网络基础",
+                    "Title": "基础配置",
                     "Fields": [
                         {
                             "Key": "tomodem_ip",
@@ -25,7 +25,7 @@
                             "Default": "192.168.1.1",
                             "Placeholder": "192.168.1.1",
                             "Required": true,
-                            "Help": "光猫后台地址，通常为 192.168.1.1"
+                            "Help": "光猫后台地址"
                         },
                         {
                             "Key": "tomodem_eth",
@@ -33,48 +33,15 @@
                             "Type": "select",
                             "Default": "eth0",
                             "Options": [
-                                { "Label": "LAN1 (eth0)", "Value": "eth0" },
-                                { "Label": "LAN2 (eth1)", "Value": "eth1" },
-                                { "Label": "SFP+ (eth2)", "Value": "eth2" }
+                                { "Label": "eth0", "Value": "eth0" },
+                                { "Label": "eth1", "Value": "eth1" },
+                                { "Label": "eth2", "Value": "eth2" },
+                                { "Label": "eth3", "Value": "eth3" },
+                                { "Label": "eth4", "Value": "eth4" },
+                                { "Label": "eth5", "Value": "eth5" },
+                                { "Label": "eth6", "Value": "eth6" }
                             ],
-                            "Help": "连接光猫或内网交换的网口"
-                        },
-                        {
-                            "Key": "ethip1",
-                            "Label": "路由侧地址段",
-                            "Type": "text",
-                            "Default": "192.168.1.2",
-                            "Placeholder": "192.168.1.2",
-                            "Help": "路由在光猫网段的临时地址"
-                        },
-                        {
-                            "Key": "ethip2",
-                            "Label": "放行目标地址",
-                            "Type": "text",
-                            "Default": "192.168.1.1",
-                            "Placeholder": "192.168.1.1",
-                            "Help": "需要互通的光猫 IP"
-                        }
-                    ]
-                },
-                {
-                    "Title": "行为选项",
-                    "Fields": [
-                        {
-                            "Key": "auto_fix",
-                            "Label": "拨号后自动放行",
-                            "Type": "switch",
-                            "Default": "1",
-                            "Help": "WAN 重拨后自动重新写入 iptables 规则"
-                        },
-                        {
-                            "Key": "retry_count",
-                            "Label": "重试次数",
-                            "Type": "number",
-                            "Default": "3",
-                            "Min": 1,
-                            "Max": 10,
-                            "Help": "探测失败时的最大重试次数"
+                            "Help": "路由连接光猫的网口"
                         }
                     ]
                 }
