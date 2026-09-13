@@ -21,7 +21,13 @@ jobs:
       env:
         DEBIAN_FRONTEND: noninteractive
       run: |
-        # debian:11 security 源的 Valid-Until 过期会导致 apt update 失败
+        # Debian 11 (bullseye) 已 EOL，官方镜像里的 deb.debian.org 源会 404
+        # 统一切到 archive.debian.org，并关闭 Valid-Until 校验
+        printf '%s\n' \
+          'deb http://archive.debian.org/debian bullseye main' \
+          'deb http://archive.debian.org/debian-security bullseye-security main' \
+          'deb http://archive.debian.org/debian bullseye-updates main' \
+          > /etc/apt/sources.list
         rm -rf /var/lib/apt/lists/*
         printf 'Acquire::Check-Valid-Until "false";\nAcquire::Retries "3";\n' > /etc/apt/apt.conf.d/99ci-apt
         dpkg --add-architecture arm64
