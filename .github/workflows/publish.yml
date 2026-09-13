@@ -12,7 +12,7 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
-    container: debian:12
+    container: debian:11
     env:
       DOTNET_SYSTEM_GLOBALIZATION_INVARIANT: 1
 
@@ -21,16 +21,24 @@ jobs:
       env:
         DEBIAN_FRONTEND: noninteractive
       run: |
-        # debian:12 (bookworm) 仍在 live 源维护
-        # Native AOT 交叉链接需要 arm64 的 crt/libc（Scrt1.o 等），用 *-cross 包而非 multiarch
+        # UCG-Fiber 底层是 GLIBC 2.31，必须用 debian:11 工具链链接
+        # live/archive 源与镜像内已装包版本经常对不上，改用较新的 snapshot 固定版本
+        # 不开 arm64 multiarch，用 libc6-dev-arm64-cross 提供 Scrt1.o 等 crt
+        SNAP=20251201T000000Z
+        printf '%s\n' \
+          "deb http://snapshot.debian.org/archive/debian/${SNAP} bullseye main" \
+          "deb http://snapshot.debian.org/archive/debian/${SNAP} bullseye-updates main" \
+          "deb http://snapshot.debian.org/archive/debian-security/${SNAP} bullseye-security main" \
+          > /etc/apt/sources.list
         rm -rf /var/lib/apt/lists/*
-        printf 'Acquire::Retries "3";\n' > /etc/apt/apt.conf.d/99ci-apt
+        printf 'Acquire::Check-Valid-Until "false";\nAcquire::Retries "5";\nAcquire::http::Pipeline-Depth "0";\n' \
+          > /etc/apt/apt.conf.d/99ci-apt
         apt-get update
         apt-get install -y --no-install-recommends \
           git curl zip unzip ca-certificates \
           clang zlib1g-dev \
           gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu \
-          libc6-dev-arm64-cross libgcc-12-dev-arm64-cross
+          libc6-dev-arm64-cross
 
     - name: Checkout Code
       uses: actions/checkout@v4
