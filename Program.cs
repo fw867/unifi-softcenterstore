@@ -333,23 +333,83 @@ static string EnvQuote(string value)
 
 static string NormalizeSwitch(string value) => value is "true" or "True" or "TRUE" ? "1" : value is "false" or "False" or "FALSE" ? "0" : value;
 
+// 多行文本在 env 中存为单行 b64:...，读写时还原
+static string EncodeEnvValue(string value)
+{
+    if (string.IsNullOrEmpty(value)) return "";
+    if (value.Contains('\n') || value.Contains('\r'))
+        return "b64:" + Convert.ToBase64String(Encoding.UTF8.GetBytes(value));
+    return value;
+}
+
+static string DecodeEnvValue(string value)
+{
+    if (!string.IsNullOrEmpty(value) && value.StartsWith("b64:", StringComparison.Ordinal))
+    {
+        try { return Encoding.UTF8.GetString(Convert.FromBase64String(value[4..])); }
+        catch { return value; }
+    }
+    return value;
+}
+
+static Dictionary<string, string> DecodeEnvDict(Dictionary<string, string> dict)
+{
+    var outDict = new Dictionary<string, string>(dict.Count);
+    foreach (var kv in dict) outDict[kv.Key] = DecodeEnvValue(kv.Value);
+    return outDict;
+}
+
 static Dictionary<string, string> ReadEnvFile(string path)
 {
     var dict = new Dictionary<string, string>();
     if (!File.Exists(path)) return dict;
-    foreach (var raw in File.ReadAllLines(path))
+    var text = File.ReadAllText(path);
+    var i = 0;
+    var n = text.Length;
+    while (i < n)
     {
-        var line = raw.Trim();
-        if (line.Length == 0 || line.StartsWith('#')) continue;
-        var idx = line.IndexOf('=');
-        if (idx <= 0) continue;
-        var key = line[..idx].Trim();
-        var val = line[(idx + 1)..].Trim();
-        if (val.Length >= 2 && val[0] == '\'' && val[^1] == '\'')
-            val = val[1..^1].Replace("'\\''", "'");
-        else if (val.Length >= 2 && val[0] == '"' && val[^1] == '"')
-            val = val[1..^1];
-        dict[key] = val;
+        while (i < n && (text[i] == '\n' || text[i] == '\r')) i++;
+        if (i >= n) break;
+        if (text[i] == '#')
+        {
+            while (i < n && text[i] != '\n') i++;
+            continue;
+        }
+        var eq = text.IndexOf('=', i);
+        if (eq < 0) break;
+        var key = text[i..eq].Trim();
+        i = eq + 1;
+        if (i < n && text[i] == '\'')
+        {
+            i++;
+            var sb = new StringBuilder();
+            while (i < n)
+            {
+                if (text[i] == '\\' && i + 1 < n && text[i + 1] == '\'')
+                {
+                    sb.Append('\'');
+                    i += 2;
+                    continue;
+                }
+                if (text[i] == '\'')
+                {
+                    i++;
+                    break;
+                }
+                sb.Append(text[i]);
+                i++;
+            }
+            dict[key] = sb.ToString();
+        }
+        else
+        {
+            var start = i;
+            while (i < n && text[i] != '\n' && text[i] != '\r') i++;
+            var val = text[start..i].Trim();
+            if (val.Length >= 2 && val[0] == '"' && val[^1] == '"')
+                val = val[1..^1];
+            dict[key] = val;
+        }
     }
     return dict;
 }
@@ -526,7 +586,7 @@ app.MapGet("/api/apps/{id}/config", (string id) => {
         var envPath = AppEnvPath(id);
         if (File.Exists(envPath))
         {
-            foreach (var kv in ReadEnvFile(envPath)) values[kv.Key] = kv.Value;
+            foreach (var kv in DecodeEnvDict(ReadEnvFile(envPath))) values[kv.Key] = kv.Value;
         }
         JsonNode? schemaNode = null;
         try { schemaNode = JsonNode.Parse(schemaJson); } catch { }
@@ -617,7 +677,7 @@ app.MapPost("/api/apps/{id}/config", async (string id, Dictionary<string, string
                 var key = JsonGetString(field, "Key");
                 if (string.IsNullOrEmpty(key)) continue;
                 normalized.TryGetValue(key, out var val);
-                sb.AppendLine($"{key}={EnvQuote(val ?? "")}");
+                sb.AppendLine($"{key}={EnvQuote(EncodeEnvValue(val ?? ""))}");
             }
             foreach (var kv in normalized)
             {
@@ -626,7 +686,7 @@ app.MapPost("/api/apps/{id}/config", async (string id, Dictionary<string, string
                 {
                     if (JsonGetString(field, "Key") == kv.Key) { known = true; break; }
                 }
-                if (!known) sb.AppendLine($"{kv.Key}={EnvQuote(kv.Value)}");
+                if (!known) sb.AppendLine($"{kv.Key}={EnvQuote(EncodeEnvValue(kv.Value))}");
             }
             await File.WriteAllTextAsync(envPath, sb.ToString());
             return Results.Ok(new ConfigSaveResult(true, null, envPath));

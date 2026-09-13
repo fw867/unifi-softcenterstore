@@ -80,18 +80,38 @@
     {
         "Id": "koolss",
         "Name": "V2Ray",
-        "Type": "Binary Core",
-        "Version": "1.0.1",
+        "Type": "Shell Script",
+        "Version": "1.1.0",
         "Description": "V2ray代理，支持GFWList、大陆白名单，游戏、全局模式。",
         "Icon": "shield-check",
-        "StartCommand": "systemctl start koolss",
-        "StopCommand": "systemctl stop koolss",
-        "StatusCommand": "systemctl is-active --quiet koolss",
+        "StartCommand": "/data/softcenter/bin/koolss start",
+        "StopCommand": "/data/softcenter/bin/koolss stop",
+        "StatusCommand": "/data/softcenter/bin/koolss status",
         "IsAutoStart": 1,
         "ConfigPath": "/data/softcenter/config/koolss.env",
         "ConfigKeys": "",
         "LogPath": "/var/log/koolss.log",
-        "CustomCommands": "[{\"name\":\"升级xray\",\"command\":\"/data/bin/ssup\"},{\"name\":\"更新规则\",\"command\":\"/data/bin/ssrule\"}]",
+        "CustomCommands": "[{\"name\":\"升级xray\",\"command\":\"/data/softcenter/bin/ssup\"},{\"name\":\"更新规则\",\"command\":\"/data/softcenter/bin/ssrule\"}]",
+        "Files": [
+            {
+                "Name": "koolss",
+                "Path": "apps/koolss/koolss",
+                "Sha256": "34b48f082e2254a0e4155c32625e13b96b63b8c69c87f4b8052986970a6ffc1c",
+                "Mode": "0755"
+            },
+            {
+                "Name": "ssup",
+                "Path": "apps/koolss/ssup",
+                "Sha256": "6529fdb64cb0beca391a71b44a99b4268ea5dcc9adf4787b3d29e056488b2137",
+                "Mode": "0755"
+            },
+            {
+                "Name": "ssrule",
+                "Path": "apps/koolss/ssrule",
+                "Sha256": "de221ee801c2ec0202b10aa640d36555e41534c89acf330ab3fe14056ba94841",
+                "Mode": "0755"
+            }
+        ],
         "ConfigSchema": {
             "Sections": [
                 {
@@ -99,26 +119,58 @@
                     "Fields": [
                         {
                             "Key": "V2RAY_CONFIG_FILE",
-                            "Label": "配置文件路径",
-                            "Type": "path",
-                            "Default": "/data/koolss/config.json",
-                            "Monospace": true,
-                            "Help": "V2Ray / Xray 主配置文件"
-                        },
-                        {
-                            "Key": "v2ray_udp",
-                            "Label": "启用 UDP 转发",
-                            "Type": "switch",
-                            "Default": "1"
-                        },
-                        {
-                            "Key": "v2ray_udp_list",
-                            "Label": "UDP 端口列表",
-                            "Type": "text",
+                            "Label": "V2Ray 配置",
+                            "Type": "textarea",
                             "Default": "",
-                            "Placeholder": "如 1:65535 或留空",
-                            "VisibleWhen": "v2ray_udp=1",
-                            "Help": "需要转发的 UDP 端口范围"
+                            "Rows": 12,
+                            "Monospace": true,
+                            "Required": true,
+                            "Placeholder": "粘贴完整的 Xray / V2Ray JSON 配置",
+                            "Help": "多行内容会以 base64 存入 config.env，启动时解码到 /tmp/xray.json"
+                        },
+                        {
+                            "Key": "v2ray_acl_default_mode",
+                            "Label": "默认代理模式",
+                            "Type": "select",
+                            "Default": "1",
+                            "Options": [
+                                {
+                                    "Label": "不代理",
+                                    "Value": "0"
+                                },
+                                {
+                                    "Label": "GFWList",
+                                    "Value": "1"
+                                },
+                                {
+                                    "Label": "国内白名单",
+                                    "Value": "2"
+                                },
+                                {
+                                    "Label": "游戏模式",
+                                    "Value": "3"
+                                },
+                                {
+                                    "Label": "全局代理",
+                                    "Value": "4"
+                                }
+                            ]
+                        },
+                        {
+                            "Key": "v2ray_bypass",
+                            "Label": "国内白名单方式",
+                            "Type": "select",
+                            "Default": "2",
+                            "Options": [
+                                {
+                                    "Label": "chnroute 列表",
+                                    "Value": "1"
+                                },
+                                {
+                                    "Label": "GeoIP",
+                                    "Value": "2"
+                                }
+                            ]
                         }
                     ]
                 },
@@ -135,57 +187,78 @@
                             "Key": "ISP_DNS2",
                             "Label": "运营商 DNS 2",
                             "Type": "ip",
-                            "Default": "119.29.29.29"
+                            "Default": "114.114.114.114"
                         },
                         {
                             "Key": "v2ray_basic_dns_chromecast",
-                            "Label": "Chromecast DNS 分流",
+                            "Label": "DNS 劫持",
                             "Type": "switch",
-                            "Default": "0"
+                            "Default": "1",
+                            "Help": "强制局域网设备使用路由器 DNS"
                         }
                     ]
                 },
                 {
-                    "Title": "分流模式",
+                    "Title": "域名名单",
                     "Fields": [
                         {
-                            "Key": "v2ray_acl_default_mode",
-                            "Label": "默认代理模式",
-                            "Type": "select",
-                            "Default": "gfw",
-                            "Options": [
-                                {
-                                    "Label": "GFW 名单",
-                                    "Value": "gfw"
-                                },
-                                {
-                                    "Label": "大陆白名单",
-                                    "Value": "chn"
-                                },
-                                {
-                                    "Label": "全局代理",
-                                    "Value": "global"
-                                },
-                                {
-                                    "Label": "不代理",
-                                    "Value": "direct"
-                                }
-                            ]
-                        },
-                        {
-                            "Key": "v2ray_bypass",
-                            "Label": "直连域名/IP",
+                            "Key": "white_domain_list",
+                            "Label": "域名白名单",
                             "Type": "textarea",
                             "Default": "",
-                            "Rows": 4,
+                            "Rows": 8,
                             "Monospace": true,
-                            "Placeholder": "每行一条，支持域名或 CIDR"
+                            "Placeholder": "每行一个域名，# 开头为注释",
+                            "Help": "直连并走运营商 DNS，写入 white_list ipset"
+                        },
+                        {
+                            "Key": "black_domain_list",
+                            "Label": "域名黑名单",
+                            "Type": "textarea",
+                            "Default": "",
+                            "Rows": 8,
+                            "Monospace": true,
+                            "Placeholder": "每行一个域名，# 开头为注释",
+                            "Help": "走本地防污染 DNS，写入 black_list ipset"
+                        }
+                    ]
+                },
+                {
+                    "Title": "UDP 与 QUIC",
+                    "Fields": [
+                        {
+                            "Key": "v2ray_udp",
+                            "Label": "UDP 代理",
+                            "Type": "switch",
+                            "Default": "0"
+                        },
+                        {
+                            "Key": "v2ray_udp_list",
+                            "Label": "UDP 名单模式",
+                            "Type": "switch",
+                            "Default": "0",
+                            "VisibleWhen": "v2ray_udp=1",
+                            "Help": "udplist 内域名走游戏模式处理 UDP"
                         },
                         {
                             "Key": "v2ray_quic_reject",
-                            "Label": "拦截 QUIC",
-                            "Type": "switch",
-                            "Default": "0"
+                            "Label": "QUIC 阻断",
+                            "Type": "select",
+                            "Default": "0",
+                            "Options": [
+                                {
+                                    "Label": "关闭",
+                                    "Value": "0"
+                                },
+                                {
+                                    "Label": "全局阻断",
+                                    "Value": "1"
+                                },
+                                {
+                                    "Label": "仅黑名单",
+                                    "Value": "2"
+                                }
+                            ]
                         }
                     ]
                 }

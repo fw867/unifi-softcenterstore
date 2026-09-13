@@ -1,0 +1,621 @@
+#!/bin/sh
+
+# UniFi SoftCenter · Koolss / Xray
+# 面板配置：/data/softcenter/config/koolss.env
+# V2RAY_CONFIG_FILE 为配置 JSON 全文，启动时写入固定路径
+
+CONFIG="/data/softcenter/config/koolss.env"
+[ -f "$CONFIG" ] && . "$CONFIG"
+
+# Xray 实际使用的配置文件（由面板内容生成）
+XRAY_JSON_PATH="/tmp/xray.json"
+# 面板粘贴的完整 JSON（多行时 env 中为 b64: 编码）
+V2RAY_CONFIG_FILE="${V2RAY_CONFIG_FILE:-}"
+
+decode_config() {
+    # b64:xxx → 多行写入 /tmp/xray.json；否则原样写入
+    case "$V2RAY_CONFIG_FILE" in
+        b64:*)
+            echo "${V2RAY_CONFIG_FILE#b64:}" | base64 -d > "$XRAY_JSON_PATH" 2>/dev/null
+            ;;
+        *)
+            printf '%s\n' "$V2RAY_CONFIG_FILE" > "$XRAY_JSON_PATH"
+            ;;
+    esac
+}
+# 进程锁定文件路径
+LOCK_FILE='/var/lock/xray.lock'
+# 日志文件路径
+LOG_FILE='/tmp/xray_log.txt'
+# 运营商DNS 1
+ISP_DNS1="${ISP_DNS1:-223.5.5.5}"
+# 运营商DNS 2
+ISP_DNS2="${ISP_DNS2:-114.114.114.114}"
+# 内网网卡名
+LAN_IF="br0"
+# 国内白名单模式：1.chnroute 2.geoip
+v2ray_bypass="${v2ray_bypass:-2}"
+# 主模式：0.不代理 1.GFWList 2.国内白名单 3.游戏模式 4.全局
+v2ray_acl_default_mode="${v2ray_acl_default_mode:-1}"
+# dns劫持：0.关闭 1.开启
+v2ray_basic_dns_chromecast="${v2ray_basic_dns_chromecast:-1}"
+# QUIC阻断：0.关闭 1.全局 2.仅黑名单
+v2ray_quic_reject="${v2ray_quic_reject:-0}"
+# UDP名单功能：0.关闭 1.开启
+v2ray_udp_list="${v2ray_udp_list:-0}"
+# UDP代理：0.关闭 1.开启
+v2ray_udp="${v2ray_udp:-0}"
+# 域名白名单 / 黑名单（多行，env 中可能为 b64:）
+white_domain_list="${white_domain_list:-}"
+black_domain_list="${black_domain_list:-}"
+
+decode_b64() {
+    case "$1" in
+        b64:*) echo "${1#b64:}" | base64 -d 2>/dev/null ;;
+        *) [ -n "$1" ] && printf '%s\n' "$1" ;;
+    esac
+}
+
+WHITE_DOMAIN_LIST=$(decode_b64 "$white_domain_list")
+BLACK_DOMAIN_LIST=$(decode_b64 "$black_domain_list")
+
+# 将域名列表写成临时文件（每行一个，忽略空行与 # 注释）
+write_domain_file() {
+    # $1=变量内容 $2=输出路径
+    printf '%s\n' "$1" | awk '{
+        gsub(/\r/, "")
+        if ($0 != "" && $0 !~ /^#/) print
+    }' > "$2"
+}
+
+# SoftCenter 安装路径
+XRAY_BIN="/data/softcenter/bin/xray"
+KOOLSS_BIN="/data/softcenter/bin/koolss"
+# 获取局域网 IP 地址
+lan_ipaddr=$(ifconfig $LAN_IF | grep 'inet ' | awk '{print $2}' | cut -d: -f2)
+
+log_date() {
+    local msg="$1"
+    echo "【$(date '+%Y年%m月%d日 %X')】: $msg"
+}
+
+if [ -z "${V2RAY_CONFIG_FILE}" ]; then
+    log_date "未配置 V2Ray 配置内容，请在软件中心粘贴配置 JSON"
+    exit 1
+fi
+decode_config
+if [ ! -s "${XRAY_JSON_PATH}" ]; then
+    log_date "写入配置文件失败: ${XRAY_JSON_PATH}"
+    exit 1
+else
+    log_date "-------- koolss by fw867 ----------------"
+fi
+
+set_lock(){
+    exec 9>"$LOCK_FILE"
+    flock -x 9
+}
+
+unset_lock(){
+    flock -u 9
+    rm -f "$LOCK_FILE"
+}
+
+check_and_clean_logs() {
+    # 包含 systemd 记录的日志和 xray 自己的日志
+    local target_logs="/var/log/koolss.log /tmp/xray_access.log /tmp/xray_error.log"
+    local max_size=1048576 # 1MB 的字节数
+
+    for log_file in $target_logs; do
+        if [ -f "$log_file" ]; then
+            local file_size=$(wc -c < "$log_file" 2>/dev/null)
+            if [ -n "$file_size" ] && [ "$file_size" -gt "$max_size" ]; then
+                > "$log_file" # 截断清空
+                echo "【$(date '+%Y-%m-%d %X')】: 启动检查发现日志超过 1MB，已自动清空。" >> "$log_file"
+            fi
+        fi
+    done
+}
+
+get_lan_cidr(){
+    local netmask=$(ifconfig br0 | grep netmask | awk '{print $4}')
+    local x=${netmask##*255.}
+    set -- 0^^^128^192^224^240^248^252^254^ $(( (${#netmask} - ${#x})*2 )) ${x%%.*}
+    x=${1%%$3*}
+    local suffix=$(( $2 + (${#x}/4) ))
+    local prefix=$(echo "$lan_ipaddr" | cut -d "." -f1,2,3)
+    echo "${prefix}.0/${suffix}"
+}
+
+create_ipsetlist() {
+    log_date "创建并初始化 ipset 名单..."
+    for setname in white_list black_list gfwlist router chnroute udp_list; do
+        ipset -! create $setname nethash
+        ipset flush $setname
+    done
+    # 载入 chnroute 列表
+    if [ "$v2ray_bypass" != "2" ] && [ -s "/data/koolss/chnroute.txt" ]; then
+        awk '{ sub(/\r$/, ""); if ($0 != "" && $0 !~ /^#/) print "add chnroute " $0 }' /data/koolss/chnroute.txt | ipset -! restore
+        log_date "已载入 chnroute 列表" 
+    fi
+}
+
+add_white_black_ip(){
+    # 提取服务器 IP，支持 vmess/vless/socks
+    local v2ray_server=$(jq -r '.outbounds[0].settings.vnext[0].address // .outbounds[0].settings.servers[0].address // empty' "$XRAY_JSON_PATH" 2>/dev/null)
+    local v2ray_basic_server_ip=""
+
+    if [ -n "$v2ray_server" ]; then
+        if echo "$v2ray_server" | grep -qE "([0-9]{1,3}\.){3}[0-9]{1,3}|:"; then
+            v2ray_basic_server_ip="$v2ray_server"
+        else
+            log_date "解析服务器域名：$v2ray_server ..."
+            v2ray_basic_server_ip=$(nslookup "$v2ray_server" 114.114.114.114 2>/dev/null | grep -A1 "Name:" | grep "Address" | awk '{print $2}' | head -n1)
+             if [ -z "$v2ray_basic_server_ip" ]; then
+                log_date "nslookup 解析失败，尝试用 resolveip 方式解析..."
+                v2ray_basic_server_ip=$(resolveip -4 -t 2 "$v2ray_server" 2>/dev/null | head -n1)
+            fi
+
+            if [ -n "$v2ray_basic_server_ip" ]; then
+                log_date "v2ray 服务器 IP 解析成功：$v2ray_basic_server_ip"
+            else
+                log_date "v2ray 服务器 IP 解析失败! 域名解析将由 v2ray 自身处理。"
+            fi
+       fi
+    fi
+    
+    log_date "执行 ipset 批量高速注入..."
+    {
+        local ip_tg="67.198.55.0/24 91.108.4.0/22 91.108.12.0/22 91.108.56.0/22 91.108.8.0/22 93.119.240.0/20 109.239.140.0/24 149.154.0.0/16 149.154.160.0/20"
+        for ip in $ip_tg; do echo "add black_list $ip"; done
+        
+        local SERVER_IP="${v2ray_basic_server_ip:-}"
+        local ip_lan="0.0.0.0/8 10.0.0.0/8 100.64.0.0/10 127.0.0.0/8 169.254.0.0/16 172.16.0.0/12 192.168.0.0/16 224.0.0.0/4 240.0.0.0/4 223.5.5.5 223.6.6.6 114.114.114.114 114.114.115.115 1.2.4.8 210.2.4.8 112.124.47.27 114.215.126.16 180.76.76.76 119.29.29.29 $ISP_DNS1 $ISP_DNS2 $SERVER_IP"       
+        for ip in $ip_lan; do [ -n "$ip" ] && echo "add white_list $ip"; done
+        
+        # 从文件加载自定义黑白名单
+        [ -s "/data/koolss/blackip.txt" ] && awk '{sub(/\r$/,""); if($0!="" && $0!~/^#/) print "add black_list "$0}' /data/koolss/blackip.txt
+        [ -s "/data/koolss/whiteip.txt" ] && awk '{sub(/\r$/,""); if($0!="" && $0!~/^#/) print "add white_list "$0}' /data/koolss/whiteip.txt
+    } | ipset -! restore
+}
+
+get_action_chain() {
+    case "$1" in
+        0) echo "RETURN" ;;
+        1) echo "V2RAY_GFW" ;;
+        2) echo "V2RAY_CHN" ;;
+        3) echo "V2RAY_GAM" ;;
+        4) echo "V2RAY_GLO" ;;
+        *) echo "V2RAY_GFW" ;;
+    esac
+}
+
+get_mode_name() {
+    case "$1" in
+        0) echo "不通过代理" ;;
+        1) echo "gfwlist模式" ;;
+        2) echo "大陆白名单模式" ;;
+        3) echo "游戏模式" ;;
+        4) echo "全局模式" ;;
+        *) echo "未知模式,使用默认模式" ;;
+    esac
+}
+
+factor() {
+    [ -n "$1" ] && [ -n "$2" ] && echo "$2 $1"
+}
+
+get_jump_mode() {
+    [ "$1" = "0" ] && echo "j" || echo "g"
+}
+
+trim() {
+    # 保持兼容性的高效 trim
+    echo "$*" | awk '{$1=$1;print}'
+}
+
+# --- 访问控制解析器 ---
+lan_acess_control(){
+    local target_table="$1" 
+    local acl_file="/data/koolss/lancontrol.txt"
+    local rule_count=0
+    
+    [ ! -f "$acl_file" ] && return 0
+    
+    while IFS= read -r line || [ -n "$line" ]; do
+        line=$(trim "$line")
+        [ -z "$line" ] || echo "$line" | grep -q "^#" && continue
+        
+        local ip="" mac="" mode=""
+        for item in $line; do
+            case "$item" in
+                ip=*) ip="${item#*=}" ;;
+                mac=*) mac="${item#*=}" ;;
+                mode=*) mode="${item#*=}" ;;
+            esac
+        done
+        
+        [ -z "$mode" ] && mode=$v2ray_acl_default_mode
+        [ -z "$ip" ] && [ -z "$mac" ] && continue
+        
+        rule_count=$((rule_count + 1))
+        local rule="iptables -t $target_table -A V2RAY"
+        [ -n "$ip" ] && rule="$rule $(factor "$ip" "-s")" 
+        [ -n "$mac" ] && rule="$rule $(factor "$mac" "-m mac --mac-source")"
+        rule="$rule -j $(get_action_chain "$mode")"     
+        $rule
+    done < "$acl_file"
+    
+    [ "$target_table" = "mangle" ] && log_date "加载ACL规则：已加载 $rule_count 条规则"
+}
+
+ipts_update() {
+    local PR_INDEX RULE_INDEX
+    log_date "写入 iptables 规则..."
+    
+    # ================= 1. NAT 链 (彻底抛弃 TTL，使用 ipset 转发 TCP) =================
+    for chain in V2RAY V2RAY_GFW V2RAY_CHN V2RAY_GLO V2RAY_GAM; do
+        iptables -t nat -N $chain 2>/dev/null
+    done
+
+    # 白名单直连
+    iptables -t nat -A V2RAY -m set --match-set white_list dst -j RETURN
+
+    # NAT GFW 模式
+    iptables -t nat -A V2RAY_GFW -p tcp -m set --match-set black_list dst -j REDIRECT --to-ports 1280
+    iptables -t nat -A V2RAY_GFW -p tcp -m set --match-set gfwlist dst -j REDIRECT --to-ports 1280
+    iptables -t nat -A V2RAY_GFW -p tcp -m set --match-set router dst -j REDIRECT --to-ports 1280
+
+    # NAT 大陆白名单模式
+    iptables -t nat -A V2RAY_CHN -p tcp -m set --match-set black_list dst -j REDIRECT --to-ports 1280
+    if [ "$v2ray_bypass" = "2" ]; then
+        iptables -t nat -A V2RAY_CHN -p tcp -m geoip ! --destination-country CN -j REDIRECT --to-ports 1280
+    else
+        iptables -t nat -A V2RAY_CHN -p tcp -m set ! --match-set chnroute dst -j REDIRECT --to-ports 1280
+    fi
+
+    # NAT 全局与游戏模式
+    iptables -t nat -A V2RAY_GLO -p tcp -j REDIRECT --to-ports 1280
+    iptables -t nat -A V2RAY_GAM -p tcp -j REDIRECT --to-ports 1280
+
+    # 加载针对 NAT 表的 LAN 访问控制策略
+    lan_acess_control "nat"
+    iptables -t nat -A V2RAY -j $(get_action_chain $v2ray_acl_default_mode)
+
+
+    # ================= 2. Mangle 链 (只处理 UDP 的 TPROXY，维持原样) =================
+    for chain in V2RAY V2RAY_GFW V2RAY_CHN V2RAY_GLO V2RAY_GAM; do
+        iptables -t mangle -N $chain 2>/dev/null
+    done
+    
+    # UDP TPROXY 策略路由
+    ip rule add fwmark 0x07 table 310 pref 789 2>/dev/null
+    ip route add local 0.0.0.0/0 dev lo table 310 2>/dev/null
+
+    # UDP 白名单直连
+    iptables -t mangle -A V2RAY -m set --match-set white_list dst -j RETURN
+    
+    # UDP GFWlist模式
+    iptables -t mangle -A V2RAY_GFW -p udp -m set --match-set black_list dst -j TPROXY --on-port 1281 --tproxy-mark 0x07
+    iptables -t mangle -A V2RAY_GFW -p udp -m set --match-set gfwlist dst -j TPROXY --on-port 1281 --tproxy-mark 0x07
+    iptables -t mangle -A V2RAY_GFW -p udp -m set --match-set router dst -j TPROXY --on-port 1281 --tproxy-mark 0x07
+
+    # UDP 大陆白名单模式
+    iptables -t mangle -A V2RAY_CHN -p udp -m set --match-set black_list dst -j TPROXY --on-port 1281 --tproxy-mark 0x07
+    if [ "$v2ray_bypass" = "2" ]; then
+        iptables -t mangle -A V2RAY_CHN  -p udp -m geoip ! --destination-country CN -j TPROXY --on-port 1281 --tproxy-mark 0x07
+    else
+        iptables -t mangle -A V2RAY_CHN  -p udp -m set ! --match-set chnroute dst -j TPROXY --on-port 1281 --tproxy-mark 0x07
+    fi
+
+    # UDP 游戏模式
+    iptables -t mangle -A V2RAY_GAM -p udp -m set --match-set black_list dst -j TPROXY --on-port 1281 --tproxy-mark 0x07
+    if [ "$v2ray_bypass" = "2" ]; then
+        iptables -t mangle -A V2RAY_GAM -p udp -m geoip ! --destination-country CN -j TPROXY --on-port 1281 --tproxy-mark 0x07
+    else
+        iptables -t mangle -A V2RAY_GAM -p udp -m set ! --match-set chnroute dst -j TPROXY --on-port 1281 --tproxy-mark 0x07
+    fi
+
+    # UDP 全局模式
+    iptables -t mangle -A V2RAY_GLO -p udp -j TPROXY --on-port 1281 --tproxy-mark 0x07
+
+    # 如果开关关闭，udp 直连
+		[ "$v2ray_udp" = "0" ] && iptables -t mangle -I V2RAY 2 -p udp -j RETURN
+
+    # 如果开关开启，udplist 走 UDP 代理
+    [ "$v2ray_udp_list" = "1" ] && iptables -t mangle -I V2RAY 2 -p udp -m set --match-set udp_list dst -j TPROXY --on-port 1281 --tproxy-mark 0x07
+
+    # 加载针对 Mangle 表的 LAN 访问控制策略
+    lan_acess_control "mangle"
+    iptables -t mangle -A V2RAY -j $(get_action_chain $v2ray_acl_default_mode)
+
+
+    # ================= 3. 挂载主干与 QUIC 阻断 =================
+    
+    # NAT主干
+    PR_INDEX=$(iptables -t nat -L PREROUTING --line-numbers | grep 'UBIOS_PREROUTING_JUMP' | awk '{print $1}')
+    [ -n "$PR_INDEX" ] && RULE_INDEX=$((PR_INDEX + 1)) || RULE_INDEX=1
+    iptables -t nat -I PREROUTING $RULE_INDEX -p tcp -j V2RAY
+    # 路由自身黑名单流量
+    iptables -t nat -A OUTPUT -p tcp -m set --match-set router dst -j REDIRECT --to-ports 1280
+    # Mangle主干
+    MA_INDEX=$(iptables -t mangle -L PREROUTING --line-numbers | grep 'UBIOS_PREROUTING_JUMP' | awk '{print $1}')
+    [ -n "$MA_INDEX" ] && RULE1_INDEX=$((MA_INDEX + 1)) || RULE1_INDEX=1
+    iptables -t mangle -I PREROUTING $RULE1_INDEX -p udp -j V2RAY
+    # QUIC阻断		
+    if [ "$v2ray_quic_reject" = "1" ]; then
+        log_date "QUIC 全局阻断开启，强制非白名单 UDP 443 回退 TCP..."
+        iptables -t filter -I FORWARD 1 -p udp --dport 443 -j REJECT --reject-with icmp-port-unreachable
+        iptables -t filter -I OUTPUT 1 -p udp --dport 443 -m set ! --match-set white_list dst -j REJECT --reject-with icmp-port-unreachable
+    elif [ "$v2ray_quic_reject" = "2" ]; then
+        log_date "QUIC 精准阻断开启，强制 gfwlist/black_list UDP 443 回退 TCP..."
+        for setname in gfwlist black_list; do
+            iptables -t filter -I FORWARD 1 -p udp --dport 443 -m set --match-set $setname dst -j REJECT --reject-with icmp-port-unreachable
+            iptables -t filter -I OUTPUT 1 -p udp --dport 443 -m set --match-set $setname dst -j REJECT --reject-with icmp-port-unreachable
+        done
+    else
+        log_date "QUIC 阻断功能已关闭，跳过应用。"
+    fi
+}
+
+ipts_origin() {
+    log_date "清除已存在的 iptables 规则..."
+    
+    while iptables -t filter -D FORWARD -p udp --dport 443 -j REJECT --reject-with icmp-port-unreachable 2>/dev/null; do :; done
+    while iptables -t filter -D OUTPUT -p udp --dport 443 -m set ! --match-set white_list dst -j REJECT --reject-with icmp-port-unreachable 2>/dev/null; do :; done
+
+    for setname in gfwlist black_list; do
+        while iptables -t filter -D FORWARD -p udp --dport 443 -m set --match-set $setname dst -j REJECT --reject-with icmp-port-unreachable 2>/dev/null; do :; done
+        while iptables -t filter -D OUTPUT -p udp --dport 443 -m set --match-set $setname dst -j REJECT --reject-with icmp-port-unreachable 2>/dev/null; do :; done
+    done
+
+    while iptables -t nat -D OUTPUT -p tcp -m set --match-set router dst -j REDIRECT --to-ports 1280 2>/dev/null; do :; done
+    while iptables -t nat -D PREROUTING -p tcp -j V2RAY 2>/dev/null; do :; done
+    while iptables -t mangle -D PREROUTING -p udp -j V2RAY 2>/dev/null; do :; done
+    while iptables -t mangle -D PREROUTING -j V2RAY 2>/dev/null; do :; done
+    
+    # 清理 DNS 劫持规则
+    while iptables -t nat -D PREROUTING -p udp -m udp --dport 53 ! -d $lan_ipaddr -j REDIRECT --to-ports 53 2>/dev/null; do :; done
+    while iptables -t nat -D PREROUTING -p tcp -m tcp --dport 53 ! -d $lan_ipaddr -j REDIRECT --to-ports 53 2>/dev/null; do :; done
+    
+    for table in nat mangle; do
+        for chain in V2RAY V2RAY_GFW V2RAY_CHN V2RAY_GLO V2RAY_GAM; do
+            iptables -t $table -F $chain 2>/dev/null
+            iptables -t $table -X $chain 2>/dev/null
+        done
+    done
+
+    # 获取 lookup 310 规则的数量
+    local ip_rule_exist=$(ip rule show | grep -c "lookup 310")    
+    if [ "$ip_rule_exist" -gt 0 ]; then
+        log_date "检测到 $ip_rule_exist 条重复的策略路由规则，正在清理..."       
+        # 使用 while 循环配合精准匹配进行删除，避免 cut 偏移错误
+        while ip rule show | grep -q "lookup 310"; do
+            # 直接通过 fwmark 或 table 关键字精准定位并删除第一条匹配项
+            ip rule del fwmark 0x07 table 310 2>/dev/null || break
+        done        
+        log_date "策略路由清理完毕。"
+    fi
+    #echo_date 删除ip route规则.
+    ip route del local 0.0.0.0/0 dev lo table 310 >/dev/null 2>&1
+	
+    log_date "清空并删除已存在的 ipset 名单..."
+    for setname in white_list black_list gfwlist router udp_list chnroute; do
+        ipset destroy $setname 2>/dev/null
+    done
+}
+
+chromecast(){
+    if [ "$v2ray_basic_dns_chromecast" = "1" ]; then
+        log_date "开启 DNS 劫持功能 (强制局域网所有设备使用路由器的防污染 DNS)..."
+        iptables -t nat -I PREROUTING 1 -p udp -m udp --dport 53 ! -d $lan_ipaddr -j REDIRECT --to-ports 53 2>/dev/null
+        iptables -t nat -I PREROUTING 1 -p tcp -m tcp --dport 53 ! -d $lan_ipaddr -j REDIRECT --to-ports 53 2>/dev/null
+    fi
+}
+
+ipfwd_on() {
+    [ "$(cat /proc/sys/net/ipv4/ip_forward)" -ne 1 ] && echo 1 > /proc/sys/net/ipv4/ip_forward
+    [ "$(cat /proc/sys/net/ipv4/tcp_fastopen)" -ne 3 ] && echo 3 > /proc/sys/net/ipv4/tcp_fastopen
+}
+
+check_dns() {
+    [ ! -f "/etc/dnsmasq.conf" ] && touch /etc/dnsmasq.conf
+}
+
+dns_update() {
+    mkdir -p /run/dnsmasq.dhcp.conf.d
+    
+    if [ ! -f "/run/dnsmasq.dhcp.conf.d/koolroute.conf" ]; then
+        log_date "创建状态检测解析优化配置文件"
+        cat > /run/dnsmasq.dhcp.conf.d/koolroute.conf <<-EOF
+server=/.google.com.tw/127.0.0.1#7913
+ipset=/.google.com.tw/router
+server=/.google.com.ncr/127.0.0.1#7913
+ipset=/.google.com.ncr/router
+server=/.github.com/127.0.0.1#7913
+ipset=/.github.com/router
+server=/.github.io/127.0.0.1#7913
+ipset=/.github.io/router
+server=/.raw.githubusercontent.com/127.0.0.1#7913
+ipset=/.raw.githubusercontent.com/router
+server=/.apnic.net/127.0.0.1#7913
+ipset=/.apnic.net/router
+server=/.s3.amazonaws.com/127.0.0.1#7913
+ipset=/.s3.amazonaws.com/router
+server=/.openwrt.org/127.0.0.1#7913
+ipset=/.openwrt.org/router
+EOF
+    fi
+
+    [ ! -f /run/dnsmasq.dhcp.conf.d/koolgfwlist.conf ] && ln -sf /data/koolss/gfwlist.conf /run/dnsmasq.dhcp.conf.d/koolgfwlist.conf
+
+    rm -f /run/dnsmasq.dhcp.conf.d/koolwblist.conf
+
+    # 域名白名单：走运营商 DNS + ipset white_list
+    if [ -n "$WHITE_DOMAIN_LIST" ]; then
+        write_domain_file "$WHITE_DOMAIN_LIST" /tmp/koolss_whitedomain.txt
+        if [ -s /tmp/koolss_whitedomain.txt ]; then
+            echo "#for white_domain" >> /run/dnsmasq.dhcp.conf.d/koolwblist.conf
+            awk -v dns="${ISP_DNS1}" '{ sub(/\r$/, ""); if ($0 != "" && $0 !~ /^#/) print "server=/." $0 "/" dns }' /tmp/koolss_whitedomain.txt >> /run/dnsmasq.dhcp.conf.d/koolwblist.conf
+            awk '{ sub(/\r$/, ""); if ($0 != "" && $0 !~ /^#/) print "ipset=/." $0 "/white_list" }' /tmp/koolss_whitedomain.txt >> /run/dnsmasq.dhcp.conf.d/koolwblist.conf
+            log_date "已加载域名白名单 $(wc -l < /tmp/koolss_whitedomain.txt) 条"
+        fi
+        rm -f /tmp/koolss_whitedomain.txt
+    fi
+
+    # 域名黑名单：走本地防污染 DNS + ipset black_list
+    if [ -n "$BLACK_DOMAIN_LIST" ]; then
+        write_domain_file "$BLACK_DOMAIN_LIST" /tmp/koolss_blackdomain.txt
+        if [ -s /tmp/koolss_blackdomain.txt ]; then
+            echo "#for black_domain" >> /run/dnsmasq.dhcp.conf.d/koolwblist.conf
+            awk '{ sub(/\r$/, ""); if ($0 != "" && $0 !~ /^#/) print "server=/." $0 "/127.0.0.1#7913" }' /tmp/koolss_blackdomain.txt >> /run/dnsmasq.dhcp.conf.d/koolwblist.conf
+            awk '{ sub(/\r$/, ""); if ($0 != "" && $0 !~ /^#/) print "ipset=/." $0 "/black_list" }' /tmp/koolss_blackdomain.txt >> /run/dnsmasq.dhcp.conf.d/koolwblist.conf
+            log_date "已加载域名黑名单 $(wc -l < /tmp/koolss_blackdomain.txt) 条"
+        fi
+        rm -f /tmp/koolss_blackdomain.txt
+    fi
+
+    if [ "$v2ray_udp_list" = "1" ] && [ -s "/data/koolss/udplist.txt" ]; then
+        echo "#for udp_list" >> /run/dnsmasq.dhcp.conf.d/koolwblist.conf
+        awk '{ sub(/\r$/, ""); if ($0 != "" && $0 !~ /^#/) print "server=/." $0 "/127.0.0.1#7913" }' /data/koolss/udplist.txt >> /run/dnsmasq.dhcp.conf.d/koolwblist.conf
+        awk '{ sub(/\r$/, ""); if ($0 != "" && $0 !~ /^#/) print "ipset=/." $0 "/udp_list" }' /data/koolss/udplist.txt >> /run/dnsmasq.dhcp.conf.d/koolwblist.conf
+    fi
+
+    killall dnsmasq 2>/dev/null
+}
+
+dns_origin() {
+    rm -f /run/dnsmasq.dhcp.conf.d/kool*.conf
+}
+
+dnsfwd_flush() {
+    log_date "正在刷新 dnsmasq 缓存..."
+    killall -HUP dnsmasq 2>/dev/null
+    log_date "DNS 缓存刷新完毕"
+}
+
+current_ip() {
+    local ip_info=$(curl -4skL ip.chinaz.com/getip.aspx | sed -r "s/^\{ip:'(.*)',address:'(.*)'\}$/\1|\2/g")
+    local my_ip=$(echo "$ip_info" | awk -F'|' '{print $1}')
+    local my_loc=$(echo "$ip_info" | awk -F'|' '{print $2}')
+    echo -e "\e[37mIP:\e[0m ${my_ip}\t\e[37m位置:\e[0m ${my_loc}"
+}
+
+start_v2ray(){
+    if [ ! -x "$XRAY_BIN" ]; then
+        log_date "未找到 $XRAY_BIN，调用 ssup 下载最新 Xray..."
+        SSUP_NO_START=1 /data/softcenter/bin/ssup
+        if [ ! -x "$XRAY_BIN" ]; then
+            log_date "ssup 下载 Xray 失败，无法启动"
+            return 1
+        fi
+    fi
+    log_date "开启 Xray 主进程..."
+    "$XRAY_BIN" run -c "$XRAY_JSON_PATH" >/dev/null 2>&1 &
+    
+    local i=10
+    while [ $i -gt 0 ]; do
+        V2PID=$(pidof xray)
+        if [ -n "$V2PID" ]; then
+            log_date "v2ray 启动成功，PID：$V2PID"
+            return
+        fi
+        sleep 1
+        i=$((i - 1))
+    done
+    log_date "Xray 进程启动失败！"
+}
+
+kill_process() {
+    log_date "正在关闭进程..."
+    killall xray 2>/dev/null
+    sleep 1
+    killall -9 xray 2>/dev/null
+}
+
+clean_log() {
+    rm -f /tmp/xray*.log
+}
+
+restart_process() {
+    kill_process
+    sleep 1
+    start_v2ray
+    status
+}
+
+start() {
+    set_lock
+    check_and_clean_logs
+    check_dns
+    dns_origin
+    ipfwd_on
+    start_v2ray
+    create_ipsetlist
+    add_white_black_ip
+    ipts_update
+    dns_update
+    chromecast
+    unset_lock
+}
+
+stop() {
+    set_lock
+    kill_process
+    ipts_origin
+    dns_origin
+    clean_log
+    killall dnsmasq 2>/dev/null
+    unset_lock
+}
+
+restart() {
+    set_lock
+    kill_process
+    ipts_origin
+    dns_origin
+    clean_log
+    check_dns
+    dns_origin
+    ipfwd_on
+    start_v2ray
+    create_ipsetlist
+    add_white_black_ip
+    ipts_update
+    dns_update
+    chromecast
+    unset_lock
+}
+
+status() {
+    if pgrep -x xray > /dev/null; then
+        log_date "XRAY 进程运行中..."
+    else
+        log_date "XRAY 进程未运行"
+    fi  
+}
+
+usage() {
+    echo -e "\e[37mUsage:\e[0m \e[36m${0}\e[0m \e[1;37mCOMMAND\e[0m"
+    echo -e "\e[1;37mCOMMAND\e[0m := {"
+    echo -e "\t\e[33mstart\e[0m\t\t启动透明代理"
+    echo -e "\t\e[33mstop\e[0m\t\t停止透明代理"
+    echo -e "\t\e[33mrestart\e[0m\t\t重启透明代理"
+    echo -e "\t\e[33mstatus\e[0m\t\t查看运行状态"
+    echo -e "\t\e[33mip\e[0m\t\t显示当前出口IP"
+    echo -e "\t\e[33mupdate\e[0m\t\t更新 IPSet 列表"
+    echo -e "\t\e[33mflush\e[0m\t\t刷新 DNS 缓存"
+    echo -e "}"
+}
+
+case ${1} in
+    start) start; status ;;
+    status) status ;;
+    stop) stop; status ;;
+    restart) restart; status ;;
+    ip) current_ip ;;
+    update) create_ipsetlist ;;
+    process) restart_process ;;
+    flush) dnsfwd_flush ;;
+    help|*) usage; exit 1 ;;
+esac

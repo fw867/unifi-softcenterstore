@@ -1,0 +1,144 @@
+#!/bin/bash
+
+echo_date() {
+    local msg="$1"
+    echo "【$(date '+%Y年%m月%d日 %X')】: $msg"
+}
+
+URL_MAIN="https://raw.githubusercontent.com/hq450/fancyss/3.0/rules_ng"
+RULE_FILE="/data/koolss/rules.json.js"
+rule_save_dir="/data/koolss"
+rule_down_dir="/tmp/fancyss_rule_download"
+
+# ================= 外部参数接收 =================
+# $1: 要更新的规则名称 (默认 gfwlist)
+# $2: 处理模式 (1=生成conf, 2=直接复制到 /data/koolss)
+RULE_KEY="${1:-gfwlist}"
+PROCESS_MODE="${2:-1}"
+# ===============================================
+
+# 1. 准备下载文件夹
+rm -rf "${rule_down_dir}"
+mkdir -p "${rule_down_dir}"
+
+# 2. 开始更新
+echo "=================================================================================================="
+echo_date "开始更新 ${RULE_KEY} 规则，当前处理模式: ${PROCESS_MODE} ..."
+
+# 3. 先下载版本号文件
+if wget -4 --no-check-certificate --timeout=8 -qO /tmp/rules.json.js "${URL_MAIN}/rules.json.js"; then
+    echo_date "检测到在线版本文件，继续..."
+else
+    echo_date "没有检测到在线版本，可能是访问github有问题，去大陆白名单模式试试吧！"
+    rm -f /tmp/rules.json.js
+    exit 1
+fi
+
+if ! jq -e . /tmp/rules.json.js >/dev/null 2>&1; then
+    echo_date "在线规则版本号文件解析失败：${URL_MAIN}/rules.json.js！退出！"
+    rm -f /tmp/rules.json.js
+    exit 1
+fi
+
+update_rule() {
+    local key="$1"
+    local mode="$2"
+    local online_name online_md5 online_date_cmp online_obj
+    local local_date_cmp local_md5
+    local tmp_file dst_file tmp_md5
+    local rule_target_file="${rule_down_dir}/${key}"
+    local conf_file="${rule_down_dir}/${key}.conf"
+
+    online_name=$(jq -r ".${key}.name // empty" /tmp/rules.json.js)
+    online_md5=$(jq -r ".${key}.md5 // empty" /tmp/rules.json.js)
+    online_date_cmp=$(jq -r ".${key}.date // empty" /tmp/rules.json.js | sed 's/[[:space:]]/_/g')
+
+    if [ -z "${online_name}" ] || [ -z "${online_md5}" ] || [ -z "${online_date_cmp}" ]; then
+        echo_date "在线版本文件缺少必要字段，跳过！"
+        return 1
+    fi
+
+    if [ -f "${RULE_FILE}" ]; then
+        local_date_cmp=$(jq -r ".[\"${key}\"].date // empty" "${RULE_FILE}" 2>/dev/null | sed 's/[[:space:]]/_/g')
+        local_md5=$(jq -r ".[\"${key}\"].md5 // empty" "${RULE_FILE}" 2>/dev/null)
+    fi
+    
+    local_date_cmp=${local_date_cmp:-0}
+    local_md5=${local_md5:-0}
+
+    echo_date "--------------------------------------------------------------------"
+    if [ "${local_date_cmp}" = "${online_date_cmp}" ] && [ "${force_update}" != "1" ]; then
+        echo_date "检测到 ${key} 本地版本号和在线版本号相同，不进行更新!"
+        return 0
+    fi
+
+    echo_date "检测到新版本 ${key}，开始更新..."
+    tmp_file="${rule_down_dir}/${online_name}"
+    rm -f "${tmp_file}"
+
+    if ! wget -4 --no-check-certificate --timeout=8 -qO "${tmp_file}" "${URL_MAIN}/${online_name}" || [ ! -s "${tmp_file}" ]; then
+        echo_date "${online_name} 下载失败！"
+        rm -f "${tmp_file}"
+        return 1
+    fi
+
+    tmp_md5=$(md5sum "${tmp_file}" | awk '{print $1}')
+    if [ "${tmp_md5}" != "${online_md5}" ]; then
+        echo_date "校验未通过！本地：${tmp_md5}，在线：${online_md5}"
+        rm -f "${tmp_file}"
+        return 1
+    fi
+
+    # 解压缩或复制到目标文件
+    if gzip -t "${tmp_file}" 2>/dev/null; then
+        gzip -dc "${tmp_file}" > "${rule_target_file}"
+    else
+        cp "${tmp_file}" "${rule_target_file}"
+    fi
+    
+    # ================= 核心修改区：根据参数执行不同逻辑 =================
+    if [ "${mode}" == "1" ]; then
+        echo_date "当前为模式 1：生成 ${key}.conf 配置文件..."
+        if [ -s "${rule_target_file}" ]; then
+            echo "#for gfwlist ${online_date_cmp}" > "${conf_file}"
+            sed -e '/^#/d' -e '/^$/d' -e 's|^|server=/.|' -e 's|$|/127.0.0.1#7913|' "${rule_target_file}" >> "${conf_file}"
+            sed -e '/^#/d' -e '/^$/d' -e 's|^|ipset=/.|' -e 's|$|/gfwlist|' "${rule_target_file}" >> "${conf_file}"
+            cp -f "${conf_file}" "${rule_save_dir}/${key}.conf"
+        fi
+    elif [ "${mode}" == "2" ]; then
+        echo_date "当前为模式 2：直接复制规则文件到 ${rule_save_dir} ..."
+        # 直接复制为 .txt 以便其他组件（如 awk、ipset）读取
+        cp -f "${rule_target_file}" "${rule_save_dir}/${key}.txt"
+    else
+        echo_date "未知的处理模式：${mode}，跳过文件生成。"
+    fi
+    # ==================================================================
+
+    # 更新本地 JSON 版本号文件
+    online_obj=$(jq -c ".${key}" /tmp/rules.json.js)
+    if [ -n "${online_obj}" ] && [ "${online_obj}" != "null" ]; then
+        local tmp_rule_json="${rule_down_dir}/rules.${key}.json.js"
+        rm -f "${tmp_rule_json}"
+        
+        if [ ! -f "${RULE_FILE}" ]; then
+            echo "{}" > "${RULE_FILE}"
+        fi
+
+        if ! jq --argjson obj "${online_obj}" --arg k "${key}" '.[$k] = $obj' "${RULE_FILE}" > "${tmp_rule_json}" || [ ! -s "${tmp_rule_json}" ]; then
+            echo_date "更新规则版本号文件失败！"
+            rm -f "${tmp_rule_json}"
+            return 1
+        fi
+        mv "${tmp_rule_json}" "${RULE_FILE}"
+    fi
+
+    echo_date "【更新成功】你的 ${key} 已经更新到最新！"
+    return 0
+}
+
+# 调用函数并传入捕获的参数
+update_rule gfwlist 1
+update_rule udplist 2
+
+echo_date " --------------------------------------------------------------------"
+rm -f /tmp/rules.json.js
