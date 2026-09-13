@@ -179,8 +179,8 @@ string GetBashOutput(string cmd)
     catch { return ""; }
 }
 
-static string AppEnvDir(string appId) => $"/data/apps/{appId}";
-static string AppEnvPath(string appId) => $"{AppEnvDir(appId)}/config.env";
+static string AppEnvDir() => $"{BaseDir}/config";
+static string AppEnvPath(string appId) => $"{AppEnvDir()}/{appId}.env";
 
 static string JsonGetString(JsonElement el, string name)
 {
@@ -453,7 +453,7 @@ app.MapPut("/api/apps/{id}/autostart/{state:int}", (string id, int state) => {
     return Results.Ok(new { success = true });
 });
 
-// Schema 驱动配置：有 ConfigSchema 时读 /data/apps/{id}/config.env；否则兼容旧 ConfigKeys 正则解析
+// Schema 驱动配置：有 ConfigSchema 时读 /data/softcenter/config/{id}.env；否则兼容旧 ConfigKeys 正则解析
 app.MapGet("/api/apps/{id}/config", (string id) => {
     using var conn = new SqliteConnection(DbPath); conn.Open();
     using var cmd = conn.CreateCommand();
@@ -550,7 +550,7 @@ app.MapPost("/api/apps/{id}/config", async (string id, Dictionary<string, string
             }
             if (errors.Count > 0) return Results.BadRequest(new ConfigSaveResult(false, errors, null));
 
-            var envDir = AppEnvDir(id);
+            var envDir = AppEnvDir();
             var envPath = AppEnvPath(id);
             Directory.CreateDirectory(envDir);
             var sb = new StringBuilder();

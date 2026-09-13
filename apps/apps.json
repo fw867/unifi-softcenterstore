@@ -10,7 +10,7 @@
         "StopCommand": "/data/bin/tomodem stop",
         "StatusCommand": "iptables -L FORWARD | grep -c \"softcenter:tomodem\" > /dev/null",
         "IsAutoStart": 1,
-        "ConfigPath": "/data/apps/tomodem/config.env",
+        "ConfigPath": "/data/softcenter/config/tomodem.env",
         "ConfigKeys": "",
         "LogPath": "/var/log/tomodem.log",
         "ConfigSchema": {
@@ -59,7 +59,7 @@
         "StopCommand": "systemctl stop koolss",
         "StatusCommand": "systemctl is-active --quiet koolss",
         "IsAutoStart": 1,
-        "ConfigPath": "/data/apps/koolss/config.env",
+        "ConfigPath": "/data/softcenter/config/koolss.env",
         "ConfigKeys": "",
         "LogPath": "/var/log/koolss.log",
         "CustomCommands": "[{\"name\":\"升级xray\",\"command\":\"/data/bin/ssup\"},{\"name\":\"更新规则\",\"command\":\"/data/bin/ssrule\"}]",
@@ -162,7 +162,7 @@
         "StopCommand": "/data/bin/wechat stop",
         "StatusCommand": "[ -f \"/etc/ppp/ip-up.d/wechat\" ]",
         "IsAutoStart": 1,
-        "ConfigPath": "/data/apps/wechat/config.env",
+        "ConfigPath": "/data/softcenter/config/wechat.env",
         "ConfigKeys": "",
         "LogPath": "/var/log/wechat.log",
         "ConfigSchema": {
@@ -228,7 +228,7 @@
         "StopCommand": "systemctl stop ddnsto",
         "StatusCommand": "systemctl is-active --quiet ddnsto",
         "IsAutoStart": 1,
-        "ConfigPath": "/data/apps/ddnsto/config.env",
+        "ConfigPath": "/data/softcenter/config/ddnsto.env",
         "ConfigKeys": "",
         "LogPath": "/var/log/ddnsto.log",
         "ConfigSchema": {

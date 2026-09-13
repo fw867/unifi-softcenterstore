@@ -13,7 +13,7 @@ UniFi SoftCenter 是一个专为 UniFi OS (如 UCG-Fiber) 及类 Debian 路由�
 * **⚙️ 全局设置 UI 化**：彻底告别 SSH！直接在 Web 面板修改访问端口、安全 Token，以及配置全局下载代理（如 V2Ray 本地节点），保存后自动平滑重启生效。
 * **☁️ 云端应用库与同步**：支持从 GitHub 云端一键拉取并安装适配好的软路由插件（如光猫助手、DDNSTO、微信通知）。更支持**一键同步云端最新配置**，平滑覆盖本地参数而不丢失自启状态。
 * **📦 极简应用管理**：支持一键启停任意底层 Shell 脚本或二进制核心程序，并可视化配置开机自启。
-* **🛠️ Schema 驱动个性化设置页**：插件用 JSON Schema 声明配置项，面板自动渲染开关 / 下拉 / 数字 / 密码 / 多行等控件，支持分组、联动（`VisibleWhen`）与前后端双重校验。保存后写入 `/data/apps/<id>/config.env`，脚本 `source` 即可取参；未声明 Schema 的旧插件仍兼容 ConfigKeys 正则解析。
+* **🛠️ Schema 驱动个性化设置页**：插件用 JSON Schema 声明配置项，面板自动渲染开关 / 下拉 / 数字 / 密码 / 多行等控件，支持分组、联动（`VisibleWhen`）与前后端双重校验。保存后写入 `/data/softcenter/config/<id>.env`，脚本 `source` 即可取参；未声明 Schema 的旧插件仍兼容 ConfigKeys 正则解析。
 * **📜 极客级终端日志**：内置全屏“黑客瀑布流”日志查看器，支持实时拉取应用日志 (`tail`) 及系统核心底层守护日志 (`journalctl`)。
 * **⏰ 彻底接管 Crontab**：在界面上直接管理 Linux 系统的定时任务，支持标准的 Cron 表达式添加与精准解析删除。
 * **🔄 极客化在线 OTA 升级**：带实时终端日志输出的无感升级机制。自动通过配置的代理拉取最新版本，后端执行脱壳覆盖，双线程心跳探测自动刷新页面。
@@ -67,12 +67,11 @@ CI/CD: GitHub Actions (ubuntu:20.04 容器交叉编译，目标 GLIBC 2.31，匹
 │   └── libe_sqlite3.so        # 原生 SQLite 运行库
 ├── on_boot.d/                  # SoftCenter 专属应用开机自启脚本目录
 ├── config.json                 # 面板端口与 Token 配置文件 (可在Web端修改)
+├── config/                     # Schema 插件参数目录
+│   └── <app-id>.env           # 面板写入，脚本 source
 ├── manager.db                  # 应用与 Cron 注册表数据库 (SQLite，含 ConfigSchema)
 └── web/                        # 静态 Web 资源
     └── index.html             # 前端单页应用 (Vue 3 + Schema FormRenderer)
-
-/data/apps/<app-id>/
-└── config.env                  # Schema 插件的参数文件（面板写入，脚本 source）
 
 /data/on_boot.d/
 └── 99-softcenter.sh            # 系统的底层防丢钩子 (固件升级自愈核心)
@@ -85,7 +84,7 @@ CI/CD: GitHub Actions (ubuntu:20.04 容器交叉编译，目标 GLIBC 2.31，匹
 ```json
 {
   "Id": "tomodem",
-  "ConfigPath": "/data/apps/tomodem/config.env",
+  "ConfigPath": "/data/softcenter/config/tomodem.env",
   "ConfigSchema": {
     "Sections": [
       {
@@ -148,7 +147,7 @@ CI/CD: GitHub Actions (ubuntu:20.04 容器交叉编译，目标 GLIBC 2.31，匹
 
 ### 脚本侧取参
 
-保存后写入 `/data/apps/<id>/config.env`：
+保存后写入 `/data/softcenter/config/<id>.env`：
 
 ```bash
 # SoftCenter generated config for tomodem
@@ -161,12 +160,12 @@ Shell 脚本开头直接 source：
 
 ```bash
 #!/bin/bash
-CONFIG=/data/apps/tomodem/config.env
+CONFIG=/data/softcenter/config/tomodem.env
 [ -f "$CONFIG" ] && source "$CONFIG"
 echo "connecting to ${tomodem_ip:-192.168.1.1} via ${tomodem_eth:-eth0}"
 ```
 
-systemd 服务可用 `EnvironmentFile=/data/apps/<id>/config.env`。
+systemd 服务可用 `EnvironmentFile=/data/softcenter/config/<id>.env`。
 
 ---
 
