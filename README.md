@@ -56,7 +56,7 @@ Frontend: Vue 3 / TailwindCSS / Lucide Icons
 
 Database: SQLite (Microsoft.Data.Sqlite 原生驱动)
 
-CI/CD: GitHub Actions (debian:11 + snapshot 源交叉编译，目标 GLIBC 2.31，匹配 UCG-Fiber)
+CI/CD: GitHub Actions (ubuntu:20.04 容器交叉编译，目标 GLIBC 2.31，匹配 UCG-Fiber)
 
 ## 📂 核心目录结构参考
 

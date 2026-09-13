@@ -12,7 +12,9 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
-    container: debian:11
+    # UCG-Fiber 底层 GLIBC 2.31；debian:11 镜像与 archive/snapshot 包版本常年对不齐，
+    # 改用仍在官方源维护的 ubuntu:20.04（同为 GLIBC 2.31）。
+    container: ubuntu:20.04
     env:
       DOTNET_SYSTEM_GLOBALIZATION_INVARIANT: 1
 
@@ -21,24 +23,25 @@ jobs:
       env:
         DEBIAN_FRONTEND: noninteractive
       run: |
-        # UCG-Fiber 底层是 GLIBC 2.31，必须用 debian:11 工具链链接
-        # live/archive 源与镜像内已装包版本经常对不上，改用较新的 snapshot 固定版本
-        # 不开 arm64 multiarch，用 libc6-dev-arm64-cross 提供 Scrt1.o 等 crt
-        SNAP=20251201T000000Z
-        printf '%s\n' \
-          "deb http://snapshot.debian.org/archive/debian/${SNAP} bullseye main" \
-          "deb http://snapshot.debian.org/archive/debian/${SNAP} bullseye-updates main" \
-          "deb http://snapshot.debian.org/archive/debian-security/${SNAP} bullseye-security main" \
-          > /etc/apt/sources.list
         rm -rf /var/lib/apt/lists/*
-        printf 'Acquire::Check-Valid-Until "false";\nAcquire::Retries "5";\nAcquire::http::Pipeline-Depth "0";\n' \
-          > /etc/apt/apt.conf.d/99ci-apt
+        printf 'Acquire::Retries "3";\n' > /etc/apt/apt.conf.d/99ci-apt
         apt-get update
         apt-get install -y --no-install-recommends \
-          git curl zip unzip ca-certificates \
-          clang zlib1g-dev \
+          wget gnupg ca-certificates \
+          git curl zip unzip \
+          zlib1g-dev \
           gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu \
           libc6-dev-arm64-cross
+        # .NET 10 Native AOT 需要较新 clang；focal 自带 clang-10 过旧
+        wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key \
+          | tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc >/dev/null
+        echo "deb http://apt.llvm.org/focal/ llvm-toolchain-focal-18 main" \
+          > /etc/apt/sources.list.d/llvm18.list
+        apt-get update
+        apt-get install -y --no-install-recommends clang-18
+        ln -sf /usr/bin/clang-18 /usr/local/bin/clang
+        ln -sf /usr/bin/clang++-18 /usr/local/bin/clang++
+        clang --version
 
     - name: Checkout Code
       uses: actions/checkout@v4
