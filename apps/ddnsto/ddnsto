@@ -1,0 +1,103 @@
+#!/bin/sh
+
+# UniFi SoftCenter · DDNSTO 管理脚本
+# 面板配置：DDNSTO_TOKEN → /data/softcenter/config/ddnsto.env
+# 二进制固定路径：/data/softcenter/bin/ddnsto-core
+
+CONFIG="/data/softcenter/config/ddnsto.env"
+[ -f "$CONFIG" ] && . "$CONFIG"
+
+DDNSTO_TOKEN="${DDNSTO_TOKEN:-}"
+BIN="/data/softcenter/bin/ddnsto-core"
+PIDFILE="/var/run/ddnsto.pid"
+LOG="/var/log/ddnsto.log"
+
+log_date() {
+	echo "【$(date '+%Y年%m月%d日 %H:%M:%S')】: $1" >> "$LOG"
+}
+
+is_running() {
+	if [ -f "$PIDFILE" ]; then
+		pid=$(cat "$PIDFILE" 2>/dev/null)
+		[ -n "$pid" ] && kill -0 "$pid" 2>/dev/null && return 0
+	fi
+	pgrep -f "$BIN" >/dev/null 2>&1
+}
+
+start_ddnsto() {
+	if [ -z "$DDNSTO_TOKEN" ]; then
+		echo "错误，未配置 DDNSTO_TOKEN，请在软件中心保存配置"
+		log_date "错误，未配置 DDNSTO_TOKEN"
+		exit 1
+	fi
+
+	if [ ! -x "$BIN" ]; then
+		echo "错误，未找到 $BIN"
+		log_date "错误，未找到 $BIN"
+		exit 1
+	fi
+
+	if is_running; then
+		echo "ddnsto 已在运行"
+		return 0
+	fi
+
+	"$BIN" -u "$DDNSTO_TOKEN" -d >> "$LOG" 2>&1
+	sleep 1
+
+	pid=$(pgrep -f "$BIN" 2>/dev/null | head -n 1)
+	if [ -n "$pid" ]; then
+		echo "$pid" > "$PIDFILE"
+		log_date "ddnsto 启动成功 PID=$pid"
+		echo "ddnsto 已启动 (PID $pid)"
+	else
+		log_date "错误，ddnsto 启动失败，详见 $LOG"
+		echo "启动失败，请查看 $LOG"
+		exit 1
+	fi
+}
+
+stop_ddnsto() {
+	if is_running; then
+		killall ddnsto-core 2>/dev/null
+		pkill -f "$BIN" 2>/dev/null
+		rm -f "$PIDFILE"
+		log_date "ddnsto 已停止"
+		echo "ddnsto 已停止"
+	else
+		rm -f "$PIDFILE"
+		echo "ddnsto 未在运行"
+	fi
+}
+
+status_ddnsto() {
+	if is_running; then
+		pid=$(cat "$PIDFILE" 2>/dev/null)
+		[ -z "$pid" ] && pid=$(pgrep -f "$BIN" 2>/dev/null | head -n 1)
+		echo "running pid=${pid:-unknown}"
+		exit 0
+	fi
+	echo "stopped"
+	exit 1
+}
+
+case "${1}" in
+start)
+	start_ddnsto
+	;;
+stop)
+	stop_ddnsto
+	;;
+restart)
+	stop_ddnsto
+	sleep 1
+	start_ddnsto
+	;;
+status)
+	status_ddnsto
+	;;
+*)
+	echo "Usage: $0 {start|stop|restart|status}"
+	exit 1
+	;;
+esac

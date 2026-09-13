@@ -242,19 +242,33 @@
         }
     },
     {
-        "Id": "ddnso",
+        "Id": "ddnsto",
         "Name": "DDNSTO",
-        "Type": "Binary Core",
-        "Version": "1.0.0",
+        "Type": "Shell Script",
+        "Version": "1.1.0",
         "Description": "Koolshare小宝大神的内网穿透神器。",
         "Icon": "globe",
-        "StartCommand": "systemctl start ddnsto",
-        "StopCommand": "systemctl stop ddnsto",
-        "StatusCommand": "systemctl is-active --quiet ddnsto",
+        "StartCommand": "/data/softcenter/bin/ddnsto start",
+        "StopCommand": "/data/softcenter/bin/ddnsto stop",
+        "StatusCommand": "/data/softcenter/bin/ddnsto status",
         "IsAutoStart": 1,
         "ConfigPath": "/data/softcenter/config/ddnsto.env",
         "ConfigKeys": "",
         "LogPath": "/var/log/ddnsto.log",
+        "Files": [
+            {
+                "Name": "ddnsto-core",
+                "Path": "apps/ddnsto/ddnsto-core",
+                "Sha256": "ff0ba3b5f911b9d38751fc6556789122338f24419637e946af506b175650a5a6",
+                "Mode": "0755"
+            },
+            {
+                "Name": "ddnsto",
+                "Path": "apps/ddnsto/ddnsto",
+                "Sha256": "a3bb3d46bc540258daa71de3058084d790b4dbe9dd95950bfddb2239a1eda355",
+                "Mode": "0755"
+            }
+        ],
         "ConfigSchema": {
             "Sections": [
                 {
@@ -268,20 +282,6 @@
                             "Required": true,
                             "Secret": true,
                             "Help": "来自 DDNSTO 控制台的设备 Token"
-                        },
-                        {
-                            "Key": "DDNSTO_SERVER",
-                            "Label": "服务端地址",
-                            "Type": "text",
-                            "Default": "https://www.ddnsto.com",
-                            "Monospace": true
-                        },
-                        {
-                            "Key": "DDNSTO_WORKDIR",
-                            "Label": "工作目录",
-                            "Type": "path",
-                            "Default": "/data/ddnsto",
-                            "Monospace": true
                         }
                     ]
                 }
