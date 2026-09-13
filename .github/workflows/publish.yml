@@ -12,7 +12,7 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
-    container: debian:11
+    container: debian:12
     env:
       DOTNET_SYSTEM_GLOBALIZATION_INVARIANT: 1
 
@@ -21,18 +21,10 @@ jobs:
       env:
         DEBIAN_FRONTEND: noninteractive
       run: |
-        # Debian 11 已 EOL：live 源 404，archive 源又与镜像内已装包版本不一致。
-        # 用 snapshot 固定一套完整源；只装 amd64 交叉工具，不再 add-architecture arm64，
-        # 避免 multiarch 依赖地狱。AOT 由 ILCompiler + clang -target aarch64 完成。
-        SNAP=20240701T000000Z
-        printf '%s\n' \
-          "deb http://snapshot.debian.org/archive/debian/${SNAP} bullseye main" \
-          "deb http://snapshot.debian.org/archive/debian/${SNAP} bullseye-updates main" \
-          "deb http://snapshot.debian.org/archive/debian-security/${SNAP} bullseye-security main" \
-          > /etc/apt/sources.list
+        # debian:12 (bookworm) 仍在 live 源维护，无需 archive/snapshot
+        # 只装 amd64 交叉工具，不 add-architecture arm64，避免 multiarch 依赖冲突
         rm -rf /var/lib/apt/lists/*
-        printf 'Acquire::Check-Valid-Until "false";\nAcquire::Retries "5";\nAcquire::http::Pipeline-Depth "0";\n' \
-          > /etc/apt/apt.conf.d/99ci-apt
+        printf 'Acquire::Retries "3";\n' > /etc/apt/apt.conf.d/99ci-apt
         apt-get update
         apt-get install -y --no-install-recommends \
           git curl zip unzip ca-certificates \

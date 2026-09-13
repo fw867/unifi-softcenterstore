@@ -17,7 +17,7 @@ UniFi SoftCenter 是一个专为 UniFi OS (如 UCG-Fiber) 及类 Debian 路由�
 * **📜 极客级终端日志**：内置全屏“黑客瀑布流”日志查看器，支持实时拉取应用日志 (`tail`) 及系统核心底层守护日志 (`journalctl`)。
 * **⏰ 彻底接管 Crontab**：在界面上直接管理 Linux 系统的定时任务，支持标准的 Cron 表达式添加与精准解析删除。
 * **🔄 极客化在线 OTA 升级**：带实时终端日志输出的无感升级机制。自动通过配置的代理拉取最新版本，后端执行脱壳覆盖，双线程心跳探测自动刷新页面。
-* **⚡️ 极致性能与兼容性**：基于 `.NET 10 Native AOT` 交叉编译至 `linux-arm64`，单文件运行，**0 运行库依赖**。兼容老版本 `GLIBC 2.31`，即使在老旧的底层固件上也能稳定狂飙。
+* **⚡️ 极致性能与兼容性**：基于 `.NET 10 Native AOT` 交叉编译至 `linux-arm64`，单文件运行，**0 运行库依赖**。兼容常见 UniFi OS / Debian 底层（GLIBC ≥ 2.36）。
 
 ---
 
@@ -56,7 +56,7 @@ Frontend: Vue 3 / TailwindCSS / Lucide Icons
 
 Database: SQLite (Microsoft.Data.Sqlite 原生驱动)
 
-CI/CD: GitHub Actions (使用 debian:11 容器进行交叉编译，彻底解决 Ubuntu Multi-Arch 依赖冲突，获取极佳的 GLIBC 2.31 兼容性)
+CI/CD: GitHub Actions (使用 debian:12 容器进行交叉编译，避免 Multi-Arch 依赖冲突)
 
 ## 📂 核心目录结构参考
 
