@@ -21,11 +21,11 @@ jobs:
       env:
         DEBIAN_FRONTEND: noninteractive
       run: |
-        # Debian 11 (bullseye) 已 EOL，官方镜像里的 deb.debian.org 源会 404
-        # 统一切到 archive.debian.org，并关闭 Valid-Until 校验
+        # Debian 11 (bullseye) 已 EOL：deb.debian.org 包 404，
+        # archive.debian.org 也没有 bullseye-security Release。
+        # CI 只需 main 里的交叉编译工具，去掉 security 源即可。
         printf '%s\n' \
           'deb http://archive.debian.org/debian bullseye main' \
-          'deb http://archive.debian.org/debian-security bullseye-security main' \
           'deb http://archive.debian.org/debian bullseye-updates main' \
           > /etc/apt/sources.list
         rm -rf /var/lib/apt/lists/*
