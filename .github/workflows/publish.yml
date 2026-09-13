@@ -21,15 +21,16 @@ jobs:
       env:
         DEBIAN_FRONTEND: noninteractive
       run: |
-        # debian:12 (bookworm) 仍在 live 源维护，无需 archive/snapshot
-        # 只装 amd64 交叉工具，不 add-architecture arm64，避免 multiarch 依赖冲突
+        # debian:12 (bookworm) 仍在 live 源维护
+        # Native AOT 交叉链接需要 arm64 的 crt/libc（Scrt1.o 等），用 *-cross 包而非 multiarch
         rm -rf /var/lib/apt/lists/*
         printf 'Acquire::Retries "3";\n' > /etc/apt/apt.conf.d/99ci-apt
         apt-get update
         apt-get install -y --no-install-recommends \
           git curl zip unzip ca-certificates \
           clang zlib1g-dev \
-          gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu
+          gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu \
+          libc6-dev-arm64-cross libgcc-12-dev-arm64-cross
 
     - name: Checkout Code
       uses: actions/checkout@v4
@@ -80,7 +81,8 @@ jobs:
         /p:PublishAot=true \
         /p:Version=${{ env.APP_VERSION }} \
         /p:InformationalVersion=${{ env.APP_VERSION }} \
-        /p:ObjCopyName=aarch64-linux-gnu-objcopy
+        /p:ObjCopyName=aarch64-linux-gnu-objcopy \
+        /p:SysRoot=/usr/aarch64-linux-gnu
 
     - name: Zip the build
       run: |
