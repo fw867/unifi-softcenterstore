@@ -70,7 +70,6 @@ write_domain_file() {
 
 # SoftCenter 安装路径
 XRAY_BIN="/data/softcenter/bin/xray"
-KOOLSS_BIN="/data/softcenter/bin/koolss"
 # 获取局域网 IP 地址
 lan_ipaddr=$(ifconfig $LAN_IF | grep 'inet ' | awk '{print $2}' | cut -d: -f2)
 
@@ -534,7 +533,7 @@ kill_process() {
 }
 
 clean_log() {
-    rm -f /tmp/xray*.log
+    rm -f /tmp/xray*.log /tmp/xray.json /tmp/koolss_whitedomain.txt /tmp/koolss_blackdomain.txt
 }
 
 restart_process() {

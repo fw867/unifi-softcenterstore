@@ -359,57 +359,24 @@ static Dictionary<string, string> DecodeEnvDict(Dictionary<string, string> dict)
     return outDict;
 }
 
+// config.env 始终按行 KEY=VALUE；多行值经 EncodeEnvValue 存为 b64: 单行
 static Dictionary<string, string> ReadEnvFile(string path)
 {
     var dict = new Dictionary<string, string>();
     if (!File.Exists(path)) return dict;
-    var text = File.ReadAllText(path);
-    var i = 0;
-    var n = text.Length;
-    while (i < n)
+    foreach (var raw in File.ReadAllLines(path))
     {
-        while (i < n && (text[i] == '\n' || text[i] == '\r')) i++;
-        if (i >= n) break;
-        if (text[i] == '#')
-        {
-            while (i < n && text[i] != '\n') i++;
-            continue;
-        }
-        var eq = text.IndexOf('=', i);
-        if (eq < 0) break;
-        var key = text[i..eq].Trim();
-        i = eq + 1;
-        if (i < n && text[i] == '\'')
-        {
-            i++;
-            var sb = new StringBuilder();
-            while (i < n)
-            {
-                if (text[i] == '\\' && i + 1 < n && text[i + 1] == '\'')
-                {
-                    sb.Append('\'');
-                    i += 2;
-                    continue;
-                }
-                if (text[i] == '\'')
-                {
-                    i++;
-                    break;
-                }
-                sb.Append(text[i]);
-                i++;
-            }
-            dict[key] = sb.ToString();
-        }
-        else
-        {
-            var start = i;
-            while (i < n && text[i] != '\n' && text[i] != '\r') i++;
-            var val = text[start..i].Trim();
-            if (val.Length >= 2 && val[0] == '"' && val[^1] == '"')
-                val = val[1..^1];
-            dict[key] = val;
-        }
+        var line = raw.Trim();
+        if (line.Length == 0 || line.StartsWith('#')) continue;
+        var idx = line.IndexOf('=');
+        if (idx <= 0) continue;
+        var key = line[..idx].Trim();
+        var val = line[(idx + 1)..].Trim();
+        if (val.Length >= 2 && val[0] == '\'' && val[^1] == '\'')
+            val = val[1..^1].Replace("'\\''", "'");
+        else if (val.Length >= 2 && val[0] == '"' && val[^1] == '"')
+            val = val[1..^1];
+        dict[key] = val;
     }
     return dict;
 }
