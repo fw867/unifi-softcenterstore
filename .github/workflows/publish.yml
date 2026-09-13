@@ -25,13 +25,13 @@ jobs:
       run: |
         rm -rf /var/lib/apt/lists/*
         printf 'Acquire::Retries "3";\n' > /etc/apt/apt.conf.d/99ci-apt
+        dpkg --add-architecture arm64
         apt-get update
         apt-get install -y --no-install-recommends \
           wget gnupg ca-certificates \
           git curl zip unzip \
-          zlib1g-dev \
-          gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu \
-          libc6-dev-arm64-cross
+          zlib1g-dev:arm64 libc6-dev:arm64 \
+          gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu
         # .NET 10 Native AOT 需要较新 clang；focal 自带 clang-10 过旧
         wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key \
           | tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc >/dev/null
@@ -42,6 +42,7 @@ jobs:
         ln -sf /usr/bin/clang-18 /usr/local/bin/clang
         ln -sf /usr/bin/clang++-18 /usr/local/bin/clang++
         clang --version
+        ls /usr/aarch64-linux-gnu/lib/Scrt1.o /usr/lib/aarch64-linux-gnu/libc.so.6 2>/dev/null || true
 
     - name: Checkout Code
       uses: actions/checkout@v4
@@ -92,8 +93,7 @@ jobs:
         /p:PublishAot=true \
         /p:Version=${{ env.APP_VERSION }} \
         /p:InformationalVersion=${{ env.APP_VERSION }} \
-        /p:ObjCopyName=aarch64-linux-gnu-objcopy \
-        /p:SysRoot=/usr/aarch64-linux-gnu
+        /p:ObjCopyName=aarch64-linux-gnu-objcopy
 
     - name: Zip the build
       run: |
