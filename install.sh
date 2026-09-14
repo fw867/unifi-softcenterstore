@@ -55,17 +55,42 @@ download_with_progress() {
 
 echo ""
 echo "▸ 步骤 [1/4]  获取最新 Release 信息"
-LATEST_RELEASE=$(curl -fsSL --connect-timeout 15 --max-time 60 "https://api.github.com/repos/$REPO/releases/latest") || {
-    echo "❌ 获取 Release 信息失败，请检查网络或代理。"
+API_URL="https://api.github.com/repos/$REPO/releases/latest"
+if ! LATEST_RELEASE=$(curl -fsSL --connect-timeout 15 --max-time 60 "$API_URL"); then
+    echo "❌ 请求 GitHub API 失败，请检查网络或代理。"
+    echo "   接口: $API_URL"
     exit 1
-}
+fi
 
+if [ -z "$LATEST_RELEASE" ] || ! printf '%s' "$LATEST_RELEASE" | grep -q '"tag_name"'; then
+    echo "❌ GitHub API 返回异常（可能触发限流），响应片段："
+    printf '%s\n' "$LATEST_RELEASE" | head -c 400
+    echo ""
+    exit 1
+fi
+
+TAG_NAME=$(printf '%s' "$LATEST_RELEASE" | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1)
+
+# GitHub API 为 pretty-printed JSON（冒号后有空格），必须兼容空白
+# 优先匹配 SoftCenter-*-arm64.zip
 ASSET=$(printf '%s' "$LATEST_RELEASE" | tr '{' '\n' | grep 'browser_download_url' | grep 'SoftCenter-.*\.zip' | grep -v '\.dgst' | head -n1)
-ZIP_URL=$(printf '%s' "$ASSET" | sed -n 's/.*"browser_download_url":"\([^"]*\)".*/\1/p')
-ZIP_DIGEST=$(printf '%s' "$ASSET" | sed -n 's/.*"digest":"sha256:\([^"]*\)".*/\1/p')
+ZIP_URL=$(printf '%s' "$ASSET" | sed -n 's/.*"browser_download_url"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+ZIP_DIGEST=$(printf '%s' "$ASSET" | sed -n 's/.*"digest"[[:space:]]*:[[:space:]]*"sha256:\([^"]*\)".*/\1/p')
+
+# 兜底：任意非 dgst 的 zip 资源
+if [ -z "$ZIP_URL" ]; then
+    ASSET=$(printf '%s' "$LATEST_RELEASE" | tr '{' '\n' | grep 'browser_download_url' | grep '\.zip' | grep -v '\.dgst' | head -n1)
+    ZIP_URL=$(printf '%s' "$ASSET" | sed -n 's/.*"browser_download_url"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+    ZIP_DIGEST=$(printf '%s' "$ASSET" | sed -n 's/.*"digest"[[:space:]]*:[[:space:]]*"sha256:\([^"]*\)".*/\1/p')
+fi
+
+echo "    版本:     ${TAG_NAME:-unknown}"
 
 if [ -z "$ZIP_URL" ]; then
-    echo "❌ 无法获取下载链接，请检查网络或 GitHub 发布页面。"
+    echo "❌ 无法从 Release 中解析下载链接。"
+    echo "   已识别 tag: ${TAG_NAME:-无}"
+    echo "   资源列表片段："
+    printf '%s' "$LATEST_RELEASE" | tr '{' '\n' | grep -E '"name"|browser_download_url' | head -n 12
     exit 1
 fi
 if [ -z "$ZIP_DIGEST" ]; then
