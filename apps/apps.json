@@ -456,7 +456,7 @@
             {
                 "Name": "webssh-dl",
                 "Path": "apps/webssh/webssh-dl",
-                "Sha256": "481c0b3426e722198c07cde6435957ca1796a242ac63dd83b3e5db349d2cc1fd",
+                "Sha256": "d0d1aaccaf82673ad845e96d2412fe13c0d2cac640694c88ae4e95cb69edb188",
                 "Mode": "0755"
             }
         ],
