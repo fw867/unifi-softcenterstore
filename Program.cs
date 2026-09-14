@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using System.Linq;
 using System.Collections.Generic;
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Net;
 using System.Net.Http;
@@ -535,20 +536,37 @@ app.MapPost("/api/apps/{id}/control", (string id, string action) => {
     return Results.Ok(new SimpleSuccess(true));
 });
 
+// 安装/更新进度（内存态，供前端轮询）
+var InstallProgressStore = new ConcurrentDictionary<string, InstallProgress>();
+
+void SetInstallProgress(string appId, InstallProgress p) => InstallProgressStore[appId] = p;
+
 // 从云端下载插件运行文件并校验 SHA256，写入 /data/softcenter/bin
-// 全部下载并校验通过后才落盘，避免半更新
+// 全部下载并校验通过后才落盘，避免半更新；下载过程写入进度供前端展示
 app.MapPost("/api/apps/{id}/install", async (string id) => {
     using var conn = new SqliteConnection(DbPath); conn.Open();
     using var cmd = conn.CreateCommand();
     cmd.CommandText = "SELECT Files FROM apps_registry WHERE Id=@id";
     cmd.Parameters.AddWithValue("@id", id);
     var filesJson = cmd.ExecuteScalar()?.ToString();
-    if (string.IsNullOrWhiteSpace(filesJson)) return Results.Ok(new InstallResult(true, new List<string> { "无运行文件需要下载" }, null));
+    if (string.IsNullOrWhiteSpace(filesJson))
+    {
+        SetInstallProgress(id, new InstallProgress(id, "done", 0, 0, "", 0, null, "无运行文件需要下载", true, true));
+        return Results.Ok(new InstallResult(true, new List<string> { "无运行文件需要下载" }, null));
+    }
 
     List<AppFileItem>? files;
     try { files = JsonSerializer.Deserialize(filesJson, AppJsonContext.Default.ListAppFileItem); }
-    catch { return Results.BadRequest(new InstallResult(false, null, "Files JSON 无效")); }
-    if (files is null || files.Count == 0) return Results.Ok(new InstallResult(true, new List<string> { "无运行文件需要下载" }, null));
+    catch
+    {
+        SetInstallProgress(id, new InstallProgress(id, "error", 0, 0, "", 0, null, "Files JSON 无效", true, false));
+        return Results.BadRequest(new InstallResult(false, null, "Files JSON 无效"));
+    }
+    if (files is null || files.Count == 0)
+    {
+        SetInstallProgress(id, new InstallProgress(id, "done", 0, 0, "", 0, null, "无运行文件需要下载", true, true));
+        return Results.Ok(new InstallResult(true, new List<string> { "无运行文件需要下载" }, null));
+    }
 
     Directory.CreateDirectory(BinDir);
     var logs = new List<string>();
@@ -557,17 +575,58 @@ app.MapPost("/api/apps/{id}/install", async (string id) => {
         handler.Proxy = new WebProxy(sysConfig.LocalProxy);
     using var http = new HttpClient(handler) { Timeout = TimeSpan.FromMinutes(5) };
 
+    InstallProgress Fail(string phase, string msg, int idx = 0, string name = "")
+    {
+        var p = new InstallProgress(id, phase, idx, files.Count, name, 0, null, msg, true, false);
+        SetInstallProgress(id, p);
+        return p;
+    }
+
     // 阶段 1：全部下载 + SHA256 校验，任一失败则不写入任何文件
     var pending = new List<(AppFileItem File, byte[] Bytes, string Hash)>();
-    foreach (var f in files)
+    for (int i = 0; i < files.Count; i++)
     {
+        var f = files[i];
         if (string.IsNullOrWhiteSpace(f.Name) || string.IsNullOrWhiteSpace(f.Path) || string.IsNullOrWhiteSpace(f.Sha256))
+        {
+            Fail("error", $"文件清单不完整: {f.Name}，已中止，未替换任何文件", i, f.Name);
             return Results.BadRequest(new InstallResult(false, logs, $"文件清单不完整: {f.Name}，已中止，未替换任何文件"));
+        }
 
         var url = RepoRawBase + f.Path.TrimStart('/');
+        SetInstallProgress(id, new InstallProgress(id, "downloading", i + 1, files.Count, f.Name, 0, null, $"正在下载 {f.Name}", false, false));
+
         byte[] bytes;
-        try { bytes = await http.GetByteArrayAsync(url); }
-        catch (Exception ex) { return Results.BadRequest(new InstallResult(false, logs, $"下载失败 {f.Name}: {ex.Message}，已中止，未替换任何文件")); }
+        try
+        {
+            using var resp = await http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead);
+            resp.EnsureSuccessStatusCode();
+            var total = resp.Content.Headers.ContentLength;
+            await using var stream = await resp.Content.ReadAsStreamAsync();
+            using var ms = new MemoryStream();
+            var buffer = new byte[16 * 1024];
+            long received = 0;
+            int n;
+            long lastTick = Environment.TickCount64;
+            while ((n = await stream.ReadAsync(buffer)) > 0)
+            {
+                ms.Write(buffer, 0, n);
+                received += n;
+                var now = Environment.TickCount64;
+                if (now - lastTick >= 200)
+                {
+                    lastTick = now;
+                    SetInstallProgress(id, new InstallProgress(id, "downloading", i + 1, files.Count, f.Name, received, total, $"正在下载 {f.Name}", false, false));
+                }
+            }
+            bytes = ms.ToArray();
+            SetInstallProgress(id, new InstallProgress(id, "verifying", i + 1, files.Count, f.Name, received, total, $"正在校验 {f.Name}", false, false));
+        }
+        catch (Exception ex)
+        {
+            Fail("error", $"下载失败 {f.Name}: {ex.Message}，已中止，未替换任何文件", i + 1, f.Name);
+            return Results.BadRequest(new InstallResult(false, logs, $"下载失败 {f.Name}: {ex.Message}，已中止，未替换任何文件"));
+        }
 
         string hash;
         using (var sha = SHA256.Create())
@@ -575,31 +634,48 @@ app.MapPost("/api/apps/{id}/install", async (string id) => {
         if (!string.Equals(hash, f.Sha256.Trim().ToLowerInvariant(), StringComparison.Ordinal))
         {
             logs.Add($"校验失败 {f.Name}: 期望 {f.Sha256} 实际 {hash}");
+            Fail("error", $"SHA256 校验失败: {f.Name}，已中止，未替换任何文件", i + 1, f.Name);
             return Results.BadRequest(new InstallResult(false, logs, $"SHA256 校验失败: {f.Name}，已中止，未替换任何文件"));
         }
 
         pending.Add((f, bytes, hash));
         logs.Add($"已下载并校验 {f.Name} ({hash[..12]}…)");
+        SetInstallProgress(id, new InstallProgress(id, "downloading", i + 1, files.Count, f.Name, bytes.Length, bytes.Length, $"{f.Name} 校验通过", false, false));
     }
 
     // 阶段 2：全部就绪后再统一写入
-    foreach (var (f, bytes, hash) in pending)
+    for (int i = 0; i < pending.Count; i++)
     {
+        var (f, bytes, hash) = pending[i];
+        SetInstallProgress(id, new InstallProgress(id, "writing", i + 1, pending.Count, f.Name, bytes.Length, bytes.Length, $"正在写入 {f.Name}", false, false));
         var dest = Path.Combine(BinDir, f.Name.Replace('\\', '/'));
         var destDir = Path.GetDirectoryName(dest);
         if (!string.IsNullOrEmpty(destDir)) Directory.CreateDirectory(destDir);
         try { await File.WriteAllBytesAsync(dest, bytes); }
-        catch (Exception ex) { return Results.BadRequest(new InstallResult(false, logs, $"写入失败 {f.Name}: {ex.Message}")); }
+        catch (Exception ex)
+        {
+            Fail("error", $"写入失败 {f.Name}: {ex.Message}", i + 1, f.Name);
+            return Results.BadRequest(new InstallResult(false, logs, $"写入失败 {f.Name}: {ex.Message}"));
+        }
         var mode = string.IsNullOrWhiteSpace(f.Mode) ? "0755" : f.Mode;
         Process.Start("/bin/bash", $"-c \"chmod {mode} {dest}\"")?.WaitForExit();
         logs.Add($"已安装 {f.Name} → {dest}");
     }
 
     if (pending.Count != files.Count)
+    {
+        Fail("error", $"文件数量不完整（{pending.Count}/{files.Count}）");
         return Results.BadRequest(new InstallResult(false, logs, $"文件数量不完整（{pending.Count}/{files.Count}）"));
+    }
 
     logs.Add($"全部 {pending.Count} 个文件下载、校验并替换成功");
+    SetInstallProgress(id, new InstallProgress(id, "done", pending.Count, pending.Count, "", 0, null, $"全部 {pending.Count} 个文件安装成功", true, true));
     return Results.Ok(new InstallResult(true, logs, null));
+});
+
+app.MapGet("/api/apps/{id}/install/progress", (string id) => {
+    if (InstallProgressStore.TryGetValue(id, out var p)) return Results.Ok(p);
+    return Results.Ok(new InstallProgress(id, "idle", 0, 0, "", 0, null, null, false, false));
 });
 
 app.MapPost("/api/apps/{id}/custom_command", (string id, CustomCommandReq req) => {
@@ -888,6 +964,7 @@ public record AppConfig { public int Port { get; set; } = 9958; public string Ad
 public record AppEntity(string Id, string Name, string Type, string Icon, string StartCommand, string StopCommand, string StatusCommand, int IsAutoStart, bool IsRunning, string ConfigPath, string ConfigKeys, string LogPath, int SortOrder, string Version, string Description, string CustomCommands, string ConfigSchema = "", string Files = "[]");
 public record AppFileItem(string Name, string Path, string Sha256, string Mode = "0755");
 public record InstallResult(bool Success, List<string>? Logs, string? Error);
+public record InstallProgress(string AppId, string Phase, int FileIndex, int FileCount, string FileName, long BytesReceived, long? TotalBytes, string? Message, bool Done, bool Success);
 public record SimpleSuccess(bool Success);
 public record AppOrderReq(string Id, int SortOrder);
 public record CronEntity(string Id, string Name, string Schedule, string Command);
@@ -904,6 +981,7 @@ public record ConfigSaveResult(bool Success, Dictionary<string, string>? Errors,
 [JsonSerializable(typeof(AppEntity))]
 [JsonSerializable(typeof(AppFileItem))]
 [JsonSerializable(typeof(InstallResult))]
+[JsonSerializable(typeof(InstallProgress))]
 [JsonSerializable(typeof(SimpleSuccess))]
 [JsonSerializable(typeof(AppOrderReq))]
 [JsonSerializable(typeof(CronEntity))]

@@ -756,6 +756,44 @@
             </div>
         </div>
 
+        <div v-if="installUi.visible"
+            class="fixed inset-0 z-[110] flex items-center justify-center p-6 bg-black/40 backdrop-blur-sm">
+            <div class="w-full max-w-lg bg-white rounded-[1.5rem] shadow-2xl p-6">
+                <div class="flex items-center space-x-3 mb-4">
+                    <div class="w-10 h-10 rounded-2xl bg-blue-600 text-white flex items-center justify-center shrink-0">
+                        <i :data-lucide="installUi.success === false ? 'alert-circle' : 'download'"
+                            :class="installUi.done && installUi.success !== false ? 'text-white' : ''"
+                            class="w-5 h-5"></i>
+                    </div>
+                    <div class="min-w-0">
+                        <h3 class="font-semibold text-gray-800 truncate">{{ installUi.title }}</h3>
+                        <p class="text-xs text-gray-400 mt-0.5 truncate">{{ installUi.message || '准备中…' }}</p>
+                    </div>
+                </div>
+
+                <div class="mb-2 flex items-center justify-between text-xs text-gray-500 font-mono">
+                    <span>{{ installUi.fileName || '—' }}</span>
+                    <span v-if="installUi.fileCount">{{ installUi.fileIndex }}/{{ installUi.fileCount }}</span>
+                </div>
+                <div class="h-2.5 bg-gray-100 rounded-full overflow-hidden mb-2">
+                    <div class="h-full rounded-full transition-all duration-200"
+                        :class="installUi.success === false ? 'bg-red-500' : (installUi.done ? 'bg-green-500' : 'bg-blue-600')"
+                        :style="{ width: installPercent + '%' }"></div>
+                </div>
+                <div class="flex justify-between text-[11px] text-gray-400 font-mono mb-4">
+                    <span>{{ installPhaseLabel }}</span>
+                    <span v-if="installUi.totalBytes">{{ formatBytes(installUi.bytesReceived) }} / {{ formatBytes(installUi.totalBytes) }}</span>
+                    <span v-else-if="installUi.bytesReceived">{{ formatBytes(installUi.bytesReceived) }}</span>
+                </div>
+
+                <div v-if="installUi.done"
+                    class="flex justify-end">
+                    <button @click="installUi.visible = false"
+                        class="btn-apple px-4 py-2 rounded-xl text-sm font-medium bg-black text-white hover:bg-gray-800">关闭</button>
+                </div>
+            </div>
+        </div>
+
         <div v-if="activeApp"
             class="fixed inset-0 z-[100] flex items-center justify-center p-4 md:p-8 bg-black/20 backdrop-blur-sm">
             <div class="glass w-full max-w-5xl h-[88vh] min-h-[480px] rounded-[2.5rem] p-6 md:p-8 shadow-2xl flex flex-col">
@@ -960,7 +998,7 @@
     </div>
 
     <script>
-        const { createApp, ref, onMounted, nextTick, computed } = Vue;
+        const { createApp, ref, reactive, onMounted, nextTick, computed } = Vue;
 
         createApp({
             setup() {
@@ -1434,17 +1472,47 @@
                         const filesRaw = onlineApp.Files ?? onlineApp.files ?? [];
                         const hasFiles = Array.isArray(filesRaw) ? filesRaw.length > 0 : !!filesRaw && filesRaw !== '[]';
                         if (hasFiles) {
-                            const installRes = await callApi(`/api/apps/${app.id}/install`, 'POST');
-                            if (!installRes || (installRes.success !== true && installRes.Success !== true)) {
-                                const err = (installRes && (installRes.error || installRes.Error)) || '校验或写入失败';
-                                alert(`配置已同步，但运行文件更新失败：${err}\n本地运行文件未被替换。`);
-                                loadRealApps();
-                                return;
+                            startInstallProgressPoll(app.id, `更新 ${app.name}`);
+                            try {
+                                const installRes = await callApi(`/api/apps/${app.id}/install`, 'POST');
+                                stopInstallProgressPoll();
+                                if (!installRes || (installRes.success !== true && installRes.Success !== true)) {
+                                    const err = (installRes && (installRes.error || installRes.Error)) || '校验或写入失败';
+                                    installUi.done = true;
+                                    installUi.success = false;
+                                    installUi.phase = 'error';
+                                    installUi.message = err;
+                                    loadRealApps();
+                                    return;
+                                }
+                                installUi.done = true;
+                                installUi.success = true;
+                                installUi.phase = 'done';
+                                installUi.message = '配置与运行文件已全部同步';
+                            } catch (e) {
+                                stopInstallProgressPoll();
+                                installUi.done = true;
+                                installUi.success = false;
+                                installUi.phase = 'error';
+                                installUi.message = '同步失败：无法连接到云端应用库网络';
                             }
+                            return;
                         }
-                        alert(`🎉 "${app.name}" 的底层配置与运行文件已全部同步为云端最新版本！`);
+                        installUi.visible = true;
+                        installUi.title = `更新 ${app.name}`;
+                        installUi.done = true;
+                        installUi.success = true;
+                        installUi.phase = 'done';
+                        installUi.message = '配置已同步（无运行文件需要下载）';
                         loadRealApps();
-                    } catch (e) { alert('同步失败：无法连接到云端应用库网络。'); }
+                    } catch (e) {
+                        installUi.visible = true;
+                        installUi.title = `更新 ${app?.name || '插件'}`;
+                        installUi.done = true;
+                        installUi.success = false;
+                        installUi.phase = 'error';
+                        installUi.message = '同步失败：无法连接到云端应用库网络';
+                    }
                 };
 
                 const serializeFiles = (f) => {
@@ -1453,11 +1521,98 @@
                     try { return JSON.stringify(f); } catch { return '[]'; }
                 };
 
+                const installUi = reactive({
+                    visible: false,
+                    title: '',
+                    message: '',
+                    phase: 'idle',
+                    fileIndex: 0,
+                    fileCount: 0,
+                    fileName: '',
+                    bytesReceived: 0,
+                    totalBytes: 0,
+                    done: false,
+                    success: null
+                });
+                let installPollTimer = null;
+
+                const formatBytes = (n) => {
+                    n = Number(n) || 0;
+                    if (n < 1024) return n + ' B';
+                    if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB';
+                    if (n < 1024 * 1024 * 1024) return (n / 1024 / 1024).toFixed(1) + ' MB';
+                    return (n / 1024 / 1024 / 1024).toFixed(2) + ' GB';
+                };
+
+                const installPhaseLabel = computed(() => {
+                    switch (installUi.phase) {
+                        case 'downloading': return '下载中';
+                        case 'verifying': return '校验中';
+                        case 'writing': return '写入中';
+                        case 'done': return installUi.success === false ? '失败' : '完成';
+                        case 'error': return '失败';
+                        default: return '准备中';
+                    }
+                });
+
+                const installPercent = computed(() => {
+                    if (installUi.done && installUi.success !== false) return 100;
+                    if (installUi.totalBytes > 0) {
+                        return Math.min(100, Math.round(installUi.bytesReceived / installUi.totalBytes * 100));
+                    }
+                    if (installUi.fileCount > 0) {
+                        // 文件级进度：已完成文件数 + 当前文件一半权重
+                        const base = Math.max(0, installUi.fileIndex - 1);
+                        return Math.min(99, Math.round((base + 0.5) / installUi.fileCount * 100));
+                    }
+                    return installUi.done ? 100 : 5;
+                });
+
+                const startInstallProgressPoll = (appId, title) => {
+                    stopInstallProgressPoll();
+                    installUi.visible = true;
+                    installUi.title = title || '安装插件';
+                    installUi.message = '正在准备…';
+                    installUi.phase = 'idle';
+                    installUi.fileIndex = 0;
+                    installUi.fileCount = 0;
+                    installUi.fileName = '';
+                    installUi.bytesReceived = 0;
+                    installUi.totalBytes = 0;
+                    installUi.done = false;
+                    installUi.success = null;
+                    const tick = async () => {
+                        const p = await callApi(`/api/apps/${appId}/install/progress`);
+                        if (!p) return;
+                        installUi.phase = p.phase || p.Phase || 'idle';
+                        installUi.fileIndex = p.fileIndex ?? p.FileIndex ?? 0;
+                        installUi.fileCount = p.fileCount ?? p.FileCount ?? 0;
+                        installUi.fileName = p.fileName ?? p.FileName ?? '';
+                        installUi.bytesReceived = p.bytesReceived ?? p.BytesReceived ?? 0;
+                        installUi.totalBytes = p.totalBytes ?? p.TotalBytes ?? 0;
+                        installUi.message = p.message ?? p.Message ?? '';
+                        installUi.done = !!(p.done ?? p.Done);
+                        const succ = p.success ?? p.Success;
+                        installUi.success = installUi.done ? succ : null;
+                        nextTick(() => lucide.createIcons());
+                    };
+                    tick();
+                    installPollTimer = setInterval(tick, 300);
+                };
+
+                const stopInstallProgressPoll = () => {
+                    if (installPollTimer) {
+                        clearInterval(installPollTimer);
+                        installPollTimer = null;
+                    }
+                };
+
                 const installApp = async (p, opts = {}) => {
                     const silent = !!opts.silent;
                     const redirect = opts.redirect !== false;
                     if (!p) return false;
                     const filesRaw = p.Files ?? p.files ?? [];
+                    const appName = p.Name || p.name || p.Id || p.id || '插件';
                     const appData = {
                         Id: p.Id || p.id, Name: p.Name || p.name, Type: p.Type || p.type || 'Local', Icon: p.Icon || p.icon || 'box',
                         StartCommand: p.StartCommand || p.startCommand, StopCommand: p.StopCommand || p.stopCommand,
@@ -1481,16 +1636,52 @@
 
                     const hasFiles = Array.isArray(filesRaw) ? filesRaw.length > 0 : !!filesRaw && filesRaw !== '[]';
                     if (hasFiles) {
-                        const installRes = await callApi(`/api/apps/${appData.Id}/install`, 'POST');
-                        if (!installRes) {
-                            if (!silent) alert('插件文件下载失败');
-                            return false;
-                        }
-                        if (installRes.success !== true && installRes.Success !== true) {
-                            const err = installRes.error || installRes.Error || '校验或写入失败';
-                            const logs = installRes.logs || installRes.Logs || [];
-                            if (!silent) alert(`安装运行文件失败：${err}\n${logs.join('\n')}`);
-                            return false;
+                        const showUi = opts.showProgress !== false;
+                        if (showUi) startInstallProgressPoll(appData.Id, `安装 ${appName}`);
+                        try {
+                            const installRes = await callApi(`/api/apps/${appData.Id}/install`, 'POST');
+                            if (showUi) {
+                                await new Promise(r => setTimeout(r, 400));
+                                await callApi(`/api/apps/${appData.Id}/install/progress`).then(pr => {
+                                    if (pr) {
+                                        installUi.phase = pr.phase || pr.Phase || installUi.phase;
+                                        installUi.message = pr.message || pr.Message || installUi.message;
+                                        installUi.done = !!(pr.done ?? pr.Done);
+                                        installUi.success = installUi.done ? (pr.success ?? pr.Success) : null;
+                                        installUi.fileCount = pr.fileCount ?? pr.FileCount ?? installUi.fileCount;
+                                        installUi.fileIndex = pr.fileIndex ?? pr.FileIndex ?? installUi.fileIndex;
+                                    }
+                                });
+                                stopInstallProgressPoll();
+                                nextTick(() => lucide.createIcons());
+                            }
+                            if (!installRes) {
+                                if (showUi) {
+                                    installUi.done = true;
+                                    installUi.success = false;
+                                    installUi.phase = 'error';
+                                    installUi.message = '插件文件下载失败';
+                                }
+                                return false;
+                            }
+                            if (installRes.success !== true && installRes.Success !== true) {
+                                const err = installRes.error || installRes.Error || '校验或写入失败';
+                                if (showUi) {
+                                    installUi.done = true;
+                                    installUi.success = false;
+                                    installUi.phase = 'error';
+                                    installUi.message = err;
+                                }
+                                return false;
+                            }
+                            if (showUi) {
+                                installUi.done = true;
+                                installUi.success = true;
+                                installUi.phase = 'done';
+                                installUi.message = `全部 ${installUi.fileCount || filesRaw.length} 个文件安装成功`;
+                            }
+                        } finally {
+                            if (showUi) stopInstallProgressPoll();
                         }
                     }
                     if (redirect) {
@@ -1498,7 +1689,6 @@
                         await loadRealApps();
                         nextTick(() => lucide.createIcons());
                     }
-                    if (!silent) alert(`"${appData.Name}" 安装完成，所有运行文件已就绪`);
                     return true;
                 };
 
@@ -1908,7 +2098,7 @@
                     addTab, isFetchingStore, onlineStore, fetchOnlineStore, onNewAppIdChange, submitManualApp,
                     newApp, logModalApp, logContent, isLoadingLogs, cronModalApp, newCronReq, hasUpdate, latestVersion, isUpgrading, upgradeLog, doUpgrade,
                     searchQuery, filteredApps, isDragging, dragFromIndex, dragOverIndex, ghostX, ghostY, dragGhostApp, onHandlePointerDown, getLocalApp, isNewerVersion, appUpdates, appHasUpdate, cloudVersionOf, deleteApp, toggleApp, restartApp, restartingAppId, saveAutoStart,
-                    installApp, updateAppConfigFromCloud, updateAllApps, isUpdatingAll, updateAllProgress, showSystemLogs, showLogModal, refreshLogs, runCustomCommand, loadCronJobs, openConfig, saveAppConfig, showCronModal, submitCron, deleteCron,
+                    installApp, updateAppConfigFromCloud, updateAllApps, isUpdatingAll, updateAllProgress, installUi, installPercent, installPhaseLabel, formatBytes, showSystemLogs, showLogModal, refreshLogs, runCustomCommand, loadCronJobs, openConfig, saveAppConfig, showCronModal, submitCron, deleteCron,
                     sysConfigForm, isSavingSettings, openSettings, saveSettings, activeCmdMenu, showCronModalVisible, goToRouterAdmin
                 };
             }
