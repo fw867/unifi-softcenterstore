@@ -385,44 +385,127 @@
                         </div>
                     </div>
 
-                    <div v-else class="glass rounded-3xl p-5 md:p-6 space-y-4 text-sm max-w-3xl">
-                        <p class="text-xs text-gray-500">适合本地调试或私有插件。Schema 字段留空则退回旧版 ConfigKeys 解析。</p>
-                        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                            <input v-model="newApp.Id" placeholder="应用 ID"
-                                class="w-full bg-white/70 border border-gray-200 rounded-xl px-4 py-2.5 outline-none focus:ring-2 focus:ring-blue-500">
-                            <input v-model="newApp.Name" placeholder="显示名称"
-                                class="w-full bg-white/70 border border-gray-200 rounded-xl px-4 py-2.5 outline-none focus:ring-2 focus:ring-blue-500">
-                            <input v-model="newApp.Version" placeholder="版本号"
-                                class="w-full bg-white/70 border border-gray-200 rounded-xl px-4 py-2.5 outline-none font-mono text-xs">
-                            <input v-model="newApp.Icon" placeholder="Lucide 图标名"
-                                class="w-full bg-white/70 border border-gray-200 rounded-xl px-4 py-2.5 outline-none font-mono text-xs">
+                    <div v-else class="glass rounded-3xl p-5 md:p-7 max-w-3xl">
+                        <div class="mb-5">
+                            <h2 class="text-lg font-semibold">手动添加插件</h2>
+                            <p class="text-xs text-gray-500 mt-1">按新软件中心约定：配置写入
+                                <code class="bg-gray-100 px-1 rounded">/data/softcenter/config/&lt;id&gt;.env</code>，
+                                运行文件安装到 <code class="bg-gray-100 px-1 rounded">/data/softcenter/bin/</code>。
+                            </p>
                         </div>
-                        <input v-model="newApp.Description" placeholder="应用简介"
-                            class="w-full bg-white/70 border border-gray-200 rounded-xl px-4 py-2.5 outline-none">
-                        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                            <input v-model="newApp.ConfigPath" placeholder="配置路径 /data/softcenter/config/<id>.env"
-                                class="w-full bg-white/70 border border-gray-200 rounded-xl px-4 py-2.5 outline-none">
-                            <input v-model="newApp.ConfigKeys" placeholder="旧版变量名（可空）"
-                                class="w-full bg-white/70 border border-gray-200 rounded-xl px-4 py-2.5 outline-none font-mono text-xs">
+
+                        <div class="space-y-4 text-sm">
+                            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                <div>
+                                    <label class="block text-gray-600 mb-1.5 text-xs font-medium">应用 ID *</label>
+                                    <input v-model="newApp.Id" @input="onNewAppIdChange" placeholder="如 myplugin"
+                                        class="w-full bg-white/70 border border-gray-200 rounded-xl px-4 py-2.5 outline-none focus:ring-2 focus:ring-blue-500 font-mono text-xs">
+                                </div>
+                                <div>
+                                    <label class="block text-gray-600 mb-1.5 text-xs font-medium">显示名称 *</label>
+                                    <input v-model="newApp.Name" placeholder="如 我的插件"
+                                        class="w-full bg-white/70 border border-gray-200 rounded-xl px-4 py-2.5 outline-none focus:ring-2 focus:ring-blue-500">
+                                </div>
+                                <div>
+                                    <label class="block text-gray-600 mb-1.5 text-xs font-medium">版本</label>
+                                    <input v-model="newApp.Version" placeholder="1.0.0"
+                                        class="w-full bg-white/70 border border-gray-200 rounded-xl px-4 py-2.5 outline-none font-mono text-xs">
+                                </div>
+                                <div>
+                                    <label class="block text-gray-600 mb-1.5 text-xs font-medium">图标 (Lucide)</label>
+                                    <input v-model="newApp.Icon" placeholder="box"
+                                        class="w-full bg-white/70 border border-gray-200 rounded-xl px-4 py-2.5 outline-none font-mono text-xs">
+                                </div>
+                                <div>
+                                    <label class="block text-gray-600 mb-1.5 text-xs font-medium">类型</label>
+                                    <select v-model="newApp.Type"
+                                        class="w-full bg-white/70 border border-gray-200 rounded-xl px-4 py-2.5 outline-none focus:ring-2 focus:ring-blue-500">
+                                        <option value="Shell Script">Shell Script</option>
+                                        <option value="Binary Core">Binary Core</option>
+                                        <option value="Local">Local</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label class="block text-gray-600 mb-1.5 text-xs font-medium">日志路径</label>
+                                    <input v-model="newApp.LogPath" placeholder="/var/log/<id>.log"
+                                        class="w-full bg-white/70 border border-gray-200 rounded-xl px-4 py-2.5 outline-none font-mono text-xs">
+                                </div>
+                            </div>
+
+                            <div>
+                                <label class="block text-gray-600 mb-1.5 text-xs font-medium">应用简介</label>
+                                <input v-model="newApp.Description" placeholder="一句话说明插件用途"
+                                    class="w-full bg-white/70 border border-gray-200 rounded-xl px-4 py-2.5 outline-none">
+                            </div>
+
+                            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                <div>
+                                    <label class="block text-gray-600 mb-1.5 text-xs font-medium">启动命令 *</label>
+                                    <input v-model="newApp.StartCommand" placeholder="/data/softcenter/bin/<id> start"
+                                        class="w-full bg-white/70 border border-gray-200 rounded-xl px-4 py-2.5 outline-none font-mono text-xs">
+                                </div>
+                                <div>
+                                    <label class="block text-gray-600 mb-1.5 text-xs font-medium">停止命令 *</label>
+                                    <input v-model="newApp.StopCommand" placeholder="/data/softcenter/bin/<id> stop"
+                                        class="w-full bg-white/70 border border-gray-200 rounded-xl px-4 py-2.5 outline-none font-mono text-xs">
+                                </div>
+                                <div class="sm:col-span-2">
+                                    <label class="block text-gray-600 mb-1.5 text-xs font-medium">状态探针命令</label>
+                                    <input v-model="newApp.StatusCommand"
+                                        placeholder="如 pgrep -x mydaemon 或脚本 status 子命令（退出码 0 表示运行中）"
+                                        class="w-full bg-white/70 border border-gray-200 rounded-xl px-4 py-2.5 outline-none font-mono text-xs">
+                                </div>
+                            </div>
+
+                            <div class="border-t border-gray-200/80 pt-4">
+                                <div class="flex items-center justify-between mb-2">
+                                    <label class="text-gray-600 text-xs font-medium">ConfigSchema（推荐）</label>
+                                    <span class="text-[11px] text-gray-400">自动生成设置页</span>
+                                </div>
+                                <textarea v-model="newApp.ConfigSchema" rows="10"
+                                    placeholder='{"Sections":[{"Title":"基础","Fields":[{"Key":"host","Label":"主机","Type":"ip","Default":"1.1.1.1","Required":true},{"Key":"enabled","Label":"启用","Type":"switch","Default":"1"}]}]}'
+                                    class="w-full bg-white/70 border border-gray-200 rounded-xl px-4 py-2.5 outline-none font-mono text-xs resize-y focus:ring-2 focus:ring-blue-500"></textarea>
+                                <p class="text-[11px] text-gray-400 mt-1.5">支持 text / password / number / port / ip / path / switch /
+                                    select / textarea；Section 可加 "Tab" 分组。多行内容自动 b64 存入 config.env。</p>
+                            </div>
+
+                            <div>
+                                <label class="block text-gray-600 mb-1.5 text-xs font-medium">配置文件路径</label>
+                                <input v-model="newApp.ConfigPath"
+                                    placeholder="/data/softcenter/config/<id>.env"
+                                    class="w-full bg-white/70 border border-gray-200 rounded-xl px-4 py-2.5 outline-none font-mono text-xs">
+                            </div>
+
+                            <div>
+                                <div class="flex items-center justify-between mb-1.5">
+                                    <label class="text-gray-600 text-xs font-medium">Files 运行文件清单（JSON）</label>
+                                    <span class="text-[11px] text-gray-400">可选，安装时 SHA256 校验下载</span>
+                                </div>
+                                <textarea v-model="newApp.Files" rows="5"
+                                    placeholder='[{"Name":"myplugin","Path":"apps/myplugin/myplugin","Sha256":"...","Mode":"0755"}]'
+                                    class="w-full bg-white/70 border border-gray-200 rounded-xl px-4 py-2.5 outline-none font-mono text-xs resize-y focus:ring-2 focus:ring-blue-500"></textarea>
+                                <p class="text-[11px] text-gray-400 mt-1.5">Name 为安装到 bin 下的文件名（支持子目录如
+                                    koolssrule/gfwlist.conf）；Path 为仓库相对路径。</p>
+                            </div>
+
+                            <div>
+                                <label class="block text-gray-600 mb-1.5 text-xs font-medium">自定义命令 JSON</label>
+                                <input v-model="newApp.CustomCommands"
+                                    placeholder='[{"name":"测试","command":"echo 1"}]'
+                                    class="w-full bg-white/70 border border-gray-200 rounded-xl px-4 py-2.5 outline-none font-mono text-xs">
+                            </div>
+
+                            <label class="flex items-center space-x-2 cursor-pointer py-1">
+                                <input type="checkbox" v-model="newApp.IsAutoStart" :true-value="1" :false-value="0"
+                                    class="accent-blue-600 w-4 h-4">
+                                <span class="text-sm text-gray-700">开机自启</span>
+                            </label>
+
+                            <button @click="submitManualApp"
+                                class="btn-apple w-full bg-black text-white py-3 rounded-2xl font-medium hover:bg-gray-800">
+                                保存插件配置
+                            </button>
                         </div>
-                        <textarea v-model="newApp.ConfigSchema" rows="8"
-                            placeholder='ConfigSchema JSON，例如 {"Sections":[{"Title":"基础","Fields":[{"Key":"host","Label":"主机","Type":"text"}]}]}'
-                            class="w-full bg-white/70 border border-gray-200 rounded-xl px-4 py-2.5 outline-none font-mono text-xs resize-y focus:ring-2 focus:ring-blue-500"></textarea>
-                        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                            <input v-model="newApp.LogPath" placeholder="日志路径"
-                                class="w-full bg-white/70 border border-gray-200 rounded-xl px-4 py-2.5 outline-none font-mono text-xs">
-                            <input v-model="newApp.StatusCommand" placeholder="状态探针命令"
-                                class="w-full bg-white/70 border border-gray-200 rounded-xl px-4 py-2.5 outline-none font-mono text-xs">
-                        </div>
-                        <input v-model="newApp.StartCommand" placeholder="启动命令"
-                            class="w-full bg-white/70 border border-gray-200 rounded-xl px-4 py-2.5 outline-none font-mono text-xs">
-                        <input v-model="newApp.StopCommand" placeholder="停止命令"
-                            class="w-full bg-white/70 border border-gray-200 rounded-xl px-4 py-2.5 outline-none font-mono text-xs">
-                        <input v-model="newApp.CustomCommands"
-                            placeholder='自定义命令 JSON，如 [{"name":"测试","command":"echo 1"}]'
-                            class="w-full bg-white/70 border border-gray-200 rounded-xl px-4 py-2.5 outline-none font-mono text-xs">
-                        <button @click="installApp(newApp)"
-                            class="btn-apple w-full bg-black text-white py-3 rounded-2xl font-medium hover:bg-gray-800">保存本地配置</button>
                     </div>
                 </section>
 
@@ -817,7 +900,35 @@
                 const addTab = ref('online');
                 const isFetchingStore = ref(false);
                 const onlineStore = ref([]);
-                const newApp = ref({ Id: '', Name: '', Type: 'Local', Icon: 'box', ConfigPath: '', ConfigKeys: '', ConfigSchema: '', Files: '[]', LogPath: '', StartCommand: '', StopCommand: '', StatusCommand: '', IsAutoStart: 0, SortOrder: 999, Version: '1.0.0', Description: '', CustomCommands: '[]' });
+                const newApp = ref({ Id: '', Name: '', Type: 'Shell Script', Icon: 'box', ConfigPath: '', ConfigKeys: '', ConfigSchema: '', Files: '', LogPath: '', StartCommand: '', StopCommand: '', StatusCommand: '', IsAutoStart: 0, SortOrder: 999, Version: '1.0.0', Description: '', CustomCommands: '[]' });
+
+                const onNewAppIdChange = () => {
+                    const id = (newApp.value.Id || '').trim();
+                    if (!id) return;
+                    if (!newApp.value.ConfigPath) newApp.value.ConfigPath = `/data/softcenter/config/${id}.env`;
+                    if (!newApp.value.StartCommand) newApp.value.StartCommand = `/data/softcenter/bin/${id} start`;
+                    if (!newApp.value.StopCommand) newApp.value.StopCommand = `/data/softcenter/bin/${id} stop`;
+                    if (!newApp.value.LogPath) newApp.value.LogPath = `/var/log/${id}.log`;
+                };
+
+                const submitManualApp = async () => {
+                    const id = (newApp.value.Id || '').trim();
+                    if (!id || !newApp.value.Name || !newApp.value.StartCommand || !newApp.value.StopCommand) {
+                        alert('请填写应用 ID、名称、启动命令、停止命令');
+                        return;
+                    }
+                    const payload = {
+                        ...newApp.value,
+                        Id: id,
+                        ConfigSchema: serializeSchema(newApp.value.ConfigSchema),
+                        Files: serializeFiles(newApp.value.Files || '[]'),
+                        CustomCommands: typeof newApp.value.CustomCommands === 'string' && newApp.value.CustomCommands.trim()
+                            ? newApp.value.CustomCommands
+                            : '[]',
+                        SortOrder: newApp.value.SortOrder || apps.value.length
+                    };
+                    await installApp(payload);
+                };
 
                 const logModalApp = ref(null);
                 const logContent = ref('');
@@ -1543,7 +1654,7 @@
                     schemaSections, fieldKey, fieldLabel, fieldType, fieldHelp, fieldPlaceholder, fieldRequired,
                     fieldMin, fieldMax, fieldRows, fieldMonospace, fieldOptions, isTruthy, switchLabel,
                     isFieldVisible, toggleSection, toggleSwitchField, multiSelected, toggleMulti, toggleAutoStartInModal,
-                    addTab, isFetchingStore, onlineStore, fetchOnlineStore,
+                    addTab, isFetchingStore, onlineStore, fetchOnlineStore, onNewAppIdChange, submitManualApp,
                     newApp, logModalApp, logContent, isLoadingLogs, cronModalApp, newCronReq, hasUpdate, latestVersion, isUpgrading, upgradeLog, doUpgrade,
                     searchQuery, filteredApps, draggedIndex, getLocalApp, isNewerVersion, appUpdates, appHasUpdate, cloudVersionOf, onDragStart, onDragEnd, onDrop, deleteApp, toggleApp, restartApp, saveAutoStart,
                     installApp, updateAppConfigFromCloud, showSystemLogs, showLogModal, refreshLogs, runCustomCommand, loadCronJobs, openConfig, saveAppConfig, showCronModal, submitCron, deleteCron,
