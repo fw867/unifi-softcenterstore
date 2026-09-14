@@ -434,8 +434,10 @@
                             <button v-if="appUpdates.length > 1" @click="updateAllApps"
                                 :disabled="isUpdatingAll || isFetchingStore"
                                 class="btn-apple bg-blue-600 text-white px-4 py-2 rounded-xl text-sm font-medium shadow-sm hover:bg-blue-700 disabled:opacity-60 disabled:cursor-not-allowed flex items-center space-x-2">
-                                <i v-if="isUpdatingAll" data-lucide="loader-2" class="w-4 h-4 animate-spin"></i>
-                                <i v-else data-lucide="download" class="w-4 h-4"></i>
+                                <!-- 不用 lucide 动态换图标：createIcons 后 v-if 切换经常不生效 -->
+                                <span v-if="isUpdatingAll"
+                                    class="inline-block w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin shrink-0"></span>
+                                <i v-else data-lucide="download" class="w-4 h-4 shrink-0"></i>
                                 <span>{{ isUpdatingAll ? `更新中 ${updateAllProgress.done}/${updateAllProgress.total}…` : `全部更新 (${appUpdates.length})` }}</span>
                             </button>
                         </div>
@@ -1550,6 +1552,7 @@
                     success: null
                 });
                 let installPollTimer = null;
+                let installPollGen = 0;
 
                 const formatBytes = (n) => {
                     n = Number(n) || 0;
@@ -1585,6 +1588,7 @@
 
                 const startInstallProgressPoll = (appId, title) => {
                     stopInstallProgressPoll();
+                    const gen = ++installPollGen;
                     installUi.visible = true;
                     installUi.title = title || '安装插件';
                     installUi.message = '正在准备…';
@@ -1597,8 +1601,9 @@
                     installUi.done = false;
                     installUi.success = null;
                     const tick = async () => {
+                        if (gen !== installPollGen) return;
                         const p = await callApi(`/api/apps/${appId}/install/progress`);
-                        if (!p) return;
+                        if (!p || gen !== installPollGen) return;
                         installUi.phase = p.phase || p.Phase || 'idle';
                         installUi.fileIndex = p.fileIndex ?? p.FileIndex ?? 0;
                         installUi.fileCount = p.fileCount ?? p.FileCount ?? 0;
@@ -1616,6 +1621,7 @@
                 };
 
                 const stopInstallProgressPoll = () => {
+                    installPollGen++;
                     if (installPollTimer) {
                         clearInterval(installPollTimer);
                         installPollTimer = null;
@@ -1652,51 +1658,33 @@
                     const hasFiles = Array.isArray(filesRaw) ? filesRaw.length > 0 : !!filesRaw && filesRaw !== '[]';
                     if (hasFiles) {
                         const showUi = opts.showProgress !== false;
-                        if (showUi) startInstallProgressPoll(appData.Id, `安装 ${appName}`);
+                        if (showUi) startInstallProgressPoll(appData.Id, opts.title || `安装 ${appName}`);
                         try {
                             const installRes = await callApi(`/api/apps/${appData.Id}/install`, 'POST');
+                            // 以接口结果为准，避免迟到的 progress 轮询覆盖最终状态
+                            stopInstallProgressPoll();
                             if (showUi) {
-                                await new Promise(r => setTimeout(r, 400));
-                                await callApi(`/api/apps/${appData.Id}/install/progress`).then(pr => {
-                                    if (pr) {
-                                        installUi.phase = pr.phase || pr.Phase || installUi.phase;
-                                        installUi.message = pr.message || pr.Message || installUi.message;
-                                        installUi.done = !!(pr.done ?? pr.Done);
-                                        installUi.success = installUi.done ? (pr.success ?? pr.Success) : null;
-                                        installUi.fileCount = pr.fileCount ?? pr.FileCount ?? installUi.fileCount;
-                                        installUi.fileIndex = pr.fileIndex ?? pr.FileIndex ?? installUi.fileIndex;
-                                    }
-                                });
-                                stopInstallProgressPoll();
-                                nextTick(() => lucide.createIcons());
-                            }
-                            if (!installRes) {
-                                if (showUi) {
-                                    installUi.done = true;
+                                const okRes = !!(installRes && (installRes.success === true || installRes.Success === true));
+                                installUi.done = true;
+                                if (!installRes) {
                                     installUi.success = false;
                                     installUi.phase = 'error';
                                     installUi.message = '插件文件下载失败';
-                                }
-                                return false;
-                            }
-                            if (installRes.success !== true && installRes.Success !== true) {
-                                const err = installRes.error || installRes.Error || '校验或写入失败';
-                                if (showUi) {
-                                    installUi.done = true;
+                                } else if (!okRes) {
                                     installUi.success = false;
                                     installUi.phase = 'error';
-                                    installUi.message = err;
+                                    installUi.message = installRes.error || installRes.Error || '校验或写入失败';
+                                } else {
+                                    installUi.success = true;
+                                    installUi.phase = 'done';
+                                    installUi.message = `全部 ${installUi.fileCount || filesRaw.length} 个文件安装成功`;
                                 }
-                                return false;
+                                nextTick(() => lucide.createIcons());
                             }
-                            if (showUi) {
-                                installUi.done = true;
-                                installUi.success = true;
-                                installUi.phase = 'done';
-                                installUi.message = `全部 ${installUi.fileCount || filesRaw.length} 个文件安装成功`;
-                            }
+                            if (!installRes) return false;
+                            if (installRes.success !== true && installRes.Success !== true) return false;
                         } finally {
-                            if (showUi) stopInstallProgressPoll();
+                            stopInstallProgressPoll();
                         }
                     }
                     if (redirect) {
@@ -1716,25 +1704,56 @@
                     if (!confirm(`将依次更新 ${list.length} 个插件到云端最新版本，是否继续？`)) return;
                     isUpdatingAll.value = true;
                     updateAllProgress.value = { done: 0, total: list.length };
+                    // 立即弹出进度窗，避免点击后无任何反馈
+                    installUi.visible = true;
+                    installUi.title = '全部更新';
+                    installUi.message = `准备更新 ${list.length} 个插件…`;
+                    installUi.phase = 'idle';
+                    installUi.done = false;
+                    installUi.success = null;
+                    installUi.fileCount = list.length;
+                    installUi.fileIndex = 0;
+                    installUi.fileName = '';
+                    installUi.bytesReceived = 0;
+                    installUi.totalBytes = 0;
                     nextTick(() => lucide.createIcons());
                     const ok = [];
                     const fail = [];
                     try {
-                        for (const u of list) {
-                            const success = await installApp(u.pkg, { silent: true, redirect: false });
+                        for (let i = 0; i < list.length; i++) {
+                            const u = list[i];
+                            updateAllProgress.value = { done: i, total: list.length };
+                            const success = await installApp(u.pkg, {
+                                silent: true,
+                                redirect: false,
+                                title: `全部更新 ${i + 1}/${list.length} · ${u.name}`
+                            });
                             if (success) ok.push(`${u.name} → v${u.cloudVersion}`);
                             else fail.push(u.name);
                             updateAllProgress.value = { done: ok.length + fail.length, total: list.length };
                         }
-                        await loadRealApps();
                     } finally {
                         isUpdatingAll.value = false;
-                        nextTick(() => lucide.createIcons());
+                        stopInstallProgressPoll();
+                        await loadRealApps();
+                        await fetchOnlineStore();
+                        installUi.visible = true;
+                        installUi.title = '全部更新';
+                        installUi.done = true;
+                        installUi.success = fail.length === 0;
+                        installUi.phase = fail.length === 0 ? 'done' : 'error';
+                        installUi.fileName = '';
+                        installUi.fileCount = list.length;
+                        installUi.fileIndex = ok.length + fail.length;
+                        installUi.bytesReceived = 0;
+                        installUi.totalBytes = 0;
+                        installUi.message = fail.length === 0
+                            ? `${ok.length} 个插件全部更新成功`
+                            : `成功 ${ok.length}/${list.length}，失败：${fail.join('、')}`;
+                        nextTick(() => {
+                            try { lucide.createIcons(); } catch (e) { }
+                        });
                     }
-                    let msg = `全部更新结束：成功 ${ok.length} / ${list.length}`;
-                    if (ok.length) msg += `\n成功：\n${ok.join('\n')}`;
-                    if (fail.length) msg += `\n失败：\n${fail.join('\n')}`;
-                    alert(msg);
                 };
 
                 const deleteApp = async (app) => {

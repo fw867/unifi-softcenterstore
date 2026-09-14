@@ -607,9 +607,20 @@ void SetInstallProgress(string appId, InstallProgress p) => InstallProgressStore
 app.MapPost("/api/apps/{id}/install", async (string id) => {
     using var conn = new SqliteConnection(DbPath); conn.Open();
     using var cmd = conn.CreateCommand();
-    cmd.CommandText = "SELECT Files FROM apps_registry WHERE Id=@id";
+    cmd.CommandText = "SELECT Files, StopCommand FROM apps_registry WHERE Id=@id";
     cmd.Parameters.AddWithValue("@id", id);
-    var filesJson = cmd.ExecuteScalar()?.ToString();
+    string? stopCmd = null;
+    string? filesJson;
+    using (var reader = cmd.ExecuteReader())
+    {
+        if (!reader.Read())
+        {
+            SetInstallProgress(id, new InstallProgress(id, "error", 0, 0, "", 0, null, "插件不存在", true, false));
+            return Results.NotFound(new InstallResult(false, null, "插件不存在"));
+        }
+        filesJson = reader.IsDBNull(0) ? null : reader.GetString(0);
+        stopCmd = reader.IsDBNull(1) ? null : reader.GetString(1);
+    }
     if (string.IsNullOrWhiteSpace(filesJson))
     {
         SetInstallProgress(id, new InstallProgress(id, "done", 0, 0, "", 0, null, "无运行文件需要下载", true, true));
@@ -704,7 +715,27 @@ app.MapPost("/api/apps/{id}/install", async (string id) => {
         SetInstallProgress(id, new InstallProgress(id, "downloading", i + 1, files.Count, f.Name, bytes.Length, bytes.Length, $"{f.Name} 校验通过", false, false));
     }
 
-    // 阶段 2：全部就绪后再统一写入
+    // 阶段 2：先停掉运行中的进程，避免替换正在执行的二进制（Text file busy）
+    if (!string.IsNullOrWhiteSpace(stopCmd))
+    {
+        SetInstallProgress(id, new InstallProgress(id, "writing", 0, pending.Count, "", 0, null, "正在停止运行中的插件…", false, false));
+        logs.Add($"执行停止命令: {stopCmd}");
+        try
+        {
+            using var stopP = Process.Start(new ProcessStartInfo
+            {
+                FileName = "/bin/bash",
+                Arguments = $"-c \"{stopCmd}\"",
+                UseShellExecute = false,
+                CreateNoWindow = true
+            });
+            stopP?.WaitForExit(15000);
+        }
+        catch { }
+        await Task.Delay(800);
+    }
+
+    // 全部就绪后再统一写入
     for (int i = 0; i < pending.Count; i++)
     {
         var (f, bytes, hash) = pending[i];
@@ -712,7 +743,12 @@ app.MapPost("/api/apps/{id}/install", async (string id) => {
         var dest = Path.Combine(BinDir, f.Name.Replace('\\', '/'));
         var destDir = Path.GetDirectoryName(dest);
         if (!string.IsNullOrEmpty(destDir)) Directory.CreateDirectory(destDir);
-        try { await File.WriteAllBytesAsync(dest, bytes); }
+        try
+        {
+            // Linux：目标正被占用时直接写会 ETXTBSY；先 unlink 再写入新 inode
+            if (File.Exists(dest)) File.Delete(dest);
+            await File.WriteAllBytesAsync(dest, bytes);
+        }
         catch (Exception ex)
         {
             Fail("error", $"写入失败 {f.Name}: {ex.Message}", i + 1, f.Name);
