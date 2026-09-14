@@ -491,7 +491,9 @@ app.MapPost("/api/apps/{id}/install", async (string id) => {
             return Results.BadRequest(new InstallResult(false, logs, $"SHA256 校验失败: {f.Name}"));
         }
 
-        var dest = Path.Combine(BinDir, f.Name);
+        var dest = Path.Combine(BinDir, f.Name.Replace('\\', '/'));
+        var destDir = Path.GetDirectoryName(dest);
+        if (!string.IsNullOrEmpty(destDir)) Directory.CreateDirectory(destDir);
         await File.WriteAllBytesAsync(dest, bytes);
         var mode = string.IsNullOrWhiteSpace(f.Mode) ? "0755" : f.Mode;
         Process.Start("/bin/bash", $"-c \"chmod {mode} {dest}\"")?.WaitForExit();

@@ -110,19 +110,44 @@
                 "Path": "apps/koolss/ssrule",
                 "Sha256": "2c95320f2c832ae3c2bc8cc95c4ba73620dc2f7cc924a9a7425ccaced69f0569",
                 "Mode": "0755"
+            },
+            {
+                "Name": "koolssrule/rules.json.js",
+                "Path": "apps/koolss/koolssrule/rules.json.js",
+                "Sha256": "4151de881d71bc897875a098922ce7f2aac5cec7146fc0d6cb4f7563ade331a7",
+                "Mode": "0644"
+            },
+            {
+                "Name": "koolssrule/gfwlist.conf",
+                "Path": "apps/koolss/koolssrule/gfwlist.conf",
+                "Sha256": "e8ddfd8b99ac1c6881aea6cc038c01b8929fb49fb53f711255a611c0adaa9096",
+                "Mode": "0644"
+            },
+            {
+                "Name": "koolssrule/udplist.txt",
+                "Path": "apps/koolss/koolssrule/udplist.txt",
+                "Sha256": "837f64ff1eaa7c54575dc07ac3a115d31e59ce649d27121aa31451a1e7fe3f75",
+                "Mode": "0644"
+            },
+            {
+                "Name": "koolssrule/chnroute.txt",
+                "Path": "apps/koolss/koolssrule/chnroute.txt",
+                "Sha256": "38d209a4d74e99317e352f4f1ac59649f80e684ef917eb7cfc6d655e4943f0c9",
+                "Mode": "0644"
             }
         ],
         "ConfigSchema": {
             "Sections": [
                 {
-                    "Title": "核心配置",
+                    "Title": "配置文件",
+                    "Tab": "基本设置",
                     "Fields": [
                         {
                             "Key": "V2RAY_CONFIG_FILE",
                             "Label": "V2Ray 配置",
                             "Type": "textarea",
                             "Default": "",
-                            "Rows": 12,
+                            "Rows": 14,
                             "Monospace": true,
                             "Required": true,
                             "Placeholder": "粘贴完整的 Xray / V2Ray JSON 配置",
@@ -134,26 +159,11 @@
                             "Type": "select",
                             "Default": "1",
                             "Options": [
-                                {
-                                    "Label": "不代理",
-                                    "Value": "0"
-                                },
-                                {
-                                    "Label": "GFWList",
-                                    "Value": "1"
-                                },
-                                {
-                                    "Label": "国内白名单",
-                                    "Value": "2"
-                                },
-                                {
-                                    "Label": "游戏模式",
-                                    "Value": "3"
-                                },
-                                {
-                                    "Label": "全局代理",
-                                    "Value": "4"
-                                }
+                                { "Label": "不代理", "Value": "0" },
+                                { "Label": "GFWList", "Value": "1" },
+                                { "Label": "国内白名单", "Value": "2" },
+                                { "Label": "游戏模式", "Value": "3" },
+                                { "Label": "全局代理", "Value": "4" }
                             ]
                         },
                         {
@@ -162,20 +172,15 @@
                             "Type": "select",
                             "Default": "2",
                             "Options": [
-                                {
-                                    "Label": "chnroute 列表",
-                                    "Value": "1"
-                                },
-                                {
-                                    "Label": "GeoIP",
-                                    "Value": "2"
-                                }
+                                { "Label": "chnroute 列表", "Value": "1" },
+                                { "Label": "GeoIP", "Value": "2" }
                             ]
                         }
                     ]
                 },
                 {
                     "Title": "DNS",
+                    "Tab": "DNS设置",
                     "Fields": [
                         {
                             "Key": "ISP_DNS1",
@@ -200,6 +205,7 @@
                 },
                 {
                     "Title": "域名名单",
+                    "Tab": "黑白名单设置",
                     "Fields": [
                         {
                             "Key": "white_domain_list",
@@ -225,6 +231,7 @@
                 },
                 {
                     "Title": "IP 名单",
+                    "Tab": "黑白名单设置",
                     "Fields": [
                         {
                             "Key": "white_ip_list",
@@ -250,13 +257,14 @@
                 },
                 {
                     "Title": "局域网 ACL",
+                    "Tab": "ACL控制",
                     "Fields": [
                         {
                             "Key": "lan_acl_control",
                             "Label": "设备访问控制",
                             "Type": "textarea",
                             "Default": "",
-                            "Rows": 8,
+                            "Rows": 12,
                             "Monospace": true,
                             "Placeholder": "每行一条，如：\nip=192.168.1.10 mode=1\nmac=AA:BB:CC:DD:EE:FF mode=0\nip=192.168.1.20 mac=AA:BB:CC:DD:EE:FF mode=2",
                             "Help": "mode：0不代理 / 1 GFW / 2国内 / 3游戏 / 4全局；ip、mac 可只填其一；省略 mode 则用默认代理模式"
@@ -265,6 +273,7 @@
                 },
                 {
                     "Title": "UDP 与 QUIC",
+                    "Tab": "UDP控制",
                     "Fields": [
                         {
                             "Key": "v2ray_udp",
@@ -286,18 +295,9 @@
                             "Type": "select",
                             "Default": "0",
                             "Options": [
-                                {
-                                    "Label": "关闭",
-                                    "Value": "0"
-                                },
-                                {
-                                    "Label": "全局阻断",
-                                    "Value": "1"
-                                },
-                                {
-                                    "Label": "仅黑名单",
-                                    "Value": "2"
-                                }
+                                { "Label": "关闭", "Value": "0" },
+                                { "Label": "全局阻断", "Value": "1" },
+                                { "Label": "仅黑名单", "Value": "2" }
                             ]
                         }
                     ]
