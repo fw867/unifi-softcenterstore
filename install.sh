@@ -69,19 +69,15 @@ if [ -z "$LATEST_RELEASE" ] || ! printf '%s' "$LATEST_RELEASE" | grep -q '"tag_n
     exit 1
 fi
 
-TAG_NAME=$(printf '%s' "$LATEST_RELEASE" | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1)
+TAG_NAME=$(printf '%s' "$LATEST_RELEASE" | grep -oE '"tag_name"[[:space:]]*:[[:space:]]*"[^"]+"' | head -n1 | grep -oE 'v?[0-9][^"]*')
 
-# GitHub API 为 pretty-printed JSON（冒号后有空格），必须兼容空白
-# 优先匹配 SoftCenter-*-arm64.zip
-ASSET=$(printf '%s' "$LATEST_RELEASE" | tr '{' '\n' | grep 'browser_download_url' | grep 'SoftCenter-.*\.zip' | grep -v '\.dgst' | head -n1)
-ZIP_URL=$(printf '%s' "$ASSET" | sed -n 's/.*"browser_download_url"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
-ZIP_DIGEST=$(printf '%s' "$ASSET" | sed -n 's/.*"digest"[[:space:]]*:[[:space:]]*"sha256:\([^"]*\)".*/\1/p')
+# 直接抽取 URL 与 sha256，避免按 {} 切分 JSON 时 digest 与下载地址被拆到不同块
+ZIP_URL=$(printf '%s' "$LATEST_RELEASE" | grep -oE 'https://[^"]+SoftCenter-[^"]+\.zip' | grep -v '\.dgst' | head -n1)
+ZIP_DIGEST=$(printf '%s' "$LATEST_RELEASE" | grep -oE 'sha256:[a-fA-F0-9]{64}' | head -n1 | sed 's/^sha256://')
 
-# 兜底：任意非 dgst 的 zip 资源
+# 兜底：任意 zip 资源
 if [ -z "$ZIP_URL" ]; then
-    ASSET=$(printf '%s' "$LATEST_RELEASE" | tr '{' '\n' | grep 'browser_download_url' | grep '\.zip' | grep -v '\.dgst' | head -n1)
-    ZIP_URL=$(printf '%s' "$ASSET" | sed -n 's/.*"browser_download_url"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
-    ZIP_DIGEST=$(printf '%s' "$ASSET" | sed -n 's/.*"digest"[[:space:]]*:[[:space:]]*"sha256:\([^"]*\)".*/\1/p')
+    ZIP_URL=$(printf '%s' "$LATEST_RELEASE" | grep -oE 'https://[^"]+\.zip' | grep -v '\.dgst' | head -n1)
 fi
 
 echo "    版本:     ${TAG_NAME:-unknown}"
@@ -90,7 +86,7 @@ if [ -z "$ZIP_URL" ]; then
     echo "❌ 无法从 Release 中解析下载链接。"
     echo "   已识别 tag: ${TAG_NAME:-无}"
     echo "   资源列表片段："
-    printf '%s' "$LATEST_RELEASE" | tr '{' '\n' | grep -E '"name"|browser_download_url' | head -n 12
+    printf '%s' "$LATEST_RELEASE" | grep -oE '"name"[[:space:]]*:[[:space:]]*"[^"]+"|https://[^"]+\.zip' | head -n 12
     exit 1
 fi
 
