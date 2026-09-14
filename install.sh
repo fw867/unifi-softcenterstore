@@ -17,14 +17,46 @@ DATA_DIR="/data/softcenter"
 TMP_DIR="/tmp/softcenter_update"
 
 echo "[1/4] 正在连接 GitHub 获取最新版本..."
-LATEST_RELEASE=$(curl -s https://api.github.com/repos/$REPO/releases/latest)
-ZIP_URL=$(echo "$LATEST_RELEASE" | grep "browser_download_url.*zip" | cut -d '"' -f 4)
+LATEST_RELEASE=$(curl -fsSL --connect-timeout 15 --max-time 60 "https://api.github.com/repos/$REPO/releases/latest") || {
+    echo "❌ 获取 Release 信息失败，请检查网络或代理。"
+    exit 1
+}
 
-if [ -z "$ZIP_URL" ]; then echo "❌ 无法获取下载链接，请检查网络或 GitHub 发布页面。"; exit 1; fi
+# 从 Release assets 中取 SoftCenter-*-arm64.zip 的下载地址与 GitHub 提供的 sha256 digest
+ASSET=$(printf '%s' "$LATEST_RELEASE" | tr '{' '\n' | grep 'browser_download_url' | grep 'SoftCenter-.*\.zip' | grep -v '\.dgst' | head -n1)
+ZIP_URL=$(printf '%s' "$ASSET" | sed -n 's/.*"browser_download_url":"\([^"]*\)".*/\1/p')
+ZIP_DIGEST=$(printf '%s' "$ASSET" | sed -n 's/.*"digest":"sha256:\([^"]*\)".*/\1/p')
 
-echo "[2/4] 正在下载更新包并覆盖核心..."
+if [ -z "$ZIP_URL" ]; then
+    echo "❌ 无法获取下载链接，请检查网络或 GitHub 发布页面。"
+    exit 1
+fi
+if [ -z "$ZIP_DIGEST" ]; then
+    echo "❌ Release 资源缺少 SHA256 digest，为安全起见中止升级。"
+    echo "   下载地址: $ZIP_URL"
+    exit 1
+fi
+
+echo "    版本包: $ZIP_URL"
+echo "    期望 SHA256: $ZIP_DIGEST"
+
+echo "[2/4] 正在下载更新包并校验完整性..."
 rm -rf $TMP_DIR && mkdir -p $TMP_DIR/extracted
-curl -L -o $TMP_DIR/update.zip "$ZIP_URL"
+if ! curl -fL --connect-timeout 15 --max-time 300 -o "$TMP_DIR/update.zip" "$ZIP_URL"; then
+    echo "❌ 更新包下载失败。"
+    rm -rf $TMP_DIR
+    exit 1
+fi
+
+LOCAL_HASH=$(sha256sum "$TMP_DIR/update.zip" | awk '{print $1}')
+if [ "$LOCAL_HASH" != "$ZIP_DIGEST" ]; then
+    echo "❌ SHA256 校验失败，已中止，不会覆盖本地文件。"
+    echo "   期望: $ZIP_DIGEST"
+    echo "   实际: $LOCAL_HASH"
+    rm -rf $TMP_DIR
+    exit 1
+fi
+echo "✅ SHA256 校验通过: $LOCAL_HASH"
 
 systemctl stop softcenter.service 2>/dev/null || true
 unzip -o $TMP_DIR/update.zip -d $TMP_DIR/extracted/ > /dev/null
