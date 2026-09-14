@@ -5,153 +5,34 @@
 ###############################################################################
 
 ###[ CONFIGURATION ]###########################################################
-# SoftCenter 面板配置（优先）
+# 配置唯一来源：SoftCenter 面板写入的 config.env
+# 脚本不再自建/回写配置文件，避免覆盖面板保存的值
 SC_CONFIG="/data/softcenter/config/fan-control.env"
-[ -f "$SC_CONFIG" ] && source "$SC_CONFIG"
+if [ -f "$SC_CONFIG" ]; then
+    source "$SC_CONFIG"
+fi
 
-# 状态与运行时配置目录（插件名前缀，卸载时可清理）
+# 状态目录（插件前缀，卸载可清理）
 DATA_DIR="/data/softcenter/bin/fan-controldata"
 mkdir -p "$DATA_DIR"
-
-# 脚本自维护的运行时配置（校验修正值会写这里，不回写面板 env）
-CONFIG_FILE="${FAN_CONTROL_CONFIG:-$DATA_DIR/config}"
 TEMP_STATE_FILE="${TEMP_STATE_FILE:-$DATA_DIR/temp_state}"
 
-# Define default configuration values（面板 env 可覆盖）
-DEFAULT_MIN_PWM="${MIN_PWM:-91}"             # Minimum active fan speed (0-255)
-DEFAULT_MAX_PWM="${MAX_PWM:-255}"            # Maximum fan speed (0-255)
-DEFAULT_MIN_TEMP="${MIN_TEMP:-60}"           # Base threshold (°C)
-DEFAULT_MAX_TEMP="${MAX_TEMP:-85}"           # Critical temperature (°C)
-DEFAULT_HYSTERESIS="${HYSTERESIS:-5}"        # Temperature buffer (°C)
-DEFAULT_CHECK_INTERVAL="${CHECK_INTERVAL:-15}"  # Base check interval (seconds)
-DEFAULT_TAPER_MINS="${TAPER_MINS:-90}"       # Cool-down duration (minutes)
-DEFAULT_FAN_PWM_DEVICE="${FAN_PWM_DEVICE:-/sys/class/hwmon/hwmon0/pwm1}"
-DEFAULT_OPTIMAL_PWM_FILE="${OPTIMAL_PWM_FILE:-$DATA_DIR/optimal_pwm}"
-DEFAULT_MAX_PWM_STEP="${MAX_PWM_STEP:-25}"   # Max PWM change per adjustment
-DEFAULT_DEADBAND="${DEADBAND:-1}"            # Temp stability threshold (°C)
-DEFAULT_ALPHA="${ALPHA:-20}"                 # Smoothing factor (0-100)
-DEFAULT_LEARNING_RATE="${LEARNING_RATE:-5}"  # PWM optimization step size
+# 面板未填或非法时的内置默认值（仅内存生效，不写文件）
+MIN_PWM="${MIN_PWM:-91}"
+MAX_PWM="${MAX_PWM:-255}"
+MIN_TEMP="${MIN_TEMP:-60}"
+MAX_TEMP="${MAX_TEMP:-85}"
+HYSTERESIS="${HYSTERESIS:-5}"
+CHECK_INTERVAL="${CHECK_INTERVAL:-15}"
+TAPER_MINS="${TAPER_MINS:-90}"
+FAN_PWM_DEVICE="${FAN_PWM_DEVICE:-/sys/class/hwmon/hwmon0/pwm1}"
+OPTIMAL_PWM_FILE="${OPTIMAL_PWM_FILE:-$DATA_DIR/optimal_pwm}"
+MAX_PWM_STEP="${MAX_PWM_STEP:-25}"
+DEADBAND="${DEADBAND:-1}"
+ALPHA="${ALPHA:-20}"
+LEARNING_RATE="${LEARNING_RATE:-5}"
 
-# Create config file if it doesn't exist
-if [[ ! -f "$CONFIG_FILE" ]]; then
-    logger -t fan-control "CONFIG: Creating new config file"
-
-    # Create directory if it doesn't exist
-    config_dir=$(dirname "$CONFIG_FILE")
-    if [[ ! -d "$config_dir" ]]; then
-        if ! mkdir -p "$config_dir" 2>/dev/null; then
-            logger -t fan-control "FATAL: Failed to create config directory: $config_dir"
-            exit 1
-        fi
-    fi
-
-    # Use a temporary file and atomic move to prevent partial writes
-    temp_config="${CONFIG_FILE}.tmp"
-    if ! cat > "$temp_config" <<-DEFAULTS 2>/dev/null; then
-MIN_PWM=$DEFAULT_MIN_PWM             # Minimum active fan speed (0-255)
-MAX_PWM=$DEFAULT_MAX_PWM            # Maximum fan speed (0-255)
-MIN_TEMP=$DEFAULT_MIN_TEMP            # Base threshold (°C)
-MAX_TEMP=$DEFAULT_MAX_TEMP            # Critical temperature (°C)
-HYSTERESIS=$DEFAULT_HYSTERESIS           # Temperature buffer (°C)
-CHECK_INTERVAL=$DEFAULT_CHECK_INTERVAL      # Base check interval (seconds)
-TAPER_MINS=$DEFAULT_TAPER_MINS          # Cool-down duration (minutes)
-FAN_PWM_DEVICE="$DEFAULT_FAN_PWM_DEVICE"
-OPTIMAL_PWM_FILE="$DEFAULT_OPTIMAL_PWM_FILE"
-MAX_PWM_STEP=$DEFAULT_MAX_PWM_STEP        # Max PWM change per adjustment
-DEADBAND=$DEFAULT_DEADBAND             # Temp stability threshold (°C)
-ALPHA=$DEFAULT_ALPHA               # Smoothing factor (0-100)
-LEARNING_RATE=$DEFAULT_LEARNING_RATE        # PWM optimization step size
-DEFAULTS
-        logger -t fan-control "FATAL: Failed to write to temporary config file"
-        exit 1
-    elif ! mv "$temp_config" "$CONFIG_FILE" 2>/dev/null; then
-        logger -t fan-control "FATAL: Failed to create config file"
-        rm -f "$temp_config" 2>/dev/null  # Clean up the temporary file
-        exit 1
-    else
-        logger -t fan-control "CONFIG: New configuration file created successfully"
-    fi
-fi
-
-
-# Source the config file
-source "$CONFIG_FILE" 2>/dev/null
-# SoftCenter env 再次覆盖（保证面板保存的值优先于脚本自动补全）
-[ -f "$SC_CONFIG" ] && source "$SC_CONFIG"
-
-# Check if each required parameter is defined, and add missing ones
-missing_params=()
-missing_values=()
-missing_comments=()
-
-check_param() {
-    local param=$1
-    local default_value=$2
-    local comment=$3
-
-    if ! grep -q "^${param}=" "$CONFIG_FILE" 2>/dev/null; then
-        logger -t fan-control "CONFIG: Missing parameter detected: $param"
-        missing_params+=("$param")
-        missing_values+=("$default_value")
-        missing_comments+=("$comment")
-        # Set the value in the current environment
-        eval "${param}=${default_value}"
-    fi
-}
-
-# Check each parameter
-check_param "MIN_PWM" "$DEFAULT_MIN_PWM" "# Minimum active fan speed (0-255)"
-check_param "MAX_PWM" "$DEFAULT_MAX_PWM" "# Maximum fan speed (0-255)"
-check_param "MIN_TEMP" "$DEFAULT_MIN_TEMP" "# Base threshold (°C)"
-check_param "MAX_TEMP" "$DEFAULT_MAX_TEMP" "# Critical temperature (°C)"
-check_param "HYSTERESIS" "$DEFAULT_HYSTERESIS" "# Temperature buffer (°C)"
-check_param "CHECK_INTERVAL" "$DEFAULT_CHECK_INTERVAL" "# Base check interval (seconds)"
-check_param "TAPER_MINS" "$DEFAULT_TAPER_MINS" "# Cool-down duration (minutes)"
-check_param "FAN_PWM_DEVICE" "\"$DEFAULT_FAN_PWM_DEVICE\"" "# Fan PWM device path"
-check_param "OPTIMAL_PWM_FILE" "\"$DEFAULT_OPTIMAL_PWM_FILE\"" "# Optimal PWM file path"
-check_param "MAX_PWM_STEP" "$DEFAULT_MAX_PWM_STEP" "# Max PWM change per adjustment"
-check_param "DEADBAND" "$DEFAULT_DEADBAND" "# Temp stability threshold (°C)"
-check_param "ALPHA" "$DEFAULT_ALPHA" "# Smoothing factor (0-100)"
-check_param "LEARNING_RATE" "$DEFAULT_LEARNING_RATE" "# PWM optimization step size"
-
-# If missing parameters were found, update the config file atomically
-if [ ${#missing_params[@]} -gt 0 ]; then
-    logger -t fan-control "CONFIG: Updating configuration file with ${#missing_params[@]} missing parameters"
-
-    # Create a temporary file
-    temp_config="${CONFIG_FILE}.tmp"
-
-    # Copy existing config to temp file
-    if ! cp "$CONFIG_FILE" "$temp_config" 2>/dev/null; then
-        logger -t fan-control "ERROR: Failed to create temporary config file for update"
-        # Continue with current in-memory values, but don't update the file
-    else
-        # Add each missing parameter
-        update_failed=false
-        for i in "${!missing_params[@]}"; do
-            if ! echo "${missing_params[$i]}=${missing_values[$i]}        ${missing_comments[$i]}" >> "$temp_config" 2>/dev/null; then
-                logger -t fan-control "ERROR: Failed to add parameter ${missing_params[$i]} to config file"
-                update_failed=true
-                break
-            fi
-        done
-
-        if [ "$update_failed" = true ]; then
-            logger -t fan-control "ERROR: Config file update failed"
-            rm -f "$temp_config" 2>/dev/null  # Clean up the temporary file
-        else
-            # Replace the original file with the updated one
-            if ! mv "$temp_config" "$CONFIG_FILE" 2>/dev/null; then
-                logger -t fan-control "ERROR: Failed to update config file"
-                rm -f "$temp_config" 2>/dev/null  # Clean up the temporary file
-            else
-                logger -t fan-control "CONFIG: Configuration file updated successfully"
-            fi
-        fi
-    fi
-fi
-
-# Validate configuration parameters
+# 仅在内存中校验并纠正非法值，不回写任何配置文件
 validate_config() {
     local param=$1
     local value=$2
@@ -162,62 +43,26 @@ validate_config() {
     if ! [[ "$value" =~ ^[0-9]+$ ]] || (( value < min || value > max )); then
         logger -t fan-control "CONFIG: Invalid $param value: $value (should be between $min and $max), using default: $default"
         eval "${param}=${default}"
-        return 1
     fi
-    return 0
 }
 
-# Validate numeric parameters
-config_changed=false
-
-validate_config "MIN_PWM" "$MIN_PWM" 0 255 "$DEFAULT_MIN_PWM" || config_changed=true
-validate_config "MAX_PWM" "$MAX_PWM" "${MIN_PWM:-$DEFAULT_MIN_PWM}" 255 "$DEFAULT_MAX_PWM" || config_changed=true
-validate_config "MIN_TEMP" "$MIN_TEMP" 30 80 "$DEFAULT_MIN_TEMP" || config_changed=true
-validate_config "MAX_TEMP" "$MAX_TEMP" "$MIN_TEMP" 100 "$DEFAULT_MAX_TEMP" || config_changed=true
-validate_config "HYSTERESIS" "$HYSTERESIS" 1 15 "$DEFAULT_HYSTERESIS" || config_changed=true
-validate_config "CHECK_INTERVAL" "$CHECK_INTERVAL" 5 60 "$DEFAULT_CHECK_INTERVAL" || config_changed=true
-validate_config "TAPER_MINS" "$TAPER_MINS" 1 240 "$DEFAULT_TAPER_MINS" || config_changed=true
-validate_config "MAX_PWM_STEP" "$MAX_PWM_STEP" 1 50 "$DEFAULT_MAX_PWM_STEP" || config_changed=true
-validate_config "DEADBAND" "$DEADBAND" 0 10 "$DEFAULT_DEADBAND" || config_changed=true
-validate_config "ALPHA" "$ALPHA" 1 99 "$DEFAULT_ALPHA" || config_changed=true
-validate_config "LEARNING_RATE" "$LEARNING_RATE" 1 20 "$DEFAULT_LEARNING_RATE" || config_changed=true
-
-# If any config values were corrected, update the config file
-if [ "$config_changed" = true ]; then
-    logger -t fan-control "CONFIG: Updating configuration file with corrected values"
-
-    # Create a temporary file
-    temp_config="${CONFIG_FILE}.tmp"
-
-    # Write corrected values to temp file
-    if ! cat > "$temp_config" <<-CONFIG 2>/dev/null; then
-MIN_PWM=$MIN_PWM             # Minimum active fan speed (0-255)
-MAX_PWM=$MAX_PWM            # Maximum fan speed (0-255)
-MIN_TEMP=$MIN_TEMP            # Base threshold (°C)
-MAX_TEMP=$MAX_TEMP            # Critical temperature (°C)
-HYSTERESIS=$HYSTERESIS           # Temperature buffer (°C)
-CHECK_INTERVAL=$CHECK_INTERVAL      # Base check interval (seconds)
-TAPER_MINS=$TAPER_MINS          # Cool-down duration (minutes)
-FAN_PWM_DEVICE="$FAN_PWM_DEVICE"
-OPTIMAL_PWM_FILE="$OPTIMAL_PWM_FILE"
-MAX_PWM_STEP=$MAX_PWM_STEP        # Max PWM change per adjustment
-DEADBAND=$DEADBAND             # Temp stability threshold (°C)
-ALPHA=$ALPHA               # Smoothing factor (0-100)
-LEARNING_RATE=$LEARNING_RATE        # PWM optimization step size
-CONFIG
-        logger -t fan-control "ERROR: Failed to write to temporary config file"
-        # Continue with current in-memory values, but don't update the file
-    elif ! mv "$temp_config" "$CONFIG_FILE" 2>/dev/null; then
-        logger -t fan-control "ERROR: Failed to update config file with corrected values"
-        rm -f "$temp_config" 2>/dev/null  # Clean up the temporary file
-    else
-        logger -t fan-control "CONFIG: Configuration file updated with corrected values"
-    fi
-fi
+validate_config "MIN_PWM" "$MIN_PWM" 0 255 91
+validate_config "MAX_PWM" "$MAX_PWM" "${MIN_PWM}" 255 255
+validate_config "MIN_TEMP" "$MIN_TEMP" 30 80 60
+validate_config "MAX_TEMP" "$MAX_TEMP" "$MIN_TEMP" 100 85
+validate_config "HYSTERESIS" "$HYSTERESIS" 1 15 5
+validate_config "CHECK_INTERVAL" "$CHECK_INTERVAL" 5 60 15
+validate_config "TAPER_MINS" "$TAPER_MINS" 1 240 90
+validate_config "MAX_PWM_STEP" "$MAX_PWM_STEP" 1 50 25
+validate_config "DEADBAND" "$DEADBAND" 0 10 1
+validate_config "ALPHA" "$ALPHA" 1 99 20
+validate_config "LEARNING_RATE" "$LEARNING_RATE" 1 20 5
 
 # Derived values
 FAN_ACTIVATION_TEMP=$((MIN_TEMP + HYSTERESIS))
 TAPER_DURATION=$((TAPER_MINS * 60))
+
+logger -t fan-control "CONFIG: MIN_TEMP=${MIN_TEMP} MAX_TEMP=${MAX_TEMP} HYSTERESIS=${HYSTERESIS} MIN_PWM=${MIN_PWM} MAX_PWM=${MAX_PWM}"
 
 ###[ RUNTIME CHECKS ]##########################################################
 # Check for ubnt-systool availability
