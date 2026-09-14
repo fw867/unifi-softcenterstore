@@ -113,6 +113,8 @@ jobs:
             SoftCenterManager \
             libe_sqlite3.so \
             web/
+        cd "$GITHUB_WORKSPACE"
+        sha256sum "SoftCenter-${{ env.RELEASE_TAG }}-arm64.zip" | awk '{print $1}' > "SoftCenter-${{ env.RELEASE_TAG }}-arm64.zip.sha256"
 
     - name: Create GitHub Release
       uses: softprops/action-gh-release@v2
@@ -121,7 +123,9 @@ jobs:
         name: Release ${{ env.RELEASE_TAG }}
         draft: false
         prerelease: false
-        files: SoftCenter-${{ env.RELEASE_TAG }}-arm64.zip
+        files: |
+          SoftCenter-${{ env.RELEASE_TAG }}-arm64.zip
+          SoftCenter-${{ env.RELEASE_TAG }}-arm64.zip.sha256
         generate_release_notes: true
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

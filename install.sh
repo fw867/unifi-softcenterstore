@@ -93,16 +93,28 @@ if [ -z "$ZIP_URL" ]; then
     printf '%s' "$LATEST_RELEASE" | tr '{' '\n' | grep -E '"name"|browser_download_url' | head -n 12
     exit 1
 fi
-if [ -z "$ZIP_DIGEST" ]; then
-    echo "❌ Release 资源缺少 SHA256 digest，为安全起见中止升级。"
-    echo "   下载地址: $ZIP_URL"
-    exit 1
-fi
 
 ZIP_NAME=$(basename "$ZIP_URL")
 echo "    包名:     $ZIP_NAME"
 echo "    下载地址: $ZIP_URL"
-echo "    期望校验: $ZIP_DIGEST"
+
+# 校验来源优先级：Release API digest > 旁路 .sha256 文件 > 跳过校验（仅告警）
+VERIFY_MODE="api"
+if [ -z "$ZIP_DIGEST" ]; then
+    VERIFY_MODE="file"
+    mkdir -p "$TMP_DIR"
+    echo "    ⚠ Release API 无 digest，尝试下载旁路校验文件 ${ZIP_NAME}.sha256 ..."
+    if curl -fsSL --connect-timeout 10 --max-time 30 -o "$TMP_DIR/remote.sha256" "${ZIP_URL}.sha256" 2>/dev/null; then
+        ZIP_DIGEST=$(awk '{print $1}' "$TMP_DIR/remote.sha256" | tr -d ' \r' | head -n1)
+    fi
+fi
+if [ -z "$ZIP_DIGEST" ]; then
+    VERIFY_MODE="skip"
+    echo "    ⚠ 未找到可用的 SHA256（API digest 与旁路文件均缺失），本次将跳过校验。"
+    echo "      建议发布新版本以启用完整校验。"
+else
+    echo "    期望校验: $ZIP_DIGEST  (来源: $VERIFY_MODE)"
+fi
 
 echo ""
 echo "▸ 步骤 [2/4]  下载更新包并校验"
@@ -118,16 +130,20 @@ fi
 ZIP_SIZE=$(wc -c < "$TMP_DIR/update.zip" | tr -d ' ')
 echo "    下载完成: $(human_size "$ZIP_SIZE")"
 
-echo "    正在计算 SHA256..."
 LOCAL_HASH=$(sha256sum "$TMP_DIR/update.zip" | awk '{print $1}')
-if [ "$LOCAL_HASH" != "$ZIP_DIGEST" ]; then
-    echo "❌ SHA256 校验失败，已中止，不会覆盖本地文件。"
-    echo "   期望: $ZIP_DIGEST"
-    echo "   实际: $LOCAL_HASH"
-    rm -rf "$TMP_DIR"
-    exit 1
+if [ "$VERIFY_MODE" = "skip" ] || [ -z "$ZIP_DIGEST" ]; then
+    echo "    ⚠ 已跳过校验，本地 SHA256: $LOCAL_HASH"
+else
+    echo "    正在比对 SHA256..."
+    if [ "$LOCAL_HASH" != "$ZIP_DIGEST" ]; then
+        echo "❌ SHA256 校验失败，已中止，不会覆盖本地文件。"
+        echo "   期望: $ZIP_DIGEST"
+        echo "   实际: $LOCAL_HASH"
+        rm -rf "$TMP_DIR"
+        exit 1
+    fi
+    echo "✅ 校验通过  $LOCAL_HASH"
 fi
-echo "✅ 校验通过  $LOCAL_HASH"
 
 echo "    停止服务并解压..."
 systemctl stop softcenter.service 2>/dev/null || true
