@@ -149,10 +149,14 @@
             class="hidden md:flex w-60 lg:w-64 shrink-0 flex-col border-r border-gray-200/80 bg-white/40 backdrop-blur-xl sticky top-0 h-screen">
             <div class="px-5 pt-6 pb-5">
                 <div class="flex items-center space-x-3">
-                    <div class="w-9 h-9 bg-black rounded-xl flex items-center justify-center text-white shadow-lg">
-                        <i data-lucide="shield-check" class="w-5 h-5"></i>
-                    </div>
-                    <div class="min-w-0">
+                    <svg viewBox="0 0 53 16" class="h-4 w-auto shrink-0" fill="none"
+                        xmlns="http://www.w3.org/2000/svg" aria-label="UniFi">
+                        <path fill="#2563eb"
+                            d="M30.815 1.942c0 1.046.868 1.915 1.942 1.915a1.91 1.91 0 0 0 1.915-1.915C34.672.868 33.83 0 32.757 0a1.96 1.96 0 0 0-1.942 1.942m17.405 0c0 1.046.868 1.915 1.942 1.915a1.91 1.91 0 0 0 1.915-1.915C52.077.868 51.235 0 50.162 0a1.96 1.96 0 0 0-1.942 1.942M34.412 5.205h-3.339v10.67h3.339zM46.658.473h-9.453v15.402h3.339v-5.818h5.145V7.145h-5.145v-3.76h6.114zm5.16 4.732H48.48v10.67h3.338zm-40.176 1.94V5.202h1.938v-1.94h1.94v1.94h-1.938v1.94h1.94v.615c0 .71-.06 1.551-.2 2.213a7 7 0 0 1-.334 1.09q-.129.331-.282.64l-.043.086-.046.087-.028.052-.084.152a7.6 7.6 0 0 1-.812 1.158l-.037.044-.002.002a6 6 0 0 1-.527.557 7.7 7.7 0 0 1-4.55 2.114c-.204.02-.612.041-.817.041a10 10 0 0 1-.817-.042 7.7 7.7 0 0 1-4.55-2.113l-.037-.037-.002-.001a8 8 0 0 1-.252-.255c-.097-.102-.184-.205-.274-.31a7.7 7.7 0 0 1-.97-1.454 8 8 0 0 1-.264-.575l-.02-.05-.018-.044-.021-.052A7 7 0 0 1 .2 9.97C.06 9.31 0 8.467 0 7.757V.473h3.878v6.795l.007.555c.008.23.017.455.04.679.065.6.197 1.166.47 1.648.08.14.16.273.255.402a3.9 3.9 0 0 0 2.578 1.525c.132.018.399.035.532.035s.4-.015.532-.035a3.9 3.9 0 0 0 2.578-1.525q.086-.117.16-.24.049-.08.095-.162c.273-.482.407-1.048.47-1.648.023-.224.032-.449.04-.679.003-.078.005-.23.006-.372z" />
+                        <path fill="#2563eb"
+                            d="M13.58 3.262h-1.455V1.807h1.455zm.485-2.91h.97v.97h-.97zm14.217 15.523h-3.315V9.602s0-.22-.004-.292v-.005a4 4 0 0 0-.016-.287 1.8 1.8 0 0 0-.202-.708l-.006-.011-.003-.004q-.046-.083-.101-.158a1.68 1.68 0 0 0-1.19-.665l-.038-.003-.109-.004a3 3 0 0 0-.228.017 1.67 1.67 0 0 0-1.161.732l-.057.096a1.8 1.8 0 0 0-.202.708 3 3 0 0 0-.018.292c-.002.072-.002.292-.002.292v6.261h-3.317V5.193h3.195v.97s1.137-1.416 3.407-1.316c2.04.09 3.367 1.656 3.367 3.783z" />
+                    </svg>
+                    <div class="min-w-0 flex-1">
                         <div class="font-semibold text-base tracking-tight leading-none truncate">SoftCenter</div>
                         <div class="text-[10px] text-gray-400 font-mono mt-1">Build {{ sysInfo.Version }}</div>
                     </div>
@@ -212,9 +216,13 @@
             <header class="md:hidden sticky top-0 z-40 glass border-b border-gray-200 px-4 py-3">
                 <div class="flex items-center justify-between">
                     <div class="flex items-center space-x-2">
-                        <div class="w-8 h-8 bg-black rounded-lg flex items-center justify-center text-white">
-                            <i data-lucide="shield-check" class="w-4 h-4"></i>
-                        </div>
+                        <svg viewBox="0 0 53 16" class="h-3.5 w-auto max-w-[100px]" fill="none"
+                            xmlns="http://www.w3.org/2000/svg" aria-label="UniFi">
+                            <path fill="#2563eb"
+                                d="M30.815 1.942c0 1.046.868 1.915 1.942 1.915a1.91 1.91 0 0 0 1.915-1.915C34.672.868 33.83 0 32.757 0a1.96 1.96 0 0 0-1.942 1.942m17.405 0c0 1.046.868 1.915 1.942 1.915a1.91 1.91 0 0 0 1.915-1.915C52.077.868 51.235 0 50.162 0a1.96 1.96 0 0 0-1.942 1.942M34.412 5.205h-3.339v10.67h3.339zM46.658.473h-9.453v15.402h3.339v-5.818h5.145V7.145h-5.145v-3.76h6.114zm5.16 4.732H48.48v10.67h3.338zm-40.176 1.94V5.202h1.938v-1.94h1.94v1.94h-1.938v1.94h1.94v.615c0 .71-.06 1.551-.2 2.213a7 7 0 0 1-.334 1.09q-.129.331-.282.64l-.043.086-.046.087-.028.052-.084.152a7.6 7.6 0 0 1-.812 1.158l-.037.044-.002.002a6 6 0 0 1-.527.557 7.7 7.7 0 0 1-4.55 2.114c-.204.02-.612.041-.817.041a10 10 0 0 1-.817-.042 7.7 7.7 0 0 1-4.55-2.113l-.037-.037-.002-.001a8 8 0 0 1-.252-.255c-.097-.102-.184-.205-.274-.31a7.7 7.7 0 0 1-.97-1.454 8 8 0 0 1-.264-.575l-.02-.05-.018-.044-.021-.052A7 7 0 0 1 .2 9.97C.06 9.31 0 8.467 0 7.757V.473h3.878v6.795l.007.555c.008.23.017.455.04.679.065.6.197 1.166.47 1.648.08.14.16.273.255.402a3.9 3.9 0 0 0 2.578 1.525c.132.018.399.035.532.035s.4-.015.532-.035a3.9 3.9 0 0 0 2.578-1.525q.086-.117.16-.24.049-.08.095-.162c.273-.482.407-1.048.47-1.648.023-.224.032-.449.04-.679.003-.078.005-.23.006-.372z" />
+                            <path fill="#2563eb"
+                                d="M13.58 3.262h-1.455V1.807h1.455zm.485-2.91h.97v.97h-.97zm14.217 15.523h-3.315V9.602s0-.22-.004-.292v-.005a4 4 0 0 0-.016-.287 1.8 1.8 0 0 0-.202-.708l-.006-.011-.003-.004q-.046-.083-.101-.158a1.68 1.68 0 0 0-1.19-.665l-.038-.003-.109-.004a3 3 0 0 0-.228.017 1.67 1.67 0 0 0-1.161.732l-.057.096a1.8 1.8 0 0 0-.202.708 3 3 0 0 0-.018.292c-.002.072-.002.292-.002.292v6.261h-3.317V5.193h3.195v.97s1.137-1.416 3.407-1.316c2.04.09 3.367 1.656 3.367 3.783z" />
+                        </svg>
                         <div>
                             <div class="font-semibold text-sm leading-none">SoftCenter</div>
                             <div class="text-[10px] text-gray-400 font-mono mt-0.5">{{ currentNavLabel }}</div>
@@ -956,13 +964,25 @@
                     const item = navItems.find(n => n.id === activePage.value);
                     return item ? item.label : '';
                 });
-                const goPage = (id) => {
+                const goPage = async (id) => {
                     activePage.value = id;
-                    if ((id === 'store' || id === 'apps') && onlineStore.value.length === 0) fetchOnlineStore();
-                    if (id === 'cron') loadCronJobs();
-                    if (id === 'settings') openSettings();
-                    if (id === 'logs') loadSystemLogsInline();
-                    nextTick(() => lucide.createIcons());
+                    // 按 Tab 按需加载；数据回来后再渲染图标
+                    if (id === 'apps') {
+                        await loadRealApps();
+                        await loadSystemInfo();
+                        if (onlineStore.value.length === 0) fetchOnlineStore();
+                    } else if (id === 'store') {
+                        if (onlineStore.value.length === 0) await fetchOnlineStore();
+                    } else if (id === 'cron') {
+                        await loadCronJobs();
+                    } else if (id === 'settings') {
+                        await openSettings();
+                    } else if (id === 'logs') {
+                        await loadSystemLogsInline();
+                    }
+                    nextTick(() => {
+                        try { lucide.createIcons(); } catch (e) { }
+                    });
                 };
 
                 const addTab = ref('online');
@@ -1142,10 +1162,9 @@
 
                 const handleTokenSubmit = () => {
                     tokenInputType.value = 'password';
-                    loadRealApps();
+                    // 侧边栏状态需要系统信息；其余按当前 Tab 加载
                     loadSystemInfo();
-                    loadCronJobs();
-                    fetchOnlineStore();
+                    goPage(activePage.value);
                     startPolling();
                 };
 
@@ -1342,9 +1361,19 @@
                     if (pollTimer) clearInterval(pollTimer);
                     pollTimer = setInterval(() => {
                         if (isDragging.value) return;
-                        loadRealApps();
-                        loadSystemInfo();
-                    }, 3000);
+                        // 按当前 Tab 按需刷新，避免无关接口空转
+                        const page = activePage.value;
+                        if (page === 'apps') {
+                            loadRealApps();
+                            loadSystemInfo();
+                        } else if (page === 'cron') {
+                            loadCronJobs();
+                        } else if (page === 'settings' || page === 'store' || page === 'logs') {
+                            // 这些页面切换时已加载，不轮询
+                        } else {
+                            loadSystemInfo();
+                        }
+                    }, 5000);
 
                     if (updateTimer) clearInterval(updateTimer);
                     updateTimer = setInterval(checkUpdate, 300000);
