@@ -92,7 +92,24 @@ fi
 TAG=$(printf '%s' "$LATEST_JSON" | grep -m1 '"tag_name"' | sed -E 's/.*"tag_name"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/')
 # 必须精确匹配架构包名；Release 里 amd64 排在 arm64 前面，head -n1 会下错架构
 DL_URL=$(printf '%s' "$LATEST_JSON" | grep -oE "https://[^\"]*${ZIP_NAME}" | head -n1)
-ZIP_SHA256=$(printf '%s' "$LATEST_JSON" | grep -oE 'sha256:[a-fA-F0-9]{64}' | head -n1 | sed 's/^sha256://')
+# digest 与包名配对：不能对全响应取第一个 sha256（那会是 amd64）
+ZIP_SHA256=$(printf '%s' "$LATEST_JSON" | tr ',' '\n' | awk -v want="$ZIP_NAME" '
+{
+    if ($0 ~ /"name"[[:space:]]*:/) {
+        n = $0
+        sub(/.*"name"[[:space:]]*:[[:space:]]*"/, "", n)
+        sub(/".*/, "", n)
+        name = n
+    }
+    if (name == want && $0 ~ /sha256:[a-fA-F0-9]/) {
+        h = $0
+        sub(/.*sha256:/, "", h)
+        sub(/".*/, "", h)
+        gsub(/[[:space:]]/, "", h)
+        print h
+        exit
+    }
+}')
 
 is_elf() {
     [ -f "$1" ] && [ -s "$1" ] || return 1
