@@ -11,15 +11,20 @@ rule_save_dir="/data/softcenter/bin/koolssrule"
 rule_down_dir="/tmp/fancyss_rule_download"
 
 # 代理：读软件中心「系统设置 → 全局更新代理」(/data/softcenter/config.json 的 LocalProxy)
+# 用 curl -x，避免 wget 对 socks5:// 环境变量支持不全导致下载失败
 SC_PROXY=$(sed -n 's/.*"LocalProxy"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' /data/softcenter/config.json 2>/dev/null | head -n1)
+CURL_OPT=""
 if [ -n "$SC_PROXY" ]; then
-    export http_proxy="$SC_PROXY"
-    export https_proxy="$SC_PROXY"
-    export all_proxy="$SC_PROXY"
+    CURL_OPT="-x $SC_PROXY"
     echo_date "更新代理（全局更新代理）: $SC_PROXY"
 else
     echo_date "未配置全局更新代理，直连 GitHub"
 fi
+
+dl_file() {
+    # $1=输出路径 $2=URL
+    curl $CURL_OPT --connect-timeout 10 --max-time 60 -4 -k -fsSL -o "$1" "$2"
+}
 
 # ================= 外部参数接收 =================
 # $1: 要更新的规则名称 (默认 gfwlist)
@@ -38,10 +43,10 @@ echo "==========================================================================
 echo_date "开始更新 ${RULE_KEY} 规则，当前处理模式: ${PROCESS_MODE} ..."
 
 # 3. 先下载版本号文件
-if wget -4 --no-check-certificate --timeout=8 -qO "${rule_down_dir}/rules.json.js" "${URL_MAIN}/rules.json.js"; then
+if dl_file "${rule_down_dir}/rules.json.js" "${URL_MAIN}/rules.json.js" && [ -s "${rule_down_dir}/rules.json.js" ]; then
     echo_date "检测到在线版本文件，继续..."
 else
-    echo_date "没有检测到在线版本，可能是访问github有问题，去大陆白名单模式试试吧！"
+    echo_date "没有检测到在线版本，可能是访问github有问题，请检查网络或全局更新代理！"
     rm -rf "${rule_down_dir}"
     exit 1
 fi
@@ -88,7 +93,7 @@ update_rule() {
     tmp_file="${rule_down_dir}/${online_name}"
     rm -f "${tmp_file}"
 
-    if ! wget -4 --no-check-certificate --timeout=8 -qO "${tmp_file}" "${URL_MAIN}/${online_name}" || [ ! -s "${tmp_file}" ]; then
+    if ! dl_file "${tmp_file}" "${URL_MAIN}/${online_name}" || [ ! -s "${tmp_file}" ]; then
         echo_date "${online_name} 下载失败！"
         rm -f "${tmp_file}"
         return 1

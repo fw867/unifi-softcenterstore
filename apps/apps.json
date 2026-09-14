@@ -81,7 +81,7 @@
         "Id": "koolss",
         "Name": "XRay",
         "Type": "Shell Script",
-        "Version": "1.2.2",
+        "Version": "1.2.3",
         "Description": "Xray代理，支持GFWList、大陆白名单，游戏、全局模式。",
         "Icon": "shield-check",
         "StartCommand": "/data/softcenter/bin/koolss start",
