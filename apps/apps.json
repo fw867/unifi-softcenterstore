@@ -80,8 +80,8 @@
     {
         "Id": "koolss",
         "Name": "XRay",
-        "Type": "Shell Script",
-        "Version": "1.2.4",
+        "Type": "Binary Core",
+        "Version": "1.2.5",
         "Description": "Xray代理，支持GFWList、大陆白名单，游戏、全局模式。",
         "Icon": "shield-check",
         "StartCommand": "/data/softcenter/bin/koolss start",
@@ -387,8 +387,8 @@
     {
         "Id": "ddnsto",
         "Name": "DDNSTO",
-        "Type": "Shell Script",
-        "Version": "1.1.1",
+        "Type": "Binary Core",
+        "Version": "1.1.2",
         "Description": "Koolshare小宝大神的内网穿透神器。",
         "Icon": "globe",
         "StartCommand": "/data/softcenter/bin/ddnsto start",
