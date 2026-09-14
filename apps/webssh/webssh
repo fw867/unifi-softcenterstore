@@ -19,8 +19,18 @@ CONFIG="/data/softcenter/config/webssh.env"
 
 BIN="/data/softcenter/bin/webssh-core"
 DL="/data/softcenter/bin/webssh-dl"
-# GoWebSSH 默认 8899；数据/配置目录 $HOME/.GoWebSSH
-export HOME="${WEBSSH_HOME:-/data/softcenter/bin/websshdata}"
+# 使用二进制原生参数，而不是伪造 HOME
+# 兼容旧 WEBSSH_HOME（曾指向目录，其下有 .GoWebSSH）
+if [ -n "$WEBSSH_HOME" ]; then
+    if [ -d "$WEBSSH_HOME/.GoWebSSH" ]; then
+        WEBSSH_CONFIG_DIR="${WEBSSH_CONFIG_DIR:-$WEBSSH_HOME/.GoWebSSH}"
+    else
+        WEBSSH_CONFIG_DIR="${WEBSSH_CONFIG_DIR:-$WEBSSH_HOME}"
+    fi
+fi
+WEBSSH_CONFIG_DIR="${WEBSSH_CONFIG_DIR:-/data/softcenter/webssh/config}"
+WEBSSH_WEB_DIR="${WEBSSH_WEB_DIR:-/data/softcenter/webssh/web}"
+WEBSSH_PORT="${WEBSSH_PORT:-8899}"
 export TERM=xterm
 LOG="/var/log/webssh.log"
 PIDFILE="/var/run/webssh.pid"
@@ -53,15 +63,27 @@ start_webssh() {
         echo "webssh 已在运行"
         return 0
     fi
-    mkdir -p "$HOME/.GoWebSSH"
-    # 首次运行会生成 GoWebSSH.toml；端口默认 8899
-    nohup "$BIN" >> "$LOG" 2>&1 &
+
+    mkdir -p "$WEBSSH_CONFIG_DIR"
+    # 旧数据迁移：$HOME/.GoWebSSH → ConfigDir
+    OLD_CFG="/data/softcenter/bin/websshdata/.GoWebSSH"
+    if [ -d "$OLD_CFG" ] && [ ! -f "$WEBSSH_CONFIG_DIR/GoWebSSH.toml" ]; then
+        log_date "迁移旧配置 $OLD_CFG → $WEBSSH_CONFIG_DIR"
+        cp -a "$OLD_CFG/." "$WEBSSH_CONFIG_DIR/" 2>/dev/null || true
+    fi
+
+    # 首次运行会生成 GoWebSSH.toml
+    if [ -d "$WEBSSH_WEB_DIR" ]; then
+        nohup "$BIN" -ConfigDir "$WEBSSH_CONFIG_DIR" -WebBaseDir "$WEBSSH_WEB_DIR" >> "$LOG" 2>&1 &
+    else
+        nohup "$BIN" -ConfigDir "$WEBSSH_CONFIG_DIR" >> "$LOG" 2>&1 &
+    fi
     sleep 1
     if is_running; then
         pid=$(pgrep -f webssh-core | head -n 1)
         echo "$pid" > "$PIDFILE"
-        log_date "WebSSH 启动成功 PID=$pid HOME=$HOME"
-        echo "WebSSH 已启动，访问 http://$(hostname -I 2>/dev/null | awk '{print $1}'):8899/"
+        log_date "WebSSH 启动成功 PID=$pid ConfigDir=$WEBSSH_CONFIG_DIR"
+        echo "WebSSH 已启动，访问 http://$(hostname -I 2>/dev/null | awk '{print $1}'):${WEBSSH_PORT}/"
     else
         rm -f "$PIDFILE"
         log_date "WebSSH 启动失败，详见 $LOG"

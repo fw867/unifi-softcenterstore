@@ -81,7 +81,7 @@
         "Id": "koolss",
         "Name": "XRay",
         "Type": "Shell Script",
-        "Version": "1.2.3",
+        "Version": "1.2.4",
         "Description": "Xray代理，支持GFWList、大陆白名单，游戏、全局模式。",
         "Icon": "shield-check",
         "StartCommand": "/data/softcenter/bin/koolss start",
@@ -435,7 +435,7 @@
         "Id": "webssh",
         "Name": "WebSSH",
         "Type": "Shell Script",
-        "Version": "2.5.1",
+        "Version": "2.5.4",
         "Description": "浏览器版 SSH 客户端（GoWebSSH），支持多会话、SFTP 与文件管理。",
         "Icon": "terminal-square",
         "StartCommand": "/data/softcenter/bin/webssh start",
@@ -445,7 +445,7 @@
         "ConfigPath": "/data/softcenter/config/webssh.env",
         "ConfigKeys": "",
         "LogPath": "/var/log/webssh.log",
-        "CustomCommands": "[{\"name\":\"下载/更新核心\",\"command\":\"FORCE_DOWNLOAD=1 /data/softcenter/bin/webssh-dl\"}]",
+        "CustomCommands": "[{\"name\":\"升级webssh\",\"command\":\"/data/softcenter/bin/webssh-dl\"},{\"name\":\"强制重下核心\",\"command\":\"FORCE_DOWNLOAD=1 /data/softcenter/bin/webssh-dl\"}]",
         "Files": [
             {
                 "Name": "webssh",
@@ -466,12 +466,20 @@
                     "Title": "运行环境",
                     "Fields": [
                         {
-                            "Key": "WEBSSH_HOME",
-                            "Label": "数据目录",
+                            "Key": "WEBSSH_CONFIG_DIR",
+                            "Label": "配置目录 (ConfigDir)",
                             "Type": "path",
-                            "Default": "/data/softcenter/bin/websshdata",
+                            "Default": "/data/softcenter/webssh/config",
                             "Monospace": true,
-                            "Help": "GoWebSSH 配置在 <HOME>/.GoWebSSH，首次运行自动生成"
+                            "Help": "传给 webssh-core -ConfigDir，存放 GoWebSSH.toml 等；旧 WEBSSH_HOME 会自动兼容迁移"
+                        },
+                        {
+                            "Key": "WEBSSH_WEB_DIR",
+                            "Label": "静态资源目录 (WebBaseDir)",
+                            "Type": "path",
+                            "Default": "/data/softcenter/webssh/web",
+                            "Monospace": true,
+                            "Help": "传给 -WebBaseDir；升级时若压缩包含 web/ 会解压到此。目录不存在则不传该参数"
                         }
                     ]
                 }

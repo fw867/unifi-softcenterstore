@@ -38,6 +38,41 @@ case $arch in
         ;;
 esac
 
+human_size() {
+    awk -v b="${1:-0}" 'BEGIN{
+        split("B KB MB GB", u, " ")
+        i = 1
+        while (b >= 1024 && i < 4) { b /= 1024; i++ }
+        if (i == 1) printf "%d %s", b, u[i]
+        else printf "%.1f %s", b, u[i]
+    }'
+}
+
+# 后台 curl 下载，按约 10% 进度换行输出（与 SoftCenter install.sh 一致）
+download_with_progress() {
+    local url="$1"
+    local out="$2"
+    local err="/tmp/xray_curl.err"
+    local pid last=0 p got
+
+    : > "$err"
+    curl $CURL_OPT -fL --connect-timeout 15 --max-time 300 -o "$out" "$url" 2>"$err" &
+    pid=$!
+
+    while kill -0 "$pid" 2>/dev/null; do
+        sleep 1
+        p=$(tr '\r' '\n' < "$err" 2>/dev/null | sed -n 's/.*[[:space:]]\([0-9][0-9]*\)[[:space:]]*%.*/\1/p' | tail -n1)
+        p=${p:-0}
+        if [ "$p" -ge $((last + 10)) ] || [ "$p" -ge 100 ]; then
+            got=$(wc -c < "$out" 2>/dev/null || echo 0)
+            echo_date "▸ 进度 ${p}%  已下载 $(human_size "$got")"
+            last=$p
+        fi
+    done
+
+    wait "$pid"
+}
+
 # 版本号必须是 数字.数字(.数字...) ，否则视为检测失败
 is_valid_version() {
     echo "$1" | grep -Eq '^[0-9]+(\.[0-9]+)+$'
@@ -102,57 +137,52 @@ update_now(){
     mkdir -p /tmp/xray && cd /tmp/xray
 
     DL_BASE="https://github.com/XTLS/Xray-core/releases/download/${ver}"
-    
-    echo_date "开始下载校验文件：${ZIP_NAME}.dgst"
-    curl $CURL_OPT --connect-timeout 15 -fSL -o /tmp/xray/${ZIP_NAME}.dgst "${DL_BASE}/${ZIP_NAME}.dgst"
-    if [ "$?" != "0" ] || [ ! -s /tmp/xray/${ZIP_NAME}.dgst ]; then
-        echo_date "${ZIP_NAME}.dgst 下载失败！"
-        dgst_ok=0
-    else
-        dgst_ok=1
-        echo_date "校验文件下载成功..."
-    fi
-    
-    echo_date "开始下载 Xray 主程序压缩包..."
-    echo_date "下载地址：${DL_BASE}/${ZIP_NAME}"
-    curl $CURL_OPT --connect-timeout 15 -fSL -o /tmp/xray/${ZIP_NAME} "${DL_BASE}/${ZIP_NAME}"
-    if [ "$?" != "0" ]; then
-        echo_date "Xray 压缩包下载失败！"
-        xray_ok=0
-    else
-        xray_ok=1
-        echo_date "Xray 压缩包下载成功..."
-    fi
 
-    if [ "${dgst_ok}" = "1" ] && [ "${xray_ok}" = "1" ]; then
-        check_hash
-    else
-        echo_date "下载流程失败，请检查你的 SOCKS5 代理是否正常工作！"
+    echo_date "▸ 下载校验文件 ${ZIP_NAME}.dgst"
+    if ! curl $CURL_OPT --connect-timeout 15 --max-time 60 -fsSL -o "/tmp/xray/${ZIP_NAME}.dgst" "${DL_BASE}/${ZIP_NAME}.dgst" || [ ! -s "/tmp/xray/${ZIP_NAME}.dgst" ]; then
+        echo_date "${ZIP_NAME}.dgst 下载失败，已中止"
         exit 1
     fi
+    echo_date "  校验文件就绪"
+
+    echo_date "▸ 下载 Xray 主程序"
+    echo_date "  地址: ${DL_BASE}/${ZIP_NAME}"
+    if ! download_with_progress "${DL_BASE}/${ZIP_NAME}" "/tmp/xray/${ZIP_NAME}" || [ ! -s "/tmp/xray/${ZIP_NAME}" ]; then
+        echo_date "Xray 压缩包下载失败，已中止"
+        rm -rf /tmp/xray
+        exit 1
+    fi
+    ZIP_SIZE=$(wc -c < "/tmp/xray/${ZIP_NAME}" | tr -d ' ')
+    echo_date "  下载完成: $(human_size "$ZIP_SIZE")"
+
+    check_hash
 }
 
 check_hash(){
     cd /tmp/xray
-    echo_date "正在进行 SHA2-256 文件完整性校验..."
-    
-    ONLINE_HASH=$(grep "^SHA2-256=" "${ZIP_NAME}.dgst" | awk '{print $2}')
+    echo_date "▸ 比对 SHA2-256"
+
+    ONLINE_HASH=$(grep "^SHA2-256=" "${ZIP_NAME}.dgst" | awk '{print $2}' | tr -d ' \r')
     LOCAL_HASH=$(sha256sum "${ZIP_NAME}" | awk '{print $1}')
-    
-    if [ -n "${ONLINE_HASH}" ] && [ "${LOCAL_HASH}" = "${ONLINE_HASH}" ]; then
-        echo_date "文件校验通过，准备解压！"
-        
-        unzip -o "${ZIP_NAME}" xray >/dev/null 2>&1
-        if [ -f "xray" ]; then
-            install_binary
-        else
-            echo_date "解压失败或未找到 xray 二进制文件！"
-            exit 1
-        fi
+
+    if [ -z "${ONLINE_HASH}" ]; then
+        echo_date "校验文件中未找到 SHA2-256，已中止，不会覆盖本地文件"
+        exit 1
+    fi
+    if [ "${LOCAL_HASH}" != "${ONLINE_HASH}" ]; then
+        echo_date "SHA2-256 校验失败，已中止，不会覆盖本地文件"
+        echo_date "  期望: ${ONLINE_HASH}"
+        echo_date "  实际: ${LOCAL_HASH}"
+        exit 1
+    fi
+    echo_date "✅ 校验通过  ${LOCAL_HASH}"
+
+    echo_date "▸ 解压并安装"
+    unzip -o "${ZIP_NAME}" xray >/dev/null 2>&1
+    if [ -f "xray" ]; then
+        install_binary
     else
-        echo_date "校验未通过，文件损坏或被劫持！"
-        echo_date "本地 SHA2-256: $LOCAL_HASH"
-        echo_date "线上 SHA2-256: $ONLINE_HASH"
+        echo_date "解压失败或未找到 xray 二进制文件！"
         exit 1
     fi
 }
