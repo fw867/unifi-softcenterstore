@@ -46,6 +46,27 @@ WantedBy=multi-user.target";
     return;
 }
 
+// 已有服务单元时补写 KillMode=process，避免升级 stop 时连带杀掉插件子进程
+if (!string.IsNullOrEmpty(currentExe) && File.Exists(ServicePath))
+{
+    try
+    {
+        var svc = File.ReadAllText(ServicePath);
+        if (!svc.Contains("KillMode=process"))
+        {
+            if (svc.Contains("KillMode="))
+                svc = Regex.Replace(svc, @"KillMode=\w+", "KillMode=process");
+            else if (svc.Contains("[Service]"))
+                svc = svc.Replace("[Service]", "[Service]\nKillMode=process");
+            else
+                svc += "\n[Service]\nKillMode=process\n";
+            File.WriteAllText(ServicePath, svc);
+            Process.Start("systemctl", "daemon-reload")?.WaitForExit();
+        }
+    }
+    catch { }
+}
+
 var builder = WebApplication.CreateSlimBuilder(args);
 builder.Services.ConfigureHttpJsonOptions(options => {
     options.SerializerOptions.TypeInfoResolverChain.Insert(0, AppJsonContext.Default);
@@ -131,25 +152,65 @@ if (!File.Exists(bootLock))
     }
     catch { }
 
+    File.WriteAllText(bootLock, DateTime.Now.ToString());
+}
+
+// SoftCenter 每次启动（系统开机、服务重启、OTA 升级）都拉起「已开启自启且当前未运行」的插件
+// 不依赖 boot lock：升级后 /tmp lock 仍在，若只在首次开机恢复会导致插件全部停着
+_ = Task.Run(async () => {
+    await Task.Delay(2500);
     try
     {
+        var toStart = new List<(string Id, string StartCmd)>();
         using (var conn = new SqliteConnection(DbPath))
         {
             conn.Open();
             using var cmd = conn.CreateCommand();
-            cmd.CommandText = "SELECT StartCommand FROM apps_registry WHERE IsAutoStart=1";
+            cmd.CommandText = "SELECT Id, StartCommand, StatusCommand FROM apps_registry WHERE IsAutoStart=1";
             using var reader = cmd.ExecuteReader();
             while (reader.Read())
             {
-                var startCmd = reader.GetString(0);
-                Process.Start(new ProcessStartInfo { FileName = "/bin/bash", Arguments = $"-c \"{startCmd}\"", UseShellExecute = false, CreateNoWindow = true });
+                var id = reader.GetString(0);
+                var startCmd = reader.IsDBNull(1) ? "" : reader.GetString(1);
+                var statusCmd = reader.IsDBNull(2) ? "" : reader.GetString(2);
+                if (string.IsNullOrWhiteSpace(startCmd)) continue;
+                var running = false;
+                if (!string.IsNullOrWhiteSpace(statusCmd))
+                {
+                    try
+                    {
+                        using var p = Process.Start(new ProcessStartInfo
+                        {
+                            FileName = "/bin/bash",
+                            Arguments = $"-c \"{statusCmd}\"",
+                            UseShellExecute = false,
+                            CreateNoWindow = true
+                        });
+                        p?.WaitForExit(5000);
+                        running = p?.ExitCode == 0;
+                    }
+                    catch { }
+                }
+                if (!running) toStart.Add((id, startCmd));
             }
+        }
+        foreach (var (id, startCmd) in toStart)
+        {
+            try
+            {
+                Process.Start(new ProcessStartInfo
+                {
+                    FileName = "/bin/bash",
+                    Arguments = $"-c \"{startCmd}\"",
+                    UseShellExecute = false,
+                    CreateNoWindow = true
+                });
+            }
+            catch { }
         }
     }
     catch { }
-
-    File.WriteAllText(bootLock, DateTime.Now.ToString());
-}
+});
 
 app.Use(async (context, next) => {
     if (context.Request.Path.StartsWithSegments("/api"))
