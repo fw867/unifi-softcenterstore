@@ -111,6 +111,15 @@
             box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
         }
 
+        .sidebar-item .nav-icon {
+            color: #9ca3af;
+            transition: color 0.18s ease;
+        }
+
+        .sidebar-item:hover .nav-icon {
+            color: #4b5563;
+        }
+
         .sidebar-item.active .nav-icon {
             color: #fff;
         }
@@ -171,8 +180,7 @@
                 <button v-for="item in navItems" :key="item.id" @click="goPage(item.id)"
                     :class="activePage === item.id ? 'active' : 'text-gray-600'"
                     class="sidebar-item w-full flex items-center space-x-3 px-3.5 py-2.5 rounded-xl text-sm font-medium text-left">
-                    <i :data-lucide="item.icon" class="nav-icon w-4.5 h-4.5 w-[18px] h-[18px] shrink-0"
-                        :class="activePage === item.id ? 'text-white' : 'text-gray-400'"></i>
+                    <i :data-lucide="item.icon" class="nav-icon w-[18px] h-[18px] shrink-0"></i>
                     <span>{{ item.label }}</span>
                 </button>
             </nav>
