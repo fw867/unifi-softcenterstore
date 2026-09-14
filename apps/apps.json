@@ -96,13 +96,13 @@
             {
                 "Name": "koolss",
                 "Path": "apps/koolss/koolss",
-                "Sha256": "c73f5565ef98499dbd8f553a5a637e9d078200eb03a7d1bb849819f58fdb4dee",
+                "Sha256": "e8c015a7fdc2a44f73e5cf1c45051ac9b00131e86f789cb194b5ee9745b6d97f",
                 "Mode": "0755"
             },
             {
                 "Name": "ssup",
                 "Path": "apps/koolss/ssup",
-                "Sha256": "6529fdb64cb0beca391a71b44a99b4268ea5dcc9adf4787b3d29e056488b2137",
+                "Sha256": "cb72313512292bd737cd3f7e40caa296806fc0206d434a5f416f4a4b224f1188",
                 "Mode": "0755"
             },
             {

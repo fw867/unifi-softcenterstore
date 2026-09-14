@@ -2,7 +2,16 @@
 
 # UniFi SoftCenter · Koolss / Xray
 # 面板配置：/data/softcenter/config/koolss.env
-# V2RAY_CONFIG_FILE 为配置 JSON 全文，启动时写入固定路径
+
+# 状态探针：SoftCenter 每 3 秒轮询，必须轻量，不写配置、不写日志
+if [ "$1" = "status" ]; then
+    if pgrep -x xray > /dev/null; then
+        echo "running"
+        exit 0
+    fi
+    echo "stopped"
+    exit 1
+fi
 
 CONFIG="/data/softcenter/config/koolss.env"
 [ -f "$CONFIG" ] && . "$CONFIG"
@@ -13,7 +22,6 @@ XRAY_JSON_PATH="/tmp/xray.json"
 V2RAY_CONFIG_FILE="${V2RAY_CONFIG_FILE:-}"
 
 decode_config() {
-    # b64:xxx → 多行写入 /tmp/xray.json；否则原样写入
     case "$V2RAY_CONFIG_FILE" in
         b64:*)
             echo "${V2RAY_CONFIG_FILE#b64:}" | base64 -d > "$XRAY_JSON_PATH" 2>/dev/null
@@ -90,17 +98,18 @@ log_date() {
     echo "$line" >> "$LOG_FILE"
 }
 
-if [ -z "${V2RAY_CONFIG_FILE}" ]; then
-    log_date "未配置 V2Ray 配置内容，请在软件中心粘贴配置 JSON"
-    exit 1
-fi
-decode_config
-if [ ! -s "${XRAY_JSON_PATH}" ]; then
-    log_date "写入配置文件失败: ${XRAY_JSON_PATH}"
-    exit 1
-else
+prepare_config() {
+    if [ -z "${V2RAY_CONFIG_FILE}" ]; then
+        log_date "未配置 V2Ray 配置内容，请在软件中心粘贴配置 JSON"
+        exit 1
+    fi
+    decode_config
+    if [ ! -s "${XRAY_JSON_PATH}" ]; then
+        log_date "写入配置文件失败: ${XRAY_JSON_PATH}"
+        exit 1
+    fi
     log_date "-------- koolss by fw867 ----------------"
-fi
+}
 
 set_lock(){
     exec 9>"$LOCK_FILE"
@@ -561,12 +570,14 @@ clean_log() {
 restart_process() {
     kill_process
     sleep 1
+    prepare_config
     start_v2ray
-    status
+    if pgrep -x xray > /dev/null; then echo "running"; else echo "stopped"; fi
 }
 
 start() {
     set_lock
+    prepare_config
     check_and_clean_logs
     check_dns
     dns_origin
@@ -598,6 +609,7 @@ restart() {
     clean_log
     check_dns
     dns_origin
+    prepare_config
     ipfwd_on
     start_v2ray
     create_ipsetlist
@@ -606,16 +618,6 @@ restart() {
     dns_update
     chromecast
     unset_lock
-}
-
-# 仅用于 SoftCenter 状态探针：不写日志，只返回退出码
-status() {
-    if pgrep -x xray > /dev/null; then
-        echo "running"
-        exit 0
-    fi
-    echo "stopped"
-    exit 1
 }
 
 usage() {
@@ -633,7 +635,7 @@ usage() {
 
 case ${1} in
     start) start ;;
-    status) status ;;
+    status) exit 1 ;;
     stop) stop ;;
     restart) restart ;;
     ip) current_ip ;;
