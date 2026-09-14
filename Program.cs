@@ -418,7 +418,7 @@ app.MapPost("/api/apps", (AppEntity a) => {
     cmd.Parameters.AddWithValue("@CPath", a.ConfigPath ?? ""); cmd.Parameters.AddWithValue("@CKeys", a.ConfigKeys ?? ""); cmd.Parameters.AddWithValue("@LPath", a.LogPath ?? "");
     cmd.Parameters.AddWithValue("@SortOrder", a.SortOrder); cmd.Parameters.AddWithValue("@Ver", a.Version ?? "0.0.1"); cmd.Parameters.AddWithValue("@Desc", a.Description ?? "");
     cmd.Parameters.AddWithValue("@Custom", a.CustomCommands ?? "[]"); cmd.Parameters.AddWithValue("@Schema", a.ConfigSchema ?? ""); cmd.Parameters.AddWithValue("@Files", a.Files ?? "[]");
-    cmd.ExecuteNonQuery(); return Results.Ok(new { success = true });
+    cmd.ExecuteNonQuery(); return Results.Ok(new SimpleSuccess(true));
 });
 
 app.MapDelete("/api/apps/{id}", (string id) => {
@@ -426,7 +426,7 @@ app.MapDelete("/api/apps/{id}", (string id) => {
     using var cmd = conn.CreateCommand();
     cmd.CommandText = "DELETE FROM apps_registry WHERE Id = @id";
     cmd.Parameters.AddWithValue("@id", id);
-    cmd.ExecuteNonQuery(); return Results.Ok(new { success = true });
+    cmd.ExecuteNonQuery(); return Results.Ok(new SimpleSuccess(true));
 });
 
 app.MapPost("/api/apps/reorder", (List<AppOrderReq> req) => {
@@ -437,7 +437,7 @@ app.MapPost("/api/apps/reorder", (List<AppOrderReq> req) => {
     var pId = cmd.Parameters.Add("@id", SqliteType.Text);
     var pSo = cmd.Parameters.Add("@so", SqliteType.Integer);
     foreach (var r in req) { pId.Value = r.Id; pSo.Value = r.SortOrder; cmd.ExecuteNonQuery(); }
-    tx.Commit(); return Results.Ok(new { success = true });
+    tx.Commit(); return Results.Ok(new SimpleSuccess(true));
 });
 
 app.MapPost("/api/apps/{id}/control", (string id, string action) => {
@@ -447,8 +447,27 @@ app.MapPost("/api/apps/{id}/control", (string id, string action) => {
     cmd.Parameters.AddWithValue("@id", id);
     using var reader = cmd.ExecuteReader();
     if (!reader.Read()) return Results.NotFound();
-    var exec = action == "start" ? reader.GetString(0) : (action == "stop" ? reader.GetString(1) : $"{reader.GetString(1)};sleep 1;{reader.GetString(0)}");
-    Process.Start("/bin/bash", $"-c \"{exec}\""); return Results.Ok(new { success = true });
+    var startCmd = reader.GetString(0);
+    var stopCmd = reader.GetString(1);
+    reader.Close();
+    var exec = action == "start" ? startCmd : (action == "stop" ? stopCmd : $"{stopCmd};sleep 1;{startCmd}");
+    try
+    {
+        Process.Start(new ProcessStartInfo
+        {
+            FileName = "/bin/bash",
+            Arguments = $"-c \"{exec}\"",
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true
+        });
+    }
+    catch (Exception ex)
+    {
+        return Results.BadRequest(new InstallResult(false, null, $"启动命令失败: {ex.Message}"));
+    }
+    return Results.Ok(new SimpleSuccess(true));
 });
 
 // 从云端下载插件运行文件并校验 SHA256，写入 /data/softcenter/bin
@@ -534,7 +553,7 @@ app.MapPut("/api/apps/{id}/autostart/{state:int}", (string id, int state) => {
         Process.Start(new ProcessStartInfo { FileName = "/bin/bash", Arguments = $"-c \"systemctl {action} {serviceName}\"", UseShellExecute = false, CreateNoWindow = true });
     }
 
-    return Results.Ok(new { success = true });
+    return Results.Ok(new SimpleSuccess(true));
 });
 
 // Schema 驱动配置：有 ConfigSchema 时读 /data/softcenter/config/{id}.env；否则兼容旧 ConfigKeys 正则解析
@@ -668,7 +687,7 @@ app.MapPost("/api/apps/{id}/config", async (string id, Dictionary<string, string
         var content = await File.ReadAllTextAsync(path);
         foreach (var kv in payload) content = Regex.Replace(content, $@"{Regex.Escape(kv.Key)}=[^\n\r]*", _ => $"{kv.Key}={kv.Value}");
         await File.WriteAllTextAsync(path, content);
-        return Results.Ok(new { success = true });
+        return Results.Ok(new SimpleSuccess(true));
     }
     return Results.NotFound();
 });
@@ -710,7 +729,7 @@ app.MapPost("/api/cron", (CronRequest req) => {
     cmd.CommandText = "INSERT OR REPLACE INTO cron_registry VALUES (@id, '任务', @sch, @cmd)";
     cmd.Parameters.AddWithValue("@id", id); cmd.Parameters.AddWithValue("@sch", req.Schedule); cmd.Parameters.AddWithValue("@cmd", req.Command);
     cmd.ExecuteNonQuery();
-    Process.Start("/bin/bash", $"-c \"(crontab -l 2>/dev/null; echo '{req.Schedule} {req.Command}') | crontab -\""); return Results.Ok(new { success = true });
+    Process.Start("/bin/bash", $"-c \"(crontab -l 2>/dev/null; echo '{req.Schedule} {req.Command}') | crontab -\""); return Results.Ok(new SimpleSuccess(true));
 });
 
 app.MapDelete("/api/cron/{id}", (string id) => {
@@ -719,7 +738,7 @@ app.MapDelete("/api/cron/{id}", (string id) => {
     cmd.CommandText = "DELETE FROM cron_registry WHERE Id=@id";
     cmd.Parameters.AddWithValue("@id", id); cmd.ExecuteNonQuery();
     var lineToRemove = Encoding.UTF8.GetString(Convert.FromBase64String(id));
-    Process.Start("/bin/bash", $"-c \"crontab -l | grep -vF '{lineToRemove}' | crontab -\""); return Results.Ok(new { success = true });
+    Process.Start("/bin/bash", $"-c \"crontab -l | grep -vF '{lineToRemove}' | crontab -\""); return Results.Ok(new SimpleSuccess(true));
 });
 
 app.MapGet("/api/system/info", () => {
@@ -754,7 +773,7 @@ app.MapGet("/api/system/config", () => Results.Ok(sysConfig));
 app.MapPost("/api/system/config", async (AppConfig newConfig) => {
     sysConfig.Port = newConfig.Port; sysConfig.AdminToken = newConfig.AdminToken; sysConfig.LocalProxy = newConfig.LocalProxy;
     await File.WriteAllTextAsync(ConfigPath, JsonSerializer.Serialize(sysConfig, AppJsonContext.Default.AppConfig));
-    Process.Start("systemd-run", $"--unit=sc_restarter --collect bash -c \"sleep 1 && systemctl restart {ServiceName}\""); return Results.Ok(new { success = true });
+    Process.Start("systemd-run", $"--unit=sc_restarter --collect bash -c \"sleep 1 && systemctl restart {ServiceName}\""); return Results.Ok(new SimpleSuccess(true));
 });
 
 app.MapPost("/api/system/upgrade", () => {
@@ -762,7 +781,7 @@ app.MapPost("/api/system/upgrade", () => {
     var scriptUrl = "https://raw.githubusercontent.com/fw867/unifi-softcenterstore/master/install.sh";
     if (File.Exists("/tmp/sc_update.log")) File.Delete("/tmp/sc_update.log");
     string curlCmd = !string.IsNullOrEmpty(proxy) ? $"curl -x {proxy} -sSL {scriptUrl} | bash -s '{proxy}' > /tmp/sc_update.log 2>&1" : $"curl -sSL {scriptUrl} | bash > /tmp/sc_update.log 2>&1";
-    Process.Start("systemd-run", $"--unit=sc_updater --collect bash -c \"sleep 1 && {curlCmd}\""); return Results.Ok(new { success = true });
+    Process.Start("systemd-run", $"--unit=sc_updater --collect bash -c \"sleep 1 && {curlCmd}\""); return Results.Ok(new SimpleSuccess(true));
 });
 
 app.MapGet("/api/system/upgrade/log", () => {
@@ -776,6 +795,7 @@ public record AppConfig { public int Port { get; set; } = 9958; public string Ad
 public record AppEntity(string Id, string Name, string Type, string Icon, string StartCommand, string StopCommand, string StatusCommand, int IsAutoStart, bool IsRunning, string ConfigPath, string ConfigKeys, string LogPath, int SortOrder, string Version, string Description, string CustomCommands, string ConfigSchema = "", string Files = "[]");
 public record AppFileItem(string Name, string Path, string Sha256, string Mode = "0755");
 public record InstallResult(bool Success, List<string>? Logs, string? Error);
+public record SimpleSuccess(bool Success);
 public record AppOrderReq(string Id, int SortOrder);
 public record CronEntity(string Id, string Name, string Schedule, string Command);
 public record CronRequest(string Schedule, string Command);
@@ -791,6 +811,7 @@ public record ConfigSaveResult(bool Success, Dictionary<string, string>? Errors,
 [JsonSerializable(typeof(AppEntity))]
 [JsonSerializable(typeof(AppFileItem))]
 [JsonSerializable(typeof(InstallResult))]
+[JsonSerializable(typeof(SimpleSuccess))]
 [JsonSerializable(typeof(AppOrderReq))]
 [JsonSerializable(typeof(CronEntity))]
 [JsonSerializable(typeof(CronRequest))]

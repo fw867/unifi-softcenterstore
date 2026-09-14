@@ -467,13 +467,14 @@
 
         <div v-if="activeApp"
             class="fixed inset-0 z-[100] flex items-center justify-center p-4 md:p-8 bg-black/20 backdrop-blur-sm">
-            <div class="glass w-full max-w-5xl rounded-[2.5rem] p-6 md:p-8 shadow-2xl flex flex-col max-h-[92vh]">
-                <h3 class="text-2xl font-semibold mb-2">配置 {{ activeApp.name }}</h3>
-                <p v-if="activeApp.configPath" class="text-sm text-gray-500 mb-4 font-mono break-all text-xs">{{
+            <div class="glass w-full max-w-5xl h-[88vh] min-h-[480px] rounded-[2.5rem] p-6 md:p-8 shadow-2xl flex flex-col">
+                <h3 class="text-2xl font-semibold mb-2 shrink-0">配置 {{ activeApp.name }}</h3>
+                <p v-if="activeApp.configPath"
+                    class="text-sm text-gray-500 mb-4 font-mono break-all text-xs shrink-0">{{
                     activeApp.configPath }}</p>
-                <p v-else class="mb-4"></p>
+                <p v-else class="mb-4 shrink-0"></p>
 
-                <div class="space-y-4 mb-6 text-sm overflow-y-auto pr-2 flex-1 min-h-0" style="max-height: 72vh;">
+                <div class="space-y-4 mb-4 text-sm overflow-y-auto pr-2 flex-1 min-h-0">
                     <div
                         class="flex justify-between items-center bg-white/60 p-4 rounded-xl border border-gray-200 shadow-sm">
                         <span class="text-gray-700 font-medium">开机自启</span>
@@ -608,11 +609,13 @@
                                 class="w-full bg-white/60 border border-gray-200 rounded-xl px-4 py-3 focus:ring-2 focus:ring-blue-500 outline-none transition-all shadow-sm">
                         </div>
                     </template>
-                    <div v-else-if="activeApp.configKeys || activeApp.configSchema"
+                    <div v-if="configMode === 'loading'"
                         class="text-center text-gray-400 py-4 text-xs">正在加载配置...</div>
+                    <div v-else-if="configMode === 'idle'"
+                        class="text-center text-gray-400 py-4 text-xs">该应用未声明配置项</div>
                 </div>
 
-                <div class="flex space-x-3 pt-2">
+                <div class="flex space-x-3 pt-2 shrink-0">
                     <button @click="activeApp = null"
                         class="btn-apple flex-1 py-3 text-gray-500 font-medium border rounded-2xl hover:bg-gray-50">取消</button>
                     <button @click="saveAppConfig" :disabled="isSavingConfig"
@@ -742,8 +745,17 @@
                         const res = await fetch(url, { method, headers: { 'Authorization': token.value, 'Content-Type': 'application/json' }, body: body ? JSON.stringify(body) : null });
                         if (res.status === 401) throw new Error('令牌错误');
                         const text = await res.text();
-                        return text ? JSON.parse(text) : { success: true };
-                    } catch (e) { return null; }
+                        if (!text) return { success: true };
+                        try {
+                            return JSON.parse(text);
+                        } catch (e) {
+                            console.error('callApi JSON parse failed', url, e, text.slice(0, 200));
+                            return null;
+                        }
+                    } catch (e) {
+                        console.error('callApi failed', url, e);
+                        return null;
+                    }
                 };
 
                 const handleTokenSubmit = () => {
@@ -1075,8 +1087,9 @@
 
                 const schemaSections = computed(() => {
                     const s = configSchema.value;
-                    if (!s) return [];
-                    return pick(s, 'Sections', 'sections') || [];
+                    if (!s || typeof s !== 'object') return [];
+                    const sections = pick(s, 'Sections', 'sections');
+                    return Array.isArray(sections) ? sections : [];
                 });
 
                 // Section 可选 "Tab" 字段；未指定或仅一组时单页显示
@@ -1177,6 +1190,29 @@
                 };
 
                 // 打开配置：优先 Schema，其次 legacy
+                const applySchemaPayload = (schema, values) => {
+                    configSchema.value = typeof schema === 'string'
+                        ? (() => { try { return JSON.parse(schema); } catch { return null; } })()
+                        : (schema || null);
+                    activeConfigTab.value = schemaTabNames.value[0] || '';
+                    const vals = values || {};
+                    const merged = {};
+                    for (const f of allSchemaFields.value) {
+                        const k = fieldKey(f);
+                        if (!k) continue;
+                        const def = pick(f, 'Default', 'default');
+                        merged[k] = vals[k] !== undefined && vals[k] !== null
+                            ? String(vals[k])
+                            : (def !== undefined && def !== null ? String(def) : '');
+                        if (fieldType(f) === 'switch') merged[k] = isTruthy(merged[k]) ? '1' : '0';
+                    }
+                    for (const k in vals) {
+                        if (merged[k] === undefined) merged[k] = String(vals[k]);
+                    }
+                    configValues.value = merged;
+                    configMode.value = 'schema';
+                };
+
                 const openConfig = async (app) => {
                     activeApp.value = app;
                     appConfig.value = {};
@@ -1187,63 +1223,58 @@
                     configSchema.value = app.configSchema || null;
                     configMode.value = 'loading';
 
-                    if (!app.configKeys && !app.configSchema) {
-                        configMode.value = 'idle';
-                        return;
-                    }
+                    try {
+                        const data = await callApi(`/api/apps/${app.id}/config`);
 
-                    const data = await callApi(`/api/apps/${app.id}/config`);
-                    if (!data) { configMode.value = app.configSchema ? 'schema' : 'legacy'; return; }
+                        // 接口失败时，若本地已有 schema 则仍用列表里的 schema 渲染
+                        if (!data) {
+                            if (app.configSchema) {
+                                applySchemaPayload(app.configSchema, {});
+                            } else if (app.configKeys) {
+                                configMode.value = 'legacy';
+                            } else {
+                                configMode.value = 'idle';
+                            }
+                            return;
+                        }
 
-                    const mode = data.mode || data.Mode;
-                    if (mode === 'schema' || (data.schema || data.Schema || app.configSchema)) {
-                        configMode.value = 'schema';
+                        const mode = data.mode || data.Mode;
                         const schema = data.schema || data.Schema || app.configSchema;
-                        configSchema.value = typeof schema === 'string' ? (() => { try { return JSON.parse(schema); } catch { return null; } })() : schema;
-                        activeConfigTab.value = schemaTabNames.value[0] || '';
-                        const values = data.values || data.Values || {};
-                        const merged = {};
-                        for (const f of allSchemaFields.value) {
-                            const k = fieldKey(f);
-                            if (!k) continue;
-                            const def = pick(f, 'Default', 'default');
-                            merged[k] = values[k] !== undefined ? String(values[k]) : (def !== undefined && def !== null ? String(def) : '');
-                            if (fieldType(f) === 'switch') merged[k] = isTruthy(merged[k]) ? '1' : '0';
+                        const hasSchema = !!schema;
+
+                        if (mode === 'schema' || hasSchema) {
+                            applySchemaPayload(schema, data.values || data.Values || {});
+                            return;
                         }
-                        for (const k in values) {
-                            if (merged[k] === undefined) merged[k] = String(values[k]);
-                        }
-                        configValues.value = merged;
-                    } else {
-                        configMode.value = 'legacy';
-                        const legacy = data.legacy || data.Legacy || data;
-                        const normalized = {};
-                        const source = (legacy && typeof legacy === 'object' && !Array.isArray(legacy)) ? legacy : {};
-                        for (let k in source) {
-                            if (!source[k] || typeof source[k] !== 'object') {
-                                normalized[k] = { value: source[k] != null ? String(source[k]) : '', comment: '' };
-                                continue;
-                            }
-                            normalized[k] = {
-                                value: source[k].value !== undefined ? source[k].value : source[k].Value,
-                                comment: source[k].comment !== undefined ? source[k].comment : source[k].Comment
-                            };
-                        }
-                        // 后端可能直接返回 legacy 字典（旧兼容）
-                        if (data.mode === undefined && data.Mode === undefined) {
-                            for (let k in data) {
-                                if (k === 'mode' || k === 'schema' || k === 'values' || k === 'legacy') continue;
-                                if (data[k] && typeof data[k] === 'object' && ('value' in data[k] || 'Value' in data[k])) {
-                                    normalized[k] = {
-                                        value: data[k].value !== undefined ? data[k].value : data[k].Value,
-                                        comment: data[k].comment !== undefined ? data[k].comment : data[k].Comment
-                                    };
+
+                        if (mode === 'legacy' || data.legacy || data.Legacy || app.configKeys) {
+                            configMode.value = 'legacy';
+                            const legacy = data.legacy || data.Legacy || data;
+                            const normalized = {};
+                            const source = (legacy && typeof legacy === 'object' && !Array.isArray(legacy)) ? legacy : {};
+                            for (let k in source) {
+                                if (k === 'mode' || k === 'Mode' || k === 'schema' || k === 'Schema' || k === 'values' || k === 'Values' || k === 'legacy' || k === 'Legacy') continue;
+                                if (!source[k] || typeof source[k] !== 'object') {
+                                    normalized[k] = { value: source[k] != null ? String(source[k]) : '', comment: '' };
+                                    continue;
                                 }
+                                normalized[k] = {
+                                    value: source[k].value !== undefined ? source[k].value : source[k].Value,
+                                    comment: source[k].comment !== undefined ? source[k].comment : source[k].Comment
+                                };
                             }
+                            appConfig.value = normalized;
+                            return;
                         }
-                        appConfig.value = normalized;
+
+                        configMode.value = 'idle';
+                    } catch (e) {
+                        console.error('openConfig failed', e);
+                        if (app.configSchema) applySchemaPayload(app.configSchema, {});
+                        else configMode.value = app.configKeys ? 'legacy' : 'idle';
+                    } finally {
+                        nextTick(() => lucide.createIcons());
                     }
-                    nextTick(() => lucide.createIcons());
                 };
 
                 // 保存配置
@@ -1334,7 +1365,7 @@
                 return {
                     token, tokenInputType, handleTokenSubmit, sysInfo, apps, cronJobs, activeApp, appConfig,
                     configMode, configSchema, configValues, configErrors, collapsedSections, isSavingConfig,
-                    activeConfigTab, schemaTabNames, visibleSchemaSections,
+                    activeConfigTab, schemaTabNames, visibleSchemaSections, allSchemaFields,
                     schemaSections, fieldKey, fieldLabel, fieldType, fieldHelp, fieldPlaceholder, fieldRequired,
                     fieldMin, fieldMax, fieldRows, fieldMonospace, fieldOptions, isTruthy, switchLabel,
                     isFieldVisible, toggleSection, toggleSwitchField, multiSelected, toggleMulti, toggleAutoStartInModal,
