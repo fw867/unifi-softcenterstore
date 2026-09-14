@@ -1,0 +1,85 @@
+#!/bin/sh
+
+# UniFi SoftCenter · PoE 风扇管理
+# 项目: https://github.com/Autonomous120/unifi-ucg-fiber-poe-fan-control
+# start: 注册 crontab 定时执行；stop: 移除 crontab
+# 配置: /data/softcenter/config/poe-fan.env
+
+CONFIG="/data/softcenter/config/poe-fan.env"
+[ -f "$CONFIG" ] && . "$CONFIG"
+
+SCRIPT="/data/softcenter/bin/poe-fan-control.sh"
+CRON_TAG="softcenter:poe-fan"
+CHECK_INTERVAL="${CHECK_INTERVAL:-5}"
+LOG="/var/log/poe-fan.log"
+
+log_date() {
+    line="【$(date '+%Y年%m月%d日 %H:%M:%S')】: $1"
+    echo "$line"
+    echo "$line" >> "$LOG"
+}
+
+# 状态探针：看 crontab 里有没有本插件条目
+if [ "$1" = "status" ]; then
+    if crontab -l 2>/dev/null | grep -q "$CRON_TAG"; then
+        echo "running"
+        exit 0
+    fi
+    echo "stopped"
+    exit 1
+fi
+
+[ -x "$SCRIPT" ] || {
+    echo "错误：未找到 $SCRIPT"
+    log_date "错误：未找到 $SCRIPT"
+    exit 1
+}
+
+remove_cron() {
+    crontab -l 2>/dev/null | grep -v "$CRON_TAG" | crontab - 2>/dev/null || true
+}
+
+add_cron() {
+    remove_cron
+    # 间隔 1-60 分钟
+    case "$CHECK_INTERVAL" in
+        ''|*[!0-9]*) CHECK_INTERVAL=5 ;;
+    esac
+    [ "$CHECK_INTERVAL" -lt 1 ] && CHECK_INTERVAL=1
+    [ "$CHECK_INTERVAL" -gt 60 ] && CHECK_INTERVAL=60
+    (crontab -l 2>/dev/null; echo "*/${CHECK_INTERVAL} * * * * $SCRIPT # $CRON_TAG") | crontab -
+}
+
+case "${1}" in
+start)
+    if [ ! -f "$CONFIG" ]; then
+        echo "请先在软件中心配置 DEVICE_ID 与 API_KEY"
+        log_date "缺少配置文件 $CONFIG"
+        exit 1
+    fi
+    add_cron
+    log_date "已注册 crontab，每 ${CHECK_INTERVAL} 分钟检测一次"
+    echo "poe-fan 已启动（每 ${CHECK_INTERVAL} 分钟执行）"
+    # 立即跑一次
+    "$SCRIPT" || true
+    ;;
+stop)
+    remove_cron
+    log_date "已移除 crontab"
+    echo "poe-fan 已停止"
+    ;;
+restart)
+    remove_cron
+    add_cron
+    log_date "已重启，每 ${CHECK_INTERVAL} 分钟检测一次"
+    echo "poe-fan 已重启"
+    "$SCRIPT" || true
+    ;;
+status)
+    exit 1
+    ;;
+*)
+    echo "Usage: $0 {start|stop|restart|status}"
+    exit 1
+    ;;
+esac

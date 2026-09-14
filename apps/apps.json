@@ -102,7 +102,7 @@
             {
                 "Name": "koolss-ssup",
                 "Path": "apps/koolss/koolss-ssup",
-                "Sha256": "6e8f56cb1aac15fa7b7f2bdb29a0d2eb12d9ee7f35b1a00ec84db98d18a6f25d",
+                "Sha256": "931658dc65c63e62447a9d782a0e221a1751c051bf307fe06fd818f452913736",
                 "Mode": "0755"
             },
             {
@@ -641,6 +641,111 @@
                             "Type": "path",
                             "Default": "/data/softcenter/bin/fan-controldata/optimal_pwm",
                             "Monospace": true
+                        }
+                    ]
+                }
+            ]
+        }
+    },
+    {
+        "Id": "poe-fan",
+        "Name": "PoE 风扇",
+        "Type": "Shell Script",
+        "Version": "1.0.0",
+        "Description": "按 PON 模块温度开关指定端口 PoE 风扇（UCG-Fiber）。",
+        "Icon": "wind",
+        "StartCommand": "/data/softcenter/bin/poe-fan start",
+        "StopCommand": "/data/softcenter/bin/poe-fan stop",
+        "StatusCommand": "/data/softcenter/bin/poe-fan status",
+        "IsAutoStart": 0,
+        "ConfigPath": "/data/softcenter/config/poe-fan.env",
+        "ConfigKeys": "",
+        "LogPath": "/var/log/poe-fan.log",
+        "CustomCommands": "[{\"name\":\"立即执行一次\",\"command\":\"/data/softcenter/bin/poe-fan-control.sh\"}]",
+        "Files": [
+            {
+                "Name": "poe-fan",
+                "Path": "apps/poe-fan/poe-fan",
+                "Sha256": "0c27b213530958135231a84db4ceb8bedb644d2a79b3befaa4b71e91568f1c27",
+                "Mode": "0755"
+            },
+            {
+                "Name": "poe-fan-control.sh",
+                "Path": "apps/poe-fan/poe-fan-control.sh",
+                "Sha256": "48e8685ee3920dbbfd6b5f9007ddb01c2e53f5d26e005aa73a27d2b6a724875f",
+                "Mode": "0755"
+            }
+        ],
+        "ConfigSchema": {
+            "Sections": [
+                {
+                    "Title": "UniFi API",
+                    "Fields": [
+                        {
+                            "Key": "API_KEY",
+                            "Label": "API Key",
+                            "Type": "password",
+                            "Default": "",
+                            "Required": true,
+                            "Secret": true,
+                            "Help": "控制台生成：设置 → 控制平面 → 集成"
+                        },
+                        {
+                            "Key": "DEVICE_ID",
+                            "Label": "Device ID",
+                            "Type": "text",
+                            "Default": "",
+                            "Required": true,
+                            "Monospace": true,
+                            "Help": "UCG-Fiber 的 device_id（stat/device 里带公网 IP 的条目）"
+                        }
+                    ]
+                },
+                {
+                    "Title": "风扇控制",
+                    "Fields": [
+                        {
+                            "Key": "PORT_IDX",
+                            "Label": "PoE 端口",
+                            "Type": "number",
+                            "Default": "4",
+                            "Min": 1,
+                            "Max": 8,
+                            "Help": "接风扇的 PoE 端口号（从 1 开始）"
+                        },
+                        {
+                            "Key": "PON_IFACE",
+                            "Label": "PON 网口",
+                            "Type": "text",
+                            "Default": "eth6",
+                            "Help": "ethtool 读取模块温度的接口名"
+                        },
+                        {
+                            "Key": "HIGH_TEMP",
+                            "Label": "开启温度 (°C)",
+                            "Type": "number",
+                            "Default": "50",
+                            "Min": 20,
+                            "Max": 90,
+                            "Help": "高于此温度打开 PoE"
+                        },
+                        {
+                            "Key": "LOW_TEMP",
+                            "Label": "关闭温度 (°C)",
+                            "Type": "number",
+                            "Default": "43",
+                            "Min": 10,
+                            "Max": 80,
+                            "Help": "低于此温度关闭 PoE（滞回）"
+                        },
+                        {
+                            "Key": "CHECK_INTERVAL",
+                            "Label": "检测间隔 (分钟)",
+                            "Type": "number",
+                            "Default": "5",
+                            "Min": 1,
+                            "Max": 60,
+                            "Help": "crontab 执行周期"
                         }
                     ]
                 }
