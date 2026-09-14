@@ -536,6 +536,7 @@ app.MapPost("/api/apps/{id}/control", (string id, string action) => {
 });
 
 // 从云端下载插件运行文件并校验 SHA256，写入 /data/softcenter/bin
+// 全部下载并校验通过后才落盘，避免半更新
 app.MapPost("/api/apps/{id}/install", async (string id) => {
     using var conn = new SqliteConnection(DbPath); conn.Open();
     using var cmd = conn.CreateCommand();
@@ -556,15 +557,17 @@ app.MapPost("/api/apps/{id}/install", async (string id) => {
         handler.Proxy = new WebProxy(sysConfig.LocalProxy);
     using var http = new HttpClient(handler) { Timeout = TimeSpan.FromMinutes(5) };
 
+    // 阶段 1：全部下载 + SHA256 校验，任一失败则不写入任何文件
+    var pending = new List<(AppFileItem File, byte[] Bytes, string Hash)>();
     foreach (var f in files)
     {
         if (string.IsNullOrWhiteSpace(f.Name) || string.IsNullOrWhiteSpace(f.Path) || string.IsNullOrWhiteSpace(f.Sha256))
-            return Results.BadRequest(new InstallResult(false, logs, $"文件清单不完整: {f.Name}"));
+            return Results.BadRequest(new InstallResult(false, logs, $"文件清单不完整: {f.Name}，已中止，未替换任何文件"));
 
         var url = RepoRawBase + f.Path.TrimStart('/');
         byte[] bytes;
         try { bytes = await http.GetByteArrayAsync(url); }
-        catch (Exception ex) { return Results.BadRequest(new InstallResult(false, logs, $"下载失败 {f.Name}: {ex.Message}")); }
+        catch (Exception ex) { return Results.BadRequest(new InstallResult(false, logs, $"下载失败 {f.Name}: {ex.Message}，已中止，未替换任何文件")); }
 
         string hash;
         using (var sha = SHA256.Create())
@@ -572,17 +575,30 @@ app.MapPost("/api/apps/{id}/install", async (string id) => {
         if (!string.Equals(hash, f.Sha256.Trim().ToLowerInvariant(), StringComparison.Ordinal))
         {
             logs.Add($"校验失败 {f.Name}: 期望 {f.Sha256} 实际 {hash}");
-            return Results.BadRequest(new InstallResult(false, logs, $"SHA256 校验失败: {f.Name}"));
+            return Results.BadRequest(new InstallResult(false, logs, $"SHA256 校验失败: {f.Name}，已中止，未替换任何文件"));
         }
 
+        pending.Add((f, bytes, hash));
+        logs.Add($"已下载并校验 {f.Name} ({hash[..12]}…)");
+    }
+
+    // 阶段 2：全部就绪后再统一写入
+    foreach (var (f, bytes, hash) in pending)
+    {
         var dest = Path.Combine(BinDir, f.Name.Replace('\\', '/'));
         var destDir = Path.GetDirectoryName(dest);
         if (!string.IsNullOrEmpty(destDir)) Directory.CreateDirectory(destDir);
-        await File.WriteAllBytesAsync(dest, bytes);
+        try { await File.WriteAllBytesAsync(dest, bytes); }
+        catch (Exception ex) { return Results.BadRequest(new InstallResult(false, logs, $"写入失败 {f.Name}: {ex.Message}")); }
         var mode = string.IsNullOrWhiteSpace(f.Mode) ? "0755" : f.Mode;
         Process.Start("/bin/bash", $"-c \"chmod {mode} {dest}\"")?.WaitForExit();
-        logs.Add($"已安装 {f.Name} → {dest} ({hash[..12]}…)");
+        logs.Add($"已安装 {f.Name} → {dest}");
     }
+
+    if (pending.Count != files.Count)
+        return Results.BadRequest(new InstallResult(false, logs, $"文件数量不完整（{pending.Count}/{files.Count}）"));
+
+    logs.Add($"全部 {pending.Count} 个文件下载、校验并替换成功");
     return Results.Ok(new InstallResult(true, logs, null));
 });
 
