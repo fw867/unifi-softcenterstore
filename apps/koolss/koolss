@@ -5,7 +5,7 @@
 
 # 状态探针：SoftCenter 每 3 秒轮询，必须轻量，不写配置、不写日志
 if [ "$1" = "status" ]; then
-    if pgrep -x xray > /dev/null; then
+    if pgrep -x koolss-xray > /dev/null; then
         echo "running"
         exit 0
     fi
@@ -545,7 +545,7 @@ start_v2ray(){
     
     local i=10
     while [ $i -gt 0 ]; do
-        V2PID=$(pidof xray)
+        V2PID=$(pidof koolss-xray)
         if [ -n "$V2PID" ]; then
             log_date "v2ray 启动成功，PID：$V2PID"
             return
@@ -554,13 +554,14 @@ start_v2ray(){
         i=$((i - 1))
     done
     log_date "Xray 进程启动失败！"
+    return 1
 }
 
 kill_process() {
     log_date "正在关闭进程..."
-    killall xray 2>/dev/null
+    killall koolss-xray 2>/dev/null
     sleep 1
-    killall -9 xray 2>/dev/null
+    killall -9 koolss-xray 2>/dev/null
 }
 
 clean_log() {
@@ -572,7 +573,7 @@ restart_process() {
     sleep 1
     prepare_config
     start_v2ray
-    if pgrep -x xray > /dev/null; then echo "running"; else echo "stopped"; fi
+    if pgrep -x koolss-xray > /dev/null; then echo "running"; else echo "stopped"; fi
 }
 
 start() {
@@ -582,12 +583,22 @@ start() {
     check_dns
     dns_origin
     ipfwd_on
-    start_v2ray
+    if ! start_v2ray; then
+        unset_lock
+        exit 1
+    fi
     create_ipsetlist
     add_white_black_ip
     ipts_update
     dns_update
     chromecast
+    if pgrep -x koolss-xray > /dev/null; then
+        log_date "koolss已成功运行"
+    else
+        log_date "koolss 启动异常：模块已执行但进程未在运行"
+        unset_lock
+        exit 1
+    fi
     unset_lock
 }
 
@@ -611,12 +622,22 @@ restart() {
     dns_origin
     prepare_config
     ipfwd_on
-    start_v2ray
+    if ! start_v2ray; then
+        unset_lock
+        exit 1
+    fi
     create_ipsetlist
     add_white_black_ip
     ipts_update
     dns_update
     chromecast
+    if pgrep -x koolss-xray > /dev/null; then
+        log_date "koolss已成功运行"
+    else
+        log_date "koolss 重启异常：模块已执行但进程未在运行"
+        unset_lock
+        exit 1
+    fi
     unset_lock
 }
 

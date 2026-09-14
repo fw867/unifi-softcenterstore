@@ -14,11 +14,14 @@ API_LATEST="https://api.github.com/repos/o8oo8o/WebSSH/releases/latest"
 FORCE_DOWNLOAD="${FORCE_DOWNLOAD:-0}"
 SSUP_NO_START="${SSUP_NO_START:-0}"
 
-USE_PROXY="${USE_PROXY:-1}"
-PROXY_SERVER="${PROXY_SERVER:-socks5://127.0.0.1:1283}"
+# 代理：读软件中心「系统设置 → 全局更新代理」(/data/softcenter/config.json 的 LocalProxy)
+SC_PROXY=$(sed -n 's/.*"LocalProxy"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' /data/softcenter/config.json 2>/dev/null | head -n1)
 CURL_OPT=""
-if [ "$USE_PROXY" = "1" ]; then
-    CURL_OPT="-x $PROXY_SERVER"
+if [ -n "$SC_PROXY" ]; then
+    CURL_OPT="-x $SC_PROXY"
+    echo_date "升级代理（全局更新代理）: $SC_PROXY"
+else
+    echo_date "未配置全局更新代理，直连 GitHub"
 fi
 
 if [ -x "$BIN" ] && [ "$FORCE_DOWNLOAD" != "1" ]; then
@@ -41,7 +44,7 @@ esac
 echo_date "查询 GitHub latest release..."
 LATEST_JSON=$(curl $CURL_OPT --connect-timeout 10 -sL "$API_LATEST")
 if [ -z "$LATEST_JSON" ]; then
-    echo_date "获取 latest 失败，可设 USE_PROXY=0 后重试"
+    echo_date "获取 latest 失败，请检查网络或全局更新代理后重试"
     exit 1
 fi
 

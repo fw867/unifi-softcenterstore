@@ -3,6 +3,24 @@
 ###############################################################################
 * text=auto
 
+# SoftCenter 插件脚本必须以 LF 入库（路由器上 bash 才能执行）
+apps/**/koolss text eol=lf
+apps/**/koolss-ssup text eol=lf
+apps/**/koolss-ssrule text eol=lf
+apps/**/webssh text eol=lf
+apps/**/webssh-dl text eol=lf
+apps/**/ddnsto text eol=lf
+apps/**/fan-control text eol=lf
+apps/**/fan-control.sh text eol=lf
+apps/**/poe-fan text eol=lf
+apps/**/poe-fan-control.sh text eol=lf
+apps/**/tomodem text eol=lf
+apps/**/udm-le text eol=lf
+apps/**/wechat text eol=lf
+
+# 二进制核心，禁止换行转换
+apps/ddnsto/ddnsto-core binary
+
 ###############################################################################
 # Set default behavior for command prompt diff.
 #

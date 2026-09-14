@@ -10,6 +10,17 @@ RULE_FILE="/data/softcenter/bin/koolssrule/rules.json.js"
 rule_save_dir="/data/softcenter/bin/koolssrule"
 rule_down_dir="/tmp/fancyss_rule_download"
 
+# 代理：读软件中心「系统设置 → 全局更新代理」(/data/softcenter/config.json 的 LocalProxy)
+SC_PROXY=$(sed -n 's/.*"LocalProxy"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' /data/softcenter/config.json 2>/dev/null | head -n1)
+if [ -n "$SC_PROXY" ]; then
+    export http_proxy="$SC_PROXY"
+    export https_proxy="$SC_PROXY"
+    export all_proxy="$SC_PROXY"
+    echo_date "更新代理（全局更新代理）: $SC_PROXY"
+else
+    echo_date "未配置全局更新代理，直连 GitHub"
+fi
+
 # ================= 外部参数接收 =================
 # $1: 要更新的规则名称 (默认 gfwlist)
 # $2: 处理模式 (1=生成conf, 2=直接复制到 rule_save_dir)

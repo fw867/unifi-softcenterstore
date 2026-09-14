@@ -13,17 +13,14 @@ GITHUB_API="https://api.github.com/repos/XTLS/Xray-core/releases/latest"
 FORCE_DOWNLOAD="${FORCE_DOWNLOAD:-0}"
 SSUP_NO_START="${SSUP_NO_START:-0}"
 
-# ================= 代理配置区 =================
-# 是否使用代理进行检测和下载：0为关闭，1为开启
-USE_PROXY=1
-# 代理地址 (注意：使用 socks5h:// 可以让域名解析也走代理，防止 DNS 污染)
-PROXY_SERVER="socks5://127.0.0.1:1283"
-# ==============================================
-
-# 构建 curl 代理参数
+# 代理：读软件中心「系统设置 → 全局更新代理」(/data/softcenter/config.json 的 LocalProxy)
+SC_PROXY=$(sed -n 's/.*"LocalProxy"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' /data/softcenter/config.json 2>/dev/null | head -n1)
 CURL_OPT=""
-if [ "$USE_PROXY" = "1" ]; then
-    CURL_OPT="-x $PROXY_SERVER"
+if [ -n "$SC_PROXY" ]; then
+    CURL_OPT="-x $SC_PROXY"
+    echo_date "升级代理（全局更新代理）: $SC_PROXY"
+else
+    echo_date "未配置全局更新代理，直连 GitHub"
 fi
 
 # 1. 自动获取 UDM 架构
@@ -41,6 +38,11 @@ case $arch in
         ;;
 esac
 
+# 版本号必须是 数字.数字(.数字...) ，否则视为检测失败
+is_valid_version() {
+    echo "$1" | grep -Eq '^[0-9]+(\.[0-9]+)+$'
+}
+
 get_latest_version(){
     if [ ! -x "${XRAY_BIN}" ]; then
         echo_date "本地未找到 ${XRAY_BIN}，直接下载最新版..."
@@ -48,18 +50,23 @@ get_latest_version(){
     fi
 
     echo_date "检测线上 XTLS/Xray-core 最新版本..."
-    [ "$USE_PROXY" = "1" ] && echo_date "已启用代理模式: $PROXY_SERVER"
 
-    LATEST_INFO=$(curl $CURL_OPT --connect-timeout 10 -sL "$GITHUB_API")
-    if [ $? != 0 ] || [ -z "$LATEST_INFO" ]; then
-        echo_date "获取 Xray 最新版本信息失败！请检查网络或代理连通性！"
+    # -f：HTTP 4xx/5xx 视为失败，避免错误页被当成版本信息继续下载
+    LATEST_INFO=$(curl $CURL_OPT --connect-timeout 10 --max-time 30 -fsSL "$GITHUB_API")
+    CURL_RC=$?
+    if [ "$CURL_RC" != "0" ] || [ -z "$LATEST_INFO" ]; then
+        echo_date "获取 Xray 最新版本信息失败 (curl exit=${CURL_RC})！请检查网络或代理连通性，已中止，不会继续下载。"
         exit 1
     fi
 
-    XVERSION=$(echo "$LATEST_INFO" | grep -m 1 '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/' | sed 's/v//g; s/\r//g; s/ //g')
+    # GitHub API 为单行 JSON，须精确匹配 tag_name，不能用贪婪的 .*"([^"]+)".*
+    # 兼容 "tag_name":"v26.3.27" 与 "tag_name": "v26.3.27"
+    XVERSION=$(printf '%s\n' "$LATEST_INFO" | sed -nE 's/.*"tag_name"[[:space:]]*:[[:space:]]*"v?([^"]+)".*/\1/p' | head -n1)
+    XVERSION=$(printf '%s' "$XVERSION" | tr -d '\r\n ')
 
-    if [ -z "$XVERSION" ]; then
-        echo_date "解析版本号失败！可能触发了 GitHub API 频率限制，API 返回如下内容："
+    if ! is_valid_version "$XVERSION"; then
+        echo_date "解析版本号失败（得到：${XVERSION:-空}）！可能触发了 GitHub API 频率限制，已中止，不会继续下载。"
+        echo "API 返回如下内容："
         echo "$LATEST_INFO" | head -n 5
         exit 1
     fi
@@ -84,6 +91,13 @@ get_latest_version(){
 
 update_now(){
     local ver=$1
+    # 门禁：版本号非法时绝不进入下载
+    local ver_num="${ver#v}"
+    if [ -z "$ver" ] || ! is_valid_version "$ver_num"; then
+        echo_date "版本号无效（${ver:-空}），中止下载。"
+        exit 1
+    fi
+
     rm -rf /tmp/xray
     mkdir -p /tmp/xray && cd /tmp/xray
 
@@ -145,7 +159,7 @@ check_hash(){
 
 install_binary(){
     echo_date "开始覆盖最新二进制文件..."
-    if pidof xray >/dev/null 2>&1; then
+    if pidof koolss-xray >/dev/null 2>&1; then
         echo_date "正在关闭运行中的 Xray 主进程... "
         /data/softcenter/bin/koolss stop
         sleep 1
@@ -162,8 +176,8 @@ install_binary(){
         echo_date "尝试启动代理服务..."
         /data/softcenter/bin/koolss start
         sleep 2
-        if pidof xray >/dev/null 2>&1; then
-            echo_date "Xray 启动成功！目前运行 PID：$(pidof xray)"
+        if pidof koolss-xray >/dev/null 2>&1; then
+            echo_date "Xray 启动成功！目前运行 PID：$(pidof koolss-xray)"
         else
             echo_date "致命错误：Xray 进程启动失败，请检查配置文件格式！"
         fi

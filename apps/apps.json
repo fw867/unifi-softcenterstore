@@ -3,7 +3,7 @@
         "Id": "tomodem",
         "Name": "光猫助手",
         "Type": "Shell Script",
-        "Version": "1.2.0",
+        "Version": "1.2.1",
         "Description": "配置路由和光猫IP，完美解决内网和光猫互通问题。",
         "Icon": "router",
         "StartCommand": "/data/softcenter/bin/tomodem start",
@@ -81,7 +81,7 @@
         "Id": "koolss",
         "Name": "XRay",
         "Type": "Shell Script",
-        "Version": "1.2.0",
+        "Version": "1.2.2",
         "Description": "Xray代理，支持GFWList、大陆白名单，游戏、全局模式。",
         "Icon": "shield-check",
         "StartCommand": "/data/softcenter/bin/koolss start",
@@ -96,19 +96,19 @@
             {
                 "Name": "koolss",
                 "Path": "apps/koolss/koolss",
-                "Sha256": "0f452e652c469f3947dd3418c77001da46b1fd194e0a3242ebe7018a3d8632d5",
+                "Sha256": "dfa6b3671213c5f53543e82633a746b087d2e465adb78903b2ac021a546c23bd",
                 "Mode": "0755"
             },
             {
                 "Name": "koolss-ssup",
                 "Path": "apps/koolss/koolss-ssup",
-                "Sha256": "6e8f56cb1aac15fa7b7f2bdb29a0d2eb12d9ee7f35b1a00ec84db98d18a6f25d",
+                "Sha256": "bdc33eedcaaa5bf2e3b73948b49a326533b53e9cd0d4ea659d747167dfd7a75d",
                 "Mode": "0755"
             },
             {
                 "Name": "koolss-ssrule",
                 "Path": "apps/koolss/koolss-ssrule",
-                "Sha256": "2c95320f2c832ae3c2bc8cc95c4ba73620dc2f7cc924a9a7425ccaced69f0569",
+                "Sha256": "3572da0fc7d4fef85f772bf827b056e24e4f32ac28e8b41e4e2c11291dc529b0",
                 "Mode": "0755"
             },
             {
@@ -339,7 +339,7 @@
         "Id": "wechat",
         "Name": "微信通知",
         "Type": "Shell Script",
-        "Version": "1.2.0",
+        "Version": "1.2.1",
         "Description": "路由重新拨号后通过企业微信机器人通知新IP。",
         "Icon": "message-circle",
         "StartCommand": "/data/softcenter/bin/wechat start",
@@ -388,7 +388,7 @@
         "Id": "ddnsto",
         "Name": "DDNSTO",
         "Type": "Shell Script",
-        "Version": "1.1.0",
+        "Version": "1.1.1",
         "Description": "Koolshare小宝大神的内网穿透神器。",
         "Icon": "globe",
         "StartCommand": "/data/softcenter/bin/ddnsto start",
@@ -402,7 +402,7 @@
             {
                 "Name": "ddnsto-core",
                 "Path": "apps/ddnsto/ddnsto-core",
-                "Sha256": "ff0ba3b5f911b9d38751fc6556789122338f24419637e946af506b175650a5a6",
+                "Sha256": "2d7210662b5a578454aaa2c0ce7d049f358ffa8f3ea2982171a66ead72e0eefb",
                 "Mode": "0755"
             },
             {
@@ -435,7 +435,7 @@
         "Id": "webssh",
         "Name": "WebSSH",
         "Type": "Shell Script",
-        "Version": "2.5.0",
+        "Version": "2.5.1",
         "Description": "浏览器版 SSH 客户端（GoWebSSH），支持多会话、SFTP 与文件管理。",
         "Icon": "terminal-square",
         "StartCommand": "/data/softcenter/bin/webssh start",
@@ -456,7 +456,7 @@
             {
                 "Name": "webssh-dl",
                 "Path": "apps/webssh/webssh-dl",
-                "Sha256": "e7a0613d80afe64975c866419593a29d756d5b07a5ca43cd172a51efaf2bc78a",
+                "Sha256": "2f2ecd3e58f2ad2257183eff07fedd6e2a001e3b4a1bf66bda56b2b760122c28",
                 "Mode": "0755"
             }
         ],
@@ -482,7 +482,7 @@
         "Id": "fan-control",
         "Name": "风扇调速",
         "Type": "Shell Script",
-        "Version": "1.0.1",
+        "Version": "1.0.2",
         "Description": "UCG-Max/Fibre 智能风扇调速（iceteaSA/unifi-fan-control），按 CPU 温度自适应调速。",
         "Icon": "fan",
         "StartCommand": "/data/softcenter/bin/fan-control start",
@@ -651,7 +651,7 @@
         "Id": "poe-fan",
         "Name": "PoE 风扇",
         "Type": "Shell Script",
-        "Version": "1.0.0",
+        "Version": "1.0.1",
         "Description": "按 PON 模块温度开关指定端口 PoE 风扇（UCG-Fiber）。",
         "Icon": "wind",
         "StartCommand": "/data/softcenter/bin/poe-fan start",
@@ -756,7 +756,7 @@
         "Id": "udm-le",
         "Name": "Let's Encrypt",
         "Type": "Shell Script",
-        "Version": "1.0.0",
+        "Version": "1.0.1",
         "Description": "UniFi OS DNS-01 签发/续期 Let's Encrypt 证书（udm-le）。",
         "Icon": "shield-check",
         "StartCommand": "/data/softcenter/bin/udm-le start",
