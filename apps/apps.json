@@ -102,7 +102,7 @@
             {
                 "Name": "koolss-ssup",
                 "Path": "apps/koolss/koolss-ssup",
-                "Sha256": "bdc33eedcaaa5bf2e3b73948b49a326533b53e9cd0d4ea659d747167dfd7a75d",
+                "Sha256": "688372adb3784b00fea42671df1774601236724a1745f9abf2fcfc96158f7096",
                 "Mode": "0755"
             },
             {
@@ -450,13 +450,13 @@
             {
                 "Name": "webssh",
                 "Path": "apps/webssh/webssh",
-                "Sha256": "6024bb5f29db92b85c5a8e3b3484da46f2cafb9c23d7c23e2820c604349c841c",
+                "Sha256": "f9de6b42b3c334e587dc6f3154007ae5fc464f145a7ba01dfcdf4a5fffb271ed",
                 "Mode": "0755"
             },
             {
                 "Name": "webssh-dl",
                 "Path": "apps/webssh/webssh-dl",
-                "Sha256": "2f2ecd3e58f2ad2257183eff07fedd6e2a001e3b4a1bf66bda56b2b760122c28",
+                "Sha256": "7aae19ab9733daf031fbc7b8d1a40fa00b895f4669f84129e760821c94766aec",
                 "Mode": "0755"
             }
         ],
