@@ -79,10 +79,10 @@
     },
     {
         "Id": "koolss",
-        "Name": "V2Ray",
+        "Name": "XRay",
         "Type": "Shell Script",
         "Version": "1.1.0",
-        "Description": "V2ray代理，支持GFWList、大陆白名单，游戏、全局模式。",
+        "Description": "Xray代理，支持GFWList、大陆白名单，游戏、全局模式。",
         "Icon": "shield-check",
         "StartCommand": "/data/softcenter/bin/koolss start",
         "StopCommand": "/data/softcenter/bin/koolss stop",
@@ -96,19 +96,19 @@
             {
                 "Name": "koolss",
                 "Path": "apps/koolss/koolss",
-                "Sha256": "a8bcb259d32ace667e50f324d8d24c51b93a35930a15b5aebf10153f78bcceb0",
+                "Sha256": "2fc2b76bb127eb7bb07ae76fd269315c4d38b76bbf455aef0f89446bc68b73e8",
                 "Mode": "0755"
             },
             {
                 "Name": "ssup",
                 "Path": "apps/koolss/ssup",
-                "Sha256": "6529fdb64cb0beca391a71b44a99b4268ea5dcc9adf4787b3d29e056488b2137",
+                "Sha256": "cb72313512292bd737cd3f7e40caa296806fc0206d434a5f416f4a4b224f1188",
                 "Mode": "0755"
             },
             {
                 "Name": "ssrule",
                 "Path": "apps/koolss/ssrule",
-                "Sha256": "de221ee801c2ec0202b10aa640d36555e41534c89acf330ab3fe14056ba94841",
+                "Sha256": "2c95320f2c832ae3c2bc8cc95c4ba73620dc2f7cc924a9a7425ccaced69f0569",
                 "Mode": "0755"
             }
         ],
@@ -220,6 +220,46 @@
                             "Monospace": true,
                             "Placeholder": "每行一个域名，# 开头为注释",
                             "Help": "走本地防污染 DNS，写入 black_list ipset"
+                        }
+                    ]
+                },
+                {
+                    "Title": "IP 名单",
+                    "Fields": [
+                        {
+                            "Key": "white_ip_list",
+                            "Label": "IP 白名单",
+                            "Type": "textarea",
+                            "Default": "",
+                            "Rows": 6,
+                            "Monospace": true,
+                            "Placeholder": "每行一个 IP 或 CIDR，# 为注释",
+                            "Help": "直连，写入 white_list ipset"
+                        },
+                        {
+                            "Key": "black_ip_list",
+                            "Label": "IP 黑名单",
+                            "Type": "textarea",
+                            "Default": "",
+                            "Rows": 6,
+                            "Monospace": true,
+                            "Placeholder": "每行一个 IP 或 CIDR，# 为注释",
+                            "Help": "强制走代理，写入 black_list ipset"
+                        }
+                    ]
+                },
+                {
+                    "Title": "局域网 ACL",
+                    "Fields": [
+                        {
+                            "Key": "lan_acl_control",
+                            "Label": "设备访问控制",
+                            "Type": "textarea",
+                            "Default": "",
+                            "Rows": 8,
+                            "Monospace": true,
+                            "Placeholder": "每行一条，如：\nip=192.168.1.10 mode=1\nmac=AA:BB:CC:DD:EE:FF mode=0\nip=192.168.1.20 mac=AA:BB:CC:DD:EE:FF mode=2",
+                            "Help": "mode：0不代理 / 1 GFW / 2国内 / 3游戏 / 4全局；ip、mac 可只填其一；省略 mode 则用默认代理模式"
                         }
                     ]
                 },

@@ -25,8 +25,6 @@ decode_config() {
 }
 # 进程锁定文件路径
 LOCK_FILE='/var/lock/xray.lock'
-# 日志文件路径
-LOG_FILE='/tmp/xray_log.txt'
 # 运营商DNS 1
 ISP_DNS1="${ISP_DNS1:-223.5.5.5}"
 # 运营商DNS 2
@@ -48,6 +46,11 @@ v2ray_udp="${v2ray_udp:-0}"
 # 域名白名单 / 黑名单（多行，env 中可能为 b64:）
 white_domain_list="${white_domain_list:-}"
 black_domain_list="${black_domain_list:-}"
+# IP 白名单 / 黑名单（每行一个 IP 或 CIDR）
+white_ip_list="${white_ip_list:-}"
+black_ip_list="${black_ip_list:-}"
+# 局域网 ACL：每行 ip=x.x.x.x mac=xx:xx mode=0..4（字段可省略）
+lan_acl_control="${lan_acl_control:-}"
 
 decode_b64() {
     case "$1" in
@@ -58,6 +61,9 @@ decode_b64() {
 
 WHITE_DOMAIN_LIST=$(decode_b64 "$white_domain_list")
 BLACK_DOMAIN_LIST=$(decode_b64 "$black_domain_list")
+WHITE_IP_LIST=$(decode_b64 "$white_ip_list")
+BLACK_IP_LIST=$(decode_b64 "$black_ip_list")
+LAN_ACL_LIST=$(decode_b64 "$lan_acl_control")
 
 # 将域名列表写成临时文件（每行一个，忽略空行与 # 注释）
 write_domain_file() {
@@ -73,9 +79,15 @@ XRAY_BIN="/data/softcenter/bin/xray"
 # 获取局域网 IP 地址
 lan_ipaddr=$(ifconfig $LAN_IF | grep 'inet ' | awk '{print $2}' | cut -d: -f2)
 
+# 与 apps.json 的 LogPath 一致
+LOG_FILE="/var/log/koolss.log"
+
 log_date() {
     local msg="$1"
-    echo "【$(date '+%Y年%m月%d日 %X')】: $msg"
+    local line
+    line="【$(date '+%Y年%m月%d日 %X')】: $msg"
+    echo "$line"
+    echo "$line" >> "$LOG_FILE"
 }
 
 if [ -z "${V2RAY_CONFIG_FILE}" ]; then
@@ -133,8 +145,8 @@ create_ipsetlist() {
         ipset flush $setname
     done
     # 载入 chnroute 列表
-    if [ "$v2ray_bypass" != "2" ] && [ -s "/data/koolss/chnroute.txt" ]; then
-        awk '{ sub(/\r$/, ""); if ($0 != "" && $0 !~ /^#/) print "add chnroute " $0 }' /data/koolss/chnroute.txt | ipset -! restore
+    if [ "$v2ray_bypass" != "2" ] && [ -s "/data/softcenter/bin/koolssrule/chnroute.txt" ]; then
+        awk '{ sub(/\r$/, ""); if ($0 != "" && $0 !~ /^#/) print "add chnroute " $0 }' /data/softcenter/bin/koolssrule/chnroute.txt | ipset -! restore
         log_date "已载入 chnroute 列表" 
     fi
 }
@@ -171,10 +183,20 @@ add_white_black_ip(){
         local SERVER_IP="${v2ray_basic_server_ip:-}"
         local ip_lan="0.0.0.0/8 10.0.0.0/8 100.64.0.0/10 127.0.0.0/8 169.254.0.0/16 172.16.0.0/12 192.168.0.0/16 224.0.0.0/4 240.0.0.0/4 223.5.5.5 223.6.6.6 114.114.114.114 114.114.115.115 1.2.4.8 210.2.4.8 112.124.47.27 114.215.126.16 180.76.76.76 119.29.29.29 $ISP_DNS1 $ISP_DNS2 $SERVER_IP"       
         for ip in $ip_lan; do [ -n "$ip" ] && echo "add white_list $ip"; done
-        
-        # 从文件加载自定义黑白名单
-        [ -s "/data/koolss/blackip.txt" ] && awk '{sub(/\r$/,""); if($0!="" && $0!~/^#/) print "add black_list "$0}' /data/koolss/blackip.txt
-        [ -s "/data/koolss/whiteip.txt" ] && awk '{sub(/\r$/,""); if($0!="" && $0!~/^#/) print "add white_list "$0}' /data/koolss/whiteip.txt
+
+        # 面板配置的 IP 黑白名单（纯内存处理）
+        if [ -n "$BLACK_IP_LIST" ]; then
+            printf '%s\n' "$BLACK_IP_LIST" | awk '{
+                gsub(/\r/, "")
+                if ($0 != "" && $0 !~ /^#/) print "add black_list " $0
+            }'
+        fi
+        if [ -n "$WHITE_IP_LIST" ]; then
+            printf '%s\n' "$WHITE_IP_LIST" | awk '{
+                gsub(/\r/, "")
+                if ($0 != "" && $0 !~ /^#/) print "add white_list " $0
+            }'
+        fi
     } | ipset -! restore
 }
 
@@ -213,18 +235,18 @@ trim() {
     echo "$*" | awk '{$1=$1;print}'
 }
 
-# --- 访问控制解析器 ---
+# --- 访问控制解析器（来自插件配置 lan_acl_control，纯内存处理） ---
 lan_acess_control(){
-    local target_table="$1" 
-    local acl_file="/data/koolss/lancontrol.txt"
+    local target_table="$1"
     local rule_count=0
-    
-    [ ! -f "$acl_file" ] && return 0
-    
-    while IFS= read -r line || [ -n "$line" ]; do
+
+    [ -z "$LAN_ACL_LIST" ] && return 0
+
+    echo "$LAN_ACL_LIST" | while IFS= read -r line || [ -n "$line" ]; do
         line=$(trim "$line")
-        [ -z "$line" ] || echo "$line" | grep -q "^#" && continue
-        
+        [ -z "$line" ] && continue
+        echo "$line" | grep -q "^#" && continue
+
         local ip="" mac="" mode=""
         for item in $line; do
             case "$item" in
@@ -233,19 +255,19 @@ lan_acess_control(){
                 mode=*) mode="${item#*=}" ;;
             esac
         done
-        
+
         [ -z "$mode" ] && mode=$v2ray_acl_default_mode
         [ -z "$ip" ] && [ -z "$mac" ] && continue
-        
+
         rule_count=$((rule_count + 1))
         local rule="iptables -t $target_table -A V2RAY"
-        [ -n "$ip" ] && rule="$rule $(factor "$ip" "-s")" 
+        [ -n "$ip" ] && rule="$rule $(factor "$ip" "-s")"
         [ -n "$mac" ] && rule="$rule $(factor "$mac" "-m mac --mac-source")"
-        rule="$rule -j $(get_action_chain "$mode")"     
+        rule="$rule -j $(get_action_chain "$mode")"
         $rule
-    done < "$acl_file"
-    
-    [ "$target_table" = "mangle" ] && log_date "加载ACL规则：已加载 $rule_count 条规则"
+    done
+
+    [ "$target_table" = "mangle" ] && log_date "已加载局域网 ACL 规则"
 }
 
 ipts_update() {
@@ -446,7 +468,7 @@ ipset=/.openwrt.org/router
 EOF
     fi
 
-    [ ! -f /run/dnsmasq.dhcp.conf.d/koolgfwlist.conf ] && ln -sf /data/koolss/gfwlist.conf /run/dnsmasq.dhcp.conf.d/koolgfwlist.conf
+    [ ! -f /run/dnsmasq.dhcp.conf.d/koolgfwlist.conf ] && ln -sf /data/softcenter/bin/koolssrule/gfwlist.conf /run/dnsmasq.dhcp.conf.d/koolgfwlist.conf
 
     rm -f /run/dnsmasq.dhcp.conf.d/koolwblist.conf
 
@@ -474,10 +496,10 @@ EOF
         rm -f /tmp/koolss_blackdomain.txt
     fi
 
-    if [ "$v2ray_udp_list" = "1" ] && [ -s "/data/koolss/udplist.txt" ]; then
+    if [ "$v2ray_udp_list" = "1" ] && [ -s "/data/softcenter/bin/koolssrule/udplist.txt" ]; then
         echo "#for udp_list" >> /run/dnsmasq.dhcp.conf.d/koolwblist.conf
-        awk '{ sub(/\r$/, ""); if ($0 != "" && $0 !~ /^#/) print "server=/." $0 "/127.0.0.1#7913" }' /data/koolss/udplist.txt >> /run/dnsmasq.dhcp.conf.d/koolwblist.conf
-        awk '{ sub(/\r$/, ""); if ($0 != "" && $0 !~ /^#/) print "ipset=/." $0 "/udp_list" }' /data/koolss/udplist.txt >> /run/dnsmasq.dhcp.conf.d/koolwblist.conf
+        awk '{ sub(/\r$/, ""); if ($0 != "" && $0 !~ /^#/) print "server=/." $0 "/127.0.0.1#7913" }' /data/softcenter/bin/koolssrule/udplist.txt >> /run/dnsmasq.dhcp.conf.d/koolwblist.conf
+        awk '{ sub(/\r$/, ""); if ($0 != "" && $0 !~ /^#/) print "ipset=/." $0 "/udp_list" }' /data/softcenter/bin/koolssrule/udplist.txt >> /run/dnsmasq.dhcp.conf.d/koolwblist.conf
     fi
 
     killall dnsmasq 2>/dev/null
