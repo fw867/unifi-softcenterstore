@@ -102,7 +102,7 @@
             {
                 "Name": "ssup",
                 "Path": "apps/koolss/ssup",
-                "Sha256": "cb72313512292bd737cd3f7e40caa296806fc0206d434a5f416f4a4b224f1188",
+                "Sha256": "6529fdb64cb0beca391a71b44a99b4268ea5dcc9adf4787b3d29e056488b2137",
                 "Mode": "0755"
             },
             {
