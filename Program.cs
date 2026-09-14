@@ -739,7 +739,7 @@ app.MapGet("/api/apps/{id}/install/progress", (string id) => {
     return Results.Ok(new InstallProgress(id, "idle", 0, 0, "", 0, null, null, false, false));
 });
 
-app.MapPost("/api/apps/{id}/custom_command", (string id, CustomCommandReq req) => {
+app.MapPost("/api/apps/{id}/custom_command", async (string id, CustomCommandReq req) => {
     using var p = Process.Start(new ProcessStartInfo {
         FileName = "/bin/bash",
         Arguments = $"-c \"export TERM=xterm; {req.Command}\"",
@@ -747,9 +747,13 @@ app.MapPost("/api/apps/{id}/custom_command", (string id, CustomCommandReq req) =
         RedirectStandardError = true,
         UseShellExecute = false
     });
-    p?.WaitForExit();
-    var output = p?.StandardOutput.ReadToEnd() + p?.StandardError.ReadToEnd();
-    return Results.Ok(new LogResponse(output ?? ""));
+    if (p is null) return Results.Ok(new LogResponse("命令启动失败"));
+    // 必须边等边读：先 WaitForExit 再 ReadToEnd 会在输出写满管道时死锁
+    var stdoutTask = p.StandardOutput.ReadToEndAsync();
+    var stderrTask = p.StandardError.ReadToEndAsync();
+    await p.WaitForExitAsync();
+    var output = (await stdoutTask) + (await stderrTask);
+    return Results.Ok(new LogResponse(output));
 });
 app.MapPut("/api/apps/{id}/autostart/{state:int}", (string id, int state) => {
     using var conn = new SqliteConnection(DbPath); conn.Open();

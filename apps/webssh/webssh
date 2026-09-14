@@ -42,10 +42,18 @@ log_date() {
 }
 
 ensure_bin() {
-    [ -x "$BIN" ] && return 0
-    log_date "未找到 $BIN，调用 webssh-dl 下载..."
+    # 损坏/非 ELF 时强制重下
+    if [ -f "$BIN" ] && [ -x "$BIN" ]; then
+        magic=$(dd if="$BIN" bs=1 count=4 2>/dev/null | od -An -tx1 | tr -d ' \n')
+        if [ "$magic" = "7f454c46" ]; then
+            return 0
+        fi
+        log_date "$BIN 不是有效 ELF，强制重新下载"
+        FORCE_DOWNLOAD=1
+    fi
+    log_date "调用 webssh-dl 下载核心..."
     if [ -x "$DL" ]; then
-        SSUP_NO_START=1 "$DL"
+        SSUP_NO_START=1 FORCE_DOWNLOAD="${FORCE_DOWNLOAD:-1}" "$DL"
     else
         log_date "未找到下载脚本 $DL"
         return 1

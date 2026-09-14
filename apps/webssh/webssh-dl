@@ -38,15 +38,11 @@ is_valid_version() {
     echo "$1" | grep -Eq '^[0-9]+(\.[0-9]+)+$'
 }
 
-# 本地版本：优先二进制 -v/--version，其次安装时写入的版本文件
+# 本地版本：只读安装时写入的版本文件
+# 禁止用 webssh-core version/-v 探测——无合法 flag 时 Go 程序会直接拉起服务并挂死
 get_local_version() {
     local v=""
-    if [ -x "$BIN" ]; then
-        v=$("$BIN" version 2>/dev/null | head -n1 | grep -oE '[0-9]+(\.[0-9]+)+' | head -n1)
-        [ -z "$v" ] && v=$("$BIN" -v 2>/dev/null | head -n1 | grep -oE '[0-9]+(\.[0-9]+)+' | head -n1)
-        [ -z "$v" ] && v=$("$BIN" --version 2>/dev/null | head -n1 | grep -oE '[0-9]+(\.[0-9]+)+' | head -n1)
-    fi
-    if [ -z "$v" ] && [ -f "$VER_FILE" ]; then
+    if [ -f "$VER_FILE" ]; then
         v=$(tr -d ' \r\n' < "$VER_FILE")
     fi
     printf '%s' "$v"
@@ -94,9 +90,15 @@ if [ -z "$LATEST_JSON" ]; then
 fi
 
 TAG=$(printf '%s' "$LATEST_JSON" | grep -m1 '"tag_name"' | sed -E 's/.*"tag_name"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/')
-# 与 SoftCenter install.sh 一致：直接从完整响应抠 zip URL 与 sha256
-DL_URL=$(printf '%s' "$LATEST_JSON" | grep -oE 'https://[^"]*GoWebSSH[^"]*\.zip' | head -n1)
+# 必须精确匹配架构包名；Release 里 amd64 排在 arm64 前面，head -n1 会下错架构
+DL_URL=$(printf '%s' "$LATEST_JSON" | grep -oE "https://[^\"]*${ZIP_NAME}" | head -n1)
 ZIP_SHA256=$(printf '%s' "$LATEST_JSON" | grep -oE 'sha256:[a-fA-F0-9]{64}' | head -n1 | sed 's/^sha256://')
+
+is_elf() {
+    [ -f "$1" ] && [ -s "$1" ] || return 1
+    # ELF magic 7f 45 4c 46
+    [ "$(dd if="$1" bs=1 count=4 2>/dev/null | od -An -tx1 | tr -d ' \n')" = "7f454c46" ]
+}
 
 if [ -z "$DL_URL" ]; then
     echo_date "未找到 ${ZIP_NAME} 的下载地址（tag=${TAG:-?}）"
@@ -168,27 +170,39 @@ unzip -o "${DL_DIR}/${ZIP_NAME}" -d "$DL_DIR" >/dev/null 2>&1 || {
 
 SRC=""
 for f in gossh GoWebSSH webssh GoWebSSH-linux-arm64; do
-    if [ -f "${DL_DIR}/${f}" ]; then
+    if is_elf "${DL_DIR}/${f}"; then
         SRC="${DL_DIR}/${f}"
         break
     fi
 done
 if [ -z "$SRC" ]; then
-    SRC=$(find "$DL_DIR" -type f ! -name '*.zip' 2>/dev/null | xargs ls -S 2>/dev/null | head -n 1)
+    # 在解压结果里找第一个 ELF 可执行文件
+    for f in $(find "$DL_DIR" -type f ! -name '*.zip' 2>/dev/null); do
+        if is_elf "$f"; then
+            SRC="$f"
+            break
+        fi
+    done
 fi
-if [ ! -f "$SRC" ]; then
-    echo_date "未在压缩包中找到可执行文件"
-    ls -la "$DL_DIR"
+if [ -z "$SRC" ] || ! is_elf "$SRC"; then
+    echo_date "未在压缩包中找到 ELF 可执行文件，已中止安装"
+    ls -la "$DL_DIR" 2>/dev/null
     rm -rf "$DL_DIR"
     exit 1
 fi
+echo_date "选用可执行文件: $SRC ($(wc -c < "$SRC" | tr -d ' ') bytes)"
 
 mkdir -p /data/softcenter/bin
 if pgrep -f webssh-core >/dev/null 2>&1; then
     [ -x "$WEBSSH_BIN" ] && "$WEBSSH_BIN" stop
 fi
-mv -f "$SRC" "$BIN"
+cp -f "$SRC" "$BIN"
 chmod +x "$BIN"
+if ! is_elf "$BIN"; then
+    echo_date "安装后校验失败：$BIN 不是有效 ELF，已删除"
+    rm -f "$BIN"
+    exit 1
+fi
 printf '%s\n' "$ONLINE_VER" > "$VER_FILE"
 echo_date "已安装 ${BIN} v${ONLINE_VER}"
 
