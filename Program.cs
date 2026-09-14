@@ -757,10 +757,22 @@ app.MapGet("/api/system/info", () => {
         var match = Regex.Match(uptimeRaw, @"up\s+(.*?),\s+\d+\s+user");
         if (match.Success)
         {
-            var u = match.Groups[1].Value;
-            u = u.Replace("days,", "天").Replace("days", "天").Replace("day,", "天").Replace("day", "天").Replace("min,", "分钟").Replace("min", "分钟");
-            u = Regex.Match(u, @"\d+:\d+").Success ? Regex.Replace(u, @"(\d+):(\d+)", "$1小时$2分钟") : u;
-            uptime = u;
+            var u = match.Groups[1].Value.Trim();
+            int days = 0, hours = 0, minutes = 0;
+            var mDays = Regex.Match(u, @"(\d+)\s*day");
+            if (mDays.Success) days = int.Parse(mDays.Groups[1].Value);
+            var mHm = Regex.Match(u, @"(\d+):(\d+)");
+            if (mHm.Success)
+            {
+                hours = int.Parse(mHm.Groups[1].Value);
+                minutes = int.Parse(mHm.Groups[2].Value);
+            }
+            else
+            {
+                var mMin = Regex.Match(u, @"(\d+)\s*min");
+                if (mMin.Success) minutes = int.Parse(mMin.Groups[1].Value);
+            }
+            uptime = days > 0 ? $"{days}d{hours}h" : (hours > 0 ? $"{hours}h{minutes}m" : $"{minutes}m");
         }
         else { uptime = uptimeRaw; }
     }

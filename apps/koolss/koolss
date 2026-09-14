@@ -608,12 +608,14 @@ restart() {
     unset_lock
 }
 
+# 仅用于 SoftCenter 状态探针：不写日志，只返回退出码
 status() {
     if pgrep -x xray > /dev/null; then
-        log_date "XRAY 进程运行中..."
-    else
-        log_date "XRAY 进程未运行"
-    fi  
+        echo "running"
+        exit 0
+    fi
+    echo "stopped"
+    exit 1
 }
 
 usage() {
@@ -630,10 +632,10 @@ usage() {
 }
 
 case ${1} in
-    start) start; status ;;
+    start) start ;;
     status) status ;;
-    stop) stop; status ;;
-    restart) restart; status ;;
+    stop) stop ;;
+    restart) restart ;;
     ip) current_ip ;;
     update) create_ipsetlist ;;
     process) restart_process ;;

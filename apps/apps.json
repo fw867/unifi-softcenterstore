@@ -81,7 +81,7 @@
         "Id": "koolss",
         "Name": "XRay",
         "Type": "Shell Script",
-        "Version": "1.1.0",
+        "Version": "1.2.0",
         "Description": "Xray代理，支持GFWList、大陆白名单，游戏、全局模式。",
         "Icon": "shield-check",
         "StartCommand": "/data/softcenter/bin/koolss start",
@@ -96,13 +96,13 @@
             {
                 "Name": "koolss",
                 "Path": "apps/koolss/koolss",
-                "Sha256": "2fc2b76bb127eb7bb07ae76fd269315c4d38b76bbf455aef0f89446bc68b73e8",
+                "Sha256": "c73f5565ef98499dbd8f553a5a637e9d078200eb03a7d1bb849819f58fdb4dee",
                 "Mode": "0755"
             },
             {
                 "Name": "ssup",
                 "Path": "apps/koolss/ssup",
-                "Sha256": "6529fdb64cb0beca391a71b44a99b4268ea5dcc9adf4787b3d29e056488b2137",
+                "Sha256": "cb72313512292bd737cd3f7e40caa296806fc0206d434a5f416f4a4b224f1188",
                 "Mode": "0755"
             },
             {
@@ -147,7 +147,7 @@
                             "Label": "V2Ray 配置",
                             "Type": "textarea",
                             "Default": "",
-                            "Rows": 14,
+                            "Rows": 25,
                             "Monospace": true,
                             "Required": true,
                             "Placeholder": "粘贴完整的 Xray / V2Ray JSON 配置",
@@ -159,11 +159,26 @@
                             "Type": "select",
                             "Default": "1",
                             "Options": [
-                                { "Label": "不代理", "Value": "0" },
-                                { "Label": "GFWList", "Value": "1" },
-                                { "Label": "国内白名单", "Value": "2" },
-                                { "Label": "游戏模式", "Value": "3" },
-                                { "Label": "全局代理", "Value": "4" }
+                                {
+                                    "Label": "不代理",
+                                    "Value": "0"
+                                },
+                                {
+                                    "Label": "GFWList",
+                                    "Value": "1"
+                                },
+                                {
+                                    "Label": "国内白名单",
+                                    "Value": "2"
+                                },
+                                {
+                                    "Label": "游戏模式",
+                                    "Value": "3"
+                                },
+                                {
+                                    "Label": "全局代理",
+                                    "Value": "4"
+                                }
                             ]
                         },
                         {
@@ -172,8 +187,14 @@
                             "Type": "select",
                             "Default": "2",
                             "Options": [
-                                { "Label": "chnroute 列表", "Value": "1" },
-                                { "Label": "GeoIP", "Value": "2" }
+                                {
+                                    "Label": "chnroute 列表",
+                                    "Value": "1"
+                                },
+                                {
+                                    "Label": "GeoIP",
+                                    "Value": "2"
+                                }
                             ]
                         }
                     ]
@@ -295,9 +316,18 @@
                             "Type": "select",
                             "Default": "0",
                             "Options": [
-                                { "Label": "关闭", "Value": "0" },
-                                { "Label": "全局阻断", "Value": "1" },
-                                { "Label": "仅黑名单", "Value": "2" }
+                                {
+                                    "Label": "关闭",
+                                    "Value": "0"
+                                },
+                                {
+                                    "Label": "全局阻断",
+                                    "Value": "1"
+                                },
+                                {
+                                    "Label": "仅黑名单",
+                                    "Value": "2"
+                                }
                             ]
                         }
                     ]
