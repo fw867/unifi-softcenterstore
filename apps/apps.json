@@ -96,7 +96,7 @@
             {
                 "Name": "koolss",
                 "Path": "apps/koolss/koolss",
-                "Sha256": "0f452e652c469f3947dd3418c77001da46b1fd194e0a3242ebe7018a3d8632d5",
+                "Sha256": "c6d3ca66ead0dc9a40c11ad2f22de9e726c606d52de4284065bf53de52253458",
                 "Mode": "0755"
             },
             {
@@ -108,7 +108,7 @@
             {
                 "Name": "koolss-ssrule",
                 "Path": "apps/koolss/koolss-ssrule",
-                "Sha256": "2c95320f2c832ae3c2bc8cc95c4ba73620dc2f7cc924a9a7425ccaced69f0569",
+                "Sha256": "87338b67a1cd1c8c338ae9aabdea001fcdd3a7683f8c1d4068607b64fe834652",
                 "Mode": "0755"
             },
             {
@@ -450,13 +450,13 @@
             {
                 "Name": "webssh",
                 "Path": "apps/webssh/webssh",
-                "Sha256": "6024bb5f29db92b85c5a8e3b3484da46f2cafb9c23d7c23e2820c604349c841c",
+                "Sha256": "a1e5539a953dbbc34b941543d02bf6aec89a2de2307236faf4ee47e7e518d02a",
                 "Mode": "0755"
             },
             {
                 "Name": "webssh-dl",
                 "Path": "apps/webssh/webssh-dl",
-                "Sha256": "e7a0613d80afe64975c866419593a29d756d5b07a5ca43cd172a51efaf2bc78a",
+                "Sha256": "f1cb25a2add016908149ef4c369b6296e9b87b84d9242f50e3ac4aed9b6ade37",
                 "Mode": "0755"
             }
         ],
@@ -497,13 +497,13 @@
             {
                 "Name": "fan-control",
                 "Path": "apps/fan-control/fan-control",
-                "Sha256": "872191087fd0b6a2e754a57d8333239b3b24208e0be2f6af92a13a4cd7c66f57",
+                "Sha256": "8ba2f558a5053f9cb1d6580dcf8870f6669f2782e076452b13f376114e62046a",
                 "Mode": "0755"
             },
             {
                 "Name": "fan-control.sh",
                 "Path": "apps/fan-control/fan-control.sh",
-                "Sha256": "3db4da5030234749cb8c70341fe97027f3a9725b620a8bb5cfcf93aabfbbd9db",
+                "Sha256": "efd83ec29159704d617f8e57ccbeda7b40e881a3803274f691e6f481ea74230b",
                 "Mode": "0755"
             }
         ],
@@ -666,13 +666,13 @@
             {
                 "Name": "poe-fan",
                 "Path": "apps/poe-fan/poe-fan",
-                "Sha256": "0c27b213530958135231a84db4ceb8bedb644d2a79b3befaa4b71e91568f1c27",
+                "Sha256": "bed0a91c4f16f3747bd5166fa542a893286feefd0209ce723405b24b260a7bc2",
                 "Mode": "0755"
             },
             {
                 "Name": "poe-fan-control.sh",
                 "Path": "apps/poe-fan/poe-fan-control.sh",
-                "Sha256": "48e8685ee3920dbbfd6b5f9007ddb01c2e53f5d26e005aa73a27d2b6a724875f",
+                "Sha256": "112a0e5458e039ad8db6b9244cf79790be4953af9005ed33b19223ae3b766c08",
                 "Mode": "0755"
             }
         ],
@@ -746,6 +746,237 @@
                             "Min": 1,
                             "Max": 60,
                             "Help": "crontab 执行周期"
+                        }
+                    ]
+                }
+            ]
+        }
+    },
+    {
+        "Id": "udm-le",
+        "Name": "Let's Encrypt",
+        "Type": "Shell Script",
+        "Version": "1.0.0",
+        "Description": "UniFi OS DNS-01 签发/续期 Let's Encrypt 证书（udm-le）。",
+        "Icon": "shield-check",
+        "StartCommand": "/data/softcenter/bin/udm-le start",
+        "StopCommand": "/data/softcenter/bin/udm-le stop",
+        "StatusCommand": "/data/softcenter/bin/udm-le status",
+        "IsAutoStart": 0,
+        "ConfigPath": "/data/softcenter/config/udm-le.env",
+        "ConfigKeys": "",
+        "LogPath": "/var/log/udm-le.log",
+        "CustomCommands": "[{\"name\":\"立即续期\",\"command\":\"/data/softcenter/bin/udm-le renew\"}]",
+        "Files": [
+            {
+                "Name": "udm-le",
+                "Path": "apps/udm-le/udm-le",
+                "Sha256": "1dde7adbd09187c609f815094fd3bac1bdbdba0c386faa11bb582fd9e758104c",
+                "Mode": "0755"
+            }
+        ],
+        "ConfigSchema": {
+            "Sections": [
+                {
+                    "Title": "证书",
+                    "Tab": "基础设置",
+                    "Fields": [
+                        {
+                            "Key": "CERT_EMAIL",
+                            "Label": "Let's Encrypt 邮箱",
+                            "Type": "text",
+                            "Default": "",
+                            "Required": true,
+                            "Placeholder": "you@example.com"
+                        },
+                        {
+                            "Key": "CERT_HOSTS",
+                            "Label": "域名列表",
+                            "Type": "textarea",
+                            "Default": "",
+                            "Required": true,
+                            "Rows": 3,
+                            "Monospace": true,
+                            "Placeholder": "example.com,*.example.com",
+                            "Help": "逗号分隔；支持通配符"
+                        },
+                        {
+                            "Key": "CERT_DAYS_BEFORE_RENEWAL",
+                            "Label": "提前续期天数",
+                            "Type": "number",
+                            "Default": "30",
+                            "Min": 1,
+                            "Max": 60
+                        },
+                        {
+                            "Key": "KEY_TYPE",
+                            "Label": "密钥类型",
+                            "Type": "select",
+                            "Default": "RSA2048",
+                            "Options": [
+                                {
+                                    "Label": "RSA2048（推荐）",
+                                    "Value": "RSA2048"
+                                },
+                                {
+                                    "Label": "RSA3072",
+                                    "Value": "RSA3072"
+                                },
+                                {
+                                    "Label": "RSA4096",
+                                    "Value": "RSA4096"
+                                },
+                                {
+                                    "Label": "EC256",
+                                    "Value": "EC256"
+                                },
+                                {
+                                    "Label": "EC384",
+                                    "Value": "EC384"
+                                }
+                            ]
+                        }
+                    ]
+                },
+                {
+                    "Title": "DNS 服务商",
+                    "Tab": "基础设置",
+                    "Fields": [
+                        {
+                            "Key": "DNS_PROVIDER",
+                            "Label": "服务商",
+                            "Type": "select",
+                            "Default": "cloudflare",
+                            "Options": [
+                                {
+                                    "Label": "Cloudflare",
+                                    "Value": "cloudflare"
+                                },
+                                {
+                                    "Label": "DuckDNS",
+                                    "Value": "duckdns"
+                                },
+                                {
+                                    "Label": "DigitalOcean",
+                                    "Value": "digitalocean"
+                                },
+                                {
+                                    "Label": "AWS Route53",
+                                    "Value": "route53"
+                                },
+                                {
+                                    "Label": "Linode",
+                                    "Value": "linode"
+                                },
+                                {
+                                    "Label": "Gandi",
+                                    "Value": "gandiv5"
+                                },
+                                {
+                                    "Label": "Name.com",
+                                    "Value": "namedotcom"
+                                },
+                                {
+                                    "Label": "Google Domains",
+                                    "Value": "googledomains"
+                                }
+                            ]
+                        },
+                        {
+                            "Key": "CLOUDFLARE_DNS_API_TOKEN",
+                            "Label": "Cloudflare API Token",
+                            "Type": "password",
+                            "Default": "",
+                            "Secret": true,
+                            "Help": "Zone DNS:Edit 权限"
+                        },
+                        {
+                            "Key": "DUCKDNS_TOKEN",
+                            "Label": "DuckDNS Token",
+                            "Type": "password",
+                            "Default": "",
+                            "Secret": true
+                        },
+                        {
+                            "Key": "DO_AUTH_TOKEN",
+                            "Label": "DigitalOcean Token",
+                            "Type": "password",
+                            "Default": "",
+                            "Secret": true
+                        },
+                        {
+                            "Key": "LINODE_TOKEN",
+                            "Label": "Linode Token",
+                            "Type": "password",
+                            "Default": "",
+                            "Secret": true
+                        },
+                        {
+                            "Key": "GANDIV5_PERSONAL_ACCESS_TOKEN",
+                            "Label": "Gandi PAT",
+                            "Type": "password",
+                            "Default": "",
+                            "Secret": true
+                        },
+                        {
+                            "Key": "NAMECOM_USERNAME",
+                            "Label": "Name.com 用户名",
+                            "Type": "text",
+                            "Default": ""
+                        },
+                        {
+                            "Key": "NAMECOM_API_TOKEN",
+                            "Label": "Name.com API Token",
+                            "Type": "password",
+                            "Default": "",
+                            "Secret": true
+                        },
+                        {
+                            "Key": "GOOGLE_DOMAINS_ACCESS_TOKEN",
+                            "Label": "Google Domains Token",
+                            "Type": "password",
+                            "Default": "",
+                            "Secret": true
+                        },
+                        {
+                            "Key": "DNS_RESOLVER",
+                            "Label": "验证用 DNS",
+                            "Type": "text",
+                            "Default": "127.0.0.1:53",
+                            "Help": "改公网解析器可填 8.8.8.8:53 或 1.1.1.1:53"
+                        }
+                    ]
+                },
+                {
+                    "Title": "部署范围",
+                    "Tab": "进阶设置",
+                    "Fields": [
+                        {
+                            "Key": "ENABLE_EUS_CERTS",
+                            "Label": "更新 EUS 证书",
+                            "Type": "switch",
+                            "Default": "1",
+                            "Help": "写入 /data/eus_certificates"
+                        },
+                        {
+                            "Key": "ENABLE_CAPTIVE",
+                            "Label": "更新 Captive Portal",
+                            "Type": "switch",
+                            "Default": "0",
+                            "Help": "需要 Java，会改 keystore"
+                        },
+                        {
+                            "Key": "NO_BUNDLE",
+                            "Label": "仅导入服务器证书",
+                            "Type": "switch",
+                            "Default": "0",
+                            "Help": "WiFiman 需要；仅 Captive 开启时生效（实验性）"
+                        },
+                        {
+                            "Key": "ENABLE_RADIUS",
+                            "Label": "更新 FreeRADIUS",
+                            "Type": "switch",
+                            "Default": "0"
                         }
                     ]
                 }
