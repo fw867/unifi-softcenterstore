@@ -96,7 +96,7 @@
             {
                 "Name": "koolss",
                 "Path": "apps/koolss/koolss",
-                "Sha256": "dfa6b3671213c5f53543e82633a746b087d2e465adb78903b2ac021a546c23bd",
+                "Sha256": "0848eab641604c9448973fabb3a627dd9c7ee6890110814ee6259a16ee239fc7",
                 "Mode": "0755"
             },
             {
@@ -402,7 +402,7 @@
             {
                 "Name": "ddnsto-core",
                 "Path": "apps/ddnsto/ddnsto-core",
-                "Sha256": "2d7210662b5a578454aaa2c0ce7d049f358ffa8f3ea2982171a66ead72e0eefb",
+                "Sha256": "ff0ba3b5f911b9d38751fc6556789122338f24419637e946af506b175650a5a6",
                 "Mode": "0755"
             },
             {
