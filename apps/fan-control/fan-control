@@ -1,0 +1,98 @@
+#!/bin/sh
+
+# UniFi SoftCenter · fan-control 管理脚本
+# 原项目: https://github.com/iceteaSA/unifi-fan-control
+# 面板配置: /data/softcenter/config/fan-control.env
+# 二进制/脚本: /data/softcenter/bin/fan-control.sh
+# 状态文件: /data/softcenter/bin/fan-controldata/
+
+# 状态探针：轻量，不写日志
+if [ "$1" = "status" ]; then
+    if pgrep -f "/data/softcenter/bin/fan-control.sh" >/dev/null 2>&1; then
+        echo "running"
+        exit 0
+    fi
+    echo "stopped"
+    exit 1
+fi
+
+DAEMON="/data/softcenter/bin/fan-control.sh"
+DATA_DIR="/data/softcenter/bin/fan-controldata"
+PIDFILE="/var/run/fan-control.pid"
+LOG="/var/log/fan-control.log"
+
+log_date() {
+    line="【$(date '+%Y年%m月%d日 %H:%M:%S')】: $1"
+    echo "$line"
+    echo "$line" >> "$LOG"
+}
+
+ensure_daemon() {
+    if [ -x "$DAEMON" ]; then
+        return 0
+    fi
+    log_date "未找到可执行的 $DAEMON"
+    echo "错误：未找到 $DAEMON，请重新安装插件"
+    return 1
+}
+
+start_fan() {
+    ensure_daemon || exit 1
+    if pgrep -f "$DAEMON" >/dev/null 2>&1; then
+        echo "fan-control 已在运行"
+        return 0
+    fi
+    mkdir -p "$DATA_DIR"
+    # 后台运行主脚本；详细日志走 logger，这里捕获 stdout/stderr
+    nohup "$DAEMON" >> "$LOG" 2>&1 &
+    sleep 1
+    if pgrep -f "$DAEMON" >/dev/null 2>&1; then
+        pid=$(pgrep -f "$DAEMON" | head -n 1)
+        echo "$pid" > "$PIDFILE"
+        log_date "fan-control 启动成功 PID=$pid"
+        echo "fan-control 已启动"
+    else
+        rm -f "$PIDFILE"
+        log_date "fan-control 启动失败，详见 $LOG"
+        echo "启动失败，请查看 $LOG"
+        exit 1
+    fi
+}
+
+stop_fan() {
+    if pgrep -f "$DAEMON" >/dev/null 2>&1; then
+        pkill -f "$DAEMON" 2>/dev/null
+        sleep 1
+        pkill -9 -f "$DAEMON" 2>/dev/null
+        # 停止时把风扇调到 0，避免停在中间转速
+        if [ -w /sys/class/hwmon/hwmon0/pwm1 ]; then
+            echo 0 > /sys/class/hwmon/hwmon0/pwm1 2>/dev/null
+        fi
+        log_date "fan-control 已停止"
+        echo "fan-control 已停止"
+    else
+        echo "fan-control 未在运行"
+    fi
+    rm -f "$PIDFILE"
+}
+
+case "${1}" in
+start)
+    start_fan
+    ;;
+stop)
+    stop_fan
+    ;;
+restart)
+    stop_fan
+    sleep 1
+    start_fan
+    ;;
+status)
+    exit 1
+    ;;
+*)
+    echo "Usage: $0 {start|stop|restart|status}"
+    exit 1
+    ;;
+esac

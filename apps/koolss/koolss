@@ -83,7 +83,7 @@ write_domain_file() {
 }
 
 # SoftCenter 安装路径
-XRAY_BIN="/data/softcenter/bin/xray"
+XRAY_BIN="/data/softcenter/bin/koolss-xray"
 # 获取局域网 IP 地址
 lan_ipaddr=$(ifconfig $LAN_IF | grep 'inet ' | awk '{print $2}' | cut -d: -f2)
 
@@ -533,10 +533,10 @@ current_ip() {
 
 start_v2ray(){
     if [ ! -x "$XRAY_BIN" ]; then
-        log_date "未找到 $XRAY_BIN，调用 ssup 下载最新 Xray..."
-        SSUP_NO_START=1 /data/softcenter/bin/ssup
+        log_date "未找到 $XRAY_BIN，调用 koolss-ssup 下载最新 Xray..."
+        SSUP_NO_START=1 /data/softcenter/bin/koolss-ssup
         if [ ! -x "$XRAY_BIN" ]; then
-            log_date "ssup 下载 Xray 失败，无法启动"
+            log_date "koolss-ssup 下载 Xray 失败，无法启动"
             return 1
         fi
     fi

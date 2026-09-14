@@ -91,23 +91,23 @@
         "ConfigPath": "/data/softcenter/config/koolss.env",
         "ConfigKeys": "",
         "LogPath": "/var/log/koolss.log",
-        "CustomCommands": "[{\"name\":\"升级xray\",\"command\":\"/data/softcenter/bin/ssup\"},{\"name\":\"更新规则\",\"command\":\"/data/softcenter/bin/ssrule\"}]",
+        "CustomCommands": "[{\"name\":\"升级xray\",\"command\":\"/data/softcenter/bin/koolss-ssup\"},{\"name\":\"更新规则\",\"command\":\"/data/softcenter/bin/koolss-ssrule\"}]",
         "Files": [
             {
                 "Name": "koolss",
                 "Path": "apps/koolss/koolss",
-                "Sha256": "e8c015a7fdc2a44f73e5cf1c45051ac9b00131e86f789cb194b5ee9745b6d97f",
+                "Sha256": "0f452e652c469f3947dd3418c77001da46b1fd194e0a3242ebe7018a3d8632d5",
                 "Mode": "0755"
             },
             {
-                "Name": "ssup",
-                "Path": "apps/koolss/ssup",
-                "Sha256": "6529fdb64cb0beca391a71b44a99b4268ea5dcc9adf4787b3d29e056488b2137",
+                "Name": "koolss-ssup",
+                "Path": "apps/koolss/koolss-ssup",
+                "Sha256": "931658dc65c63e62447a9d782a0e221a1751c051bf307fe06fd818f452913736",
                 "Mode": "0755"
             },
             {
-                "Name": "ssrule",
-                "Path": "apps/koolss/ssrule",
+                "Name": "koolss-ssrule",
+                "Path": "apps/koolss/koolss-ssrule",
                 "Sha256": "2c95320f2c832ae3c2bc8cc95c4ba73620dc2f7cc924a9a7425ccaced69f0569",
                 "Mode": "0755"
             },
@@ -425,6 +425,222 @@
                             "Required": true,
                             "Secret": true,
                             "Help": "来自 DDNSTO 控制台的设备 Token"
+                        }
+                    ]
+                }
+            ]
+        }
+    },
+    {
+        "Id": "webssh",
+        "Name": "WebSSH",
+        "Type": "Shell Script",
+        "Version": "2.5.0",
+        "Description": "浏览器版 SSH 客户端（GoWebSSH），支持多会话、SFTP 与文件管理。",
+        "Icon": "terminal-square",
+        "StartCommand": "/data/softcenter/bin/webssh start",
+        "StopCommand": "/data/softcenter/bin/webssh stop",
+        "StatusCommand": "/data/softcenter/bin/webssh status",
+        "IsAutoStart": 0,
+        "ConfigPath": "/data/softcenter/config/webssh.env",
+        "ConfigKeys": "",
+        "LogPath": "/var/log/webssh.log",
+        "CustomCommands": "[{\"name\":\"下载/更新核心\",\"command\":\"FORCE_DOWNLOAD=1 /data/softcenter/bin/webssh-dl\"}]",
+        "Files": [
+            {
+                "Name": "webssh",
+                "Path": "apps/webssh/webssh",
+                "Sha256": "6024bb5f29db92b85c5a8e3b3484da46f2cafb9c23d7c23e2820c604349c841c",
+                "Mode": "0755"
+            },
+            {
+                "Name": "webssh-dl",
+                "Path": "apps/webssh/webssh-dl",
+                "Sha256": "e7a0613d80afe64975c866419593a29d756d5b07a5ca43cd172a51efaf2bc78a",
+                "Mode": "0755"
+            }
+        ],
+        "ConfigSchema": {
+            "Sections": [
+                {
+                    "Title": "运行环境",
+                    "Fields": [
+                        {
+                            "Key": "WEBSSH_HOME",
+                            "Label": "数据目录",
+                            "Type": "path",
+                            "Default": "/data/softcenter/bin/websshdata",
+                            "Monospace": true,
+                            "Help": "GoWebSSH 配置在 <HOME>/.GoWebSSH，首次运行自动生成"
+                        }
+                    ]
+                }
+            ]
+        }
+    },
+    {
+        "Id": "fan-control",
+        "Name": "风扇调速",
+        "Type": "Shell Script",
+        "Version": "1.0.0",
+        "Description": "UCG-Max/Fibre 智能风扇调速（iceteaSA/unifi-fan-control），按 CPU 温度自适应调速。",
+        "Icon": "fan",
+        "StartCommand": "/data/softcenter/bin/fan-control start",
+        "StopCommand": "/data/softcenter/bin/fan-control stop",
+        "StatusCommand": "/data/softcenter/bin/fan-control status",
+        "IsAutoStart": 1,
+        "ConfigPath": "/data/softcenter/config/fan-control.env",
+        "ConfigKeys": "",
+        "LogPath": "/var/log/fan-control.log",
+        "CustomCommands": "[{\"name\":\"查看系统日志\",\"command\":\"logger -t fan-control test >/dev/null 2>&1; tail -n 50 /var/log/fan-control.log 2>/dev/null; journalctl -t fan-control -n 50 --no-pager 2>/dev/null || true\"}]",
+        "Files": [
+            {
+                "Name": "fan-control",
+                "Path": "apps/fan-control/fan-control",
+                "Sha256": "872191087fd0b6a2e754a57d8333239b3b24208e0be2f6af92a13a4cd7c66f57",
+                "Mode": "0755"
+            },
+            {
+                "Name": "fan-control.sh",
+                "Path": "apps/fan-control/fan-control.sh",
+                "Sha256": "a7662e5d19b919a33b4ef4c805bed92d6c990d738926104b57ff784e82d40afe",
+                "Mode": "0755"
+            }
+        ],
+        "ConfigSchema": {
+            "Sections": [
+                {
+                    "Title": "温度阈值",
+                    "Tab": "基础设置",
+                    "Fields": [
+                        {
+                            "Key": "MIN_TEMP",
+                            "Label": "启动阈值 (°C)",
+                            "Type": "number",
+                            "Default": "60",
+                            "Min": 30,
+                            "Max": 80,
+                            "Help": "达到此温度后风扇开始工作（加上滞回）"
+                        },
+                        {
+                            "Key": "MAX_TEMP",
+                            "Label": "紧急阈值 (°C)",
+                            "Type": "number",
+                            "Default": "85",
+                            "Min": 50,
+                            "Max": 100,
+                            "Help": "达到此温度后强制满速"
+                        },
+                        {
+                            "Key": "HYSTERESIS",
+                            "Label": "滞回缓冲 (°C)",
+                            "Type": "number",
+                            "Default": "5",
+                            "Min": 1,
+                            "Max": 15,
+                            "Help": "启动温度 = MIN_TEMP + HYSTERESIS"
+                        }
+                    ]
+                },
+                {
+                    "Title": "风扇转速",
+                    "Tab": "基础设置",
+                    "Fields": [
+                        {
+                            "Key": "MIN_PWM",
+                            "Label": "最小转速 PWM",
+                            "Type": "number",
+                            "Default": "91",
+                            "Min": 0,
+                            "Max": 255,
+                            "Help": "ACTIVE 模式最低 PWM (0-255)"
+                        },
+                        {
+                            "Key": "MAX_PWM",
+                            "Label": "最大转速 PWM",
+                            "Type": "number",
+                            "Default": "255",
+                            "Min": 1,
+                            "Max": 255
+                        },
+                        {
+                            "Key": "MAX_PWM_STEP",
+                            "Label": "单次调整上限",
+                            "Type": "number",
+                            "Default": "25",
+                            "Min": 1,
+                            "Max": 50,
+                            "Help": "每次调整允许的最大 PWM 变化量"
+                        }
+                    ]
+                },
+                {
+                    "Title": "运行策略",
+                    "Tab": "进阶调节",
+                    "Fields": [
+                        {
+                            "Key": "CHECK_INTERVAL",
+                            "Label": "检测间隔 (秒)",
+                            "Type": "number",
+                            "Default": "15",
+                            "Min": 5,
+                            "Max": 60
+                        },
+                        {
+                            "Key": "TAPER_MINS",
+                            "Label": "冷却时长 (分钟)",
+                            "Type": "number",
+                            "Default": "90",
+                            "Min": 1,
+                            "Max": 240,
+                            "Help": "TAPER 低速吹风持续时间"
+                        },
+                        {
+                            "Key": "ALPHA",
+                            "Label": "温度平滑系数",
+                            "Type": "number",
+                            "Default": "20",
+                            "Min": 1,
+                            "Max": 99,
+                            "Help": "越小越贴近原始温度，越大越平滑"
+                        },
+                        {
+                            "Key": "DEADBAND",
+                            "Label": "死区 (°C)",
+                            "Type": "number",
+                            "Default": "1",
+                            "Min": 0,
+                            "Max": 10
+                        },
+                        {
+                            "Key": "LEARNING_RATE",
+                            "Label": "学习步长",
+                            "Type": "number",
+                            "Default": "5",
+                            "Min": 1,
+                            "Max": 20,
+                            "Help": "自适应 PWM 优化步长"
+                        }
+                    ]
+                },
+                {
+                    "Title": "硬件",
+                    "Tab": "进阶调节",
+                    "Fields": [
+                        {
+                            "Key": "FAN_PWM_DEVICE",
+                            "Label": "PWM 设备路径",
+                            "Type": "path",
+                            "Default": "/sys/class/hwmon/hwmon0/pwm1",
+                            "Monospace": true,
+                            "Help": "单风扇路径；新版脚本支持自动检测多风扇"
+                        },
+                        {
+                            "Key": "OPTIMAL_PWM_FILE",
+                            "Label": "最优 PWM 状态文件",
+                            "Type": "path",
+                            "Default": "/data/softcenter/bin/fan-controldata/optimal_pwm",
+                            "Monospace": true
                         }
                     ]
                 }

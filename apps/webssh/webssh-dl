@@ -1,0 +1,125 @@
+#!/bin/sh
+
+# UniFi SoftCenter · 下载最新 GoWebSSH-linux-arm64
+# 默认从 GitHub latest release 拉取，不固定版本号
+# SSUP_NO_START=1 时只安装不拉起 webssh
+
+alias echo_date='echo 【$(date "+%Y年%m月%d日 %H:%M:%S")】:'
+
+BIN="/data/softcenter/bin/webssh-core"
+WEBSSH_BIN="/data/softcenter/bin/webssh"
+DL_DIR="/data/softcenter/bin/websshrule"
+ZIP_NAME="GoWebSSH-linux-arm64.zip"
+API_LATEST="https://api.github.com/repos/o8oo8o/WebSSH/releases/latest"
+FORCE_DOWNLOAD="${FORCE_DOWNLOAD:-0}"
+SSUP_NO_START="${SSUP_NO_START:-0}"
+
+USE_PROXY="${USE_PROXY:-1}"
+PROXY_SERVER="${PROXY_SERVER:-socks5://127.0.0.1:1283}"
+CURL_OPT=""
+if [ "$USE_PROXY" = "1" ]; then
+    CURL_OPT="-x $PROXY_SERVER"
+fi
+
+if [ -x "$BIN" ] && [ "$FORCE_DOWNLOAD" != "1" ]; then
+    echo_date "本地已存在 ${BIN}（FORCE_DOWNLOAD=1 可强制更新）"
+    if [ "$SSUP_NO_START" != "1" ] && [ -x "$WEBSSH_BIN" ]; then
+        "$WEBSSH_BIN" start
+    fi
+    exit 0
+fi
+
+arch=$(uname -m)
+case $arch in
+    aarch64|arm64) ;;
+    *)
+        echo_date "暂不支持的架构: $arch（仅 arm64）"
+        exit 1
+        ;;
+esac
+
+echo_date "查询 GitHub latest release..."
+LATEST_JSON=$(curl $CURL_OPT --connect-timeout 10 -sL "$API_LATEST")
+if [ -z "$LATEST_JSON" ]; then
+    echo_date "获取 latest 失败，可设 USE_PROXY=0 后重试"
+    exit 1
+fi
+
+TAG=$(echo "$LATEST_JSON" | grep -m1 '"tag_name"' | sed -E 's/.*"tag_name"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/')
+DL_URL=$(echo "$LATEST_JSON" | grep -o '"browser_download_url"[[:space:]]*:[[:space:]]*"[^"]*'"$ZIP_NAME"'"' | head -n1 | sed -E 's/.*"([^"]+)"[[:space:]]*$/\1/')
+ZIP_SHA256=$(echo "$LATEST_JSON" | grep -o '"digest"[[:space:]]*:[[:space:]]*"sha256:[^"]*"' | head -n1 | sed -E 's/.*sha256:([^"]+)".*/\1/')
+
+# 若 assets 顺序导致 digest 不匹配该 zip，再按 name 附近解析
+if [ -n "$DL_URL" ] && [ -z "$ZIP_SHA256" ]; then
+    ZIP_SHA256=$(echo "$LATEST_JSON" | tr ',' '\n' | grep -A20 "\"name\": \"$ZIP_NAME\"" | grep -m1 '"digest"' | sed -E 's/.*sha256:([a-f0-9]+)".*/\1/')
+fi
+
+if [ -z "$DL_URL" ]; then
+    echo_date "未找到 ${ZIP_NAME} 的下载地址（tag=${TAG:-?}）"
+    exit 1
+fi
+
+echo_date "最新版本: ${TAG:-unknown}"
+echo_date "下载: $DL_URL"
+
+rm -rf "$DL_DIR"
+mkdir -p "$DL_DIR" || exit 1
+
+if ! curl $CURL_OPT --connect-timeout 15 -fSL -o "${DL_DIR}/${ZIP_NAME}" "$DL_URL"; then
+    echo_date "下载失败"
+    rm -rf "$DL_DIR"
+    exit 1
+fi
+
+if [ -n "$ZIP_SHA256" ]; then
+    echo_date "校验 SHA256..."
+    LOCAL_HASH=$(sha256sum "${DL_DIR}/${ZIP_NAME}" | awk '{print $1}')
+    if [ "$LOCAL_HASH" != "$ZIP_SHA256" ]; then
+        echo_date "校验失败 本地=$LOCAL_HASH 期望=$ZIP_SHA256"
+        rm -rf "$DL_DIR"
+        exit 1
+    fi
+    echo_date "校验通过"
+else
+    echo_date "警告：未取到 digest，跳过校验"
+fi
+
+echo_date "解压..."
+unzip -o "${DL_DIR}/${ZIP_NAME}" -d "$DL_DIR" >/dev/null 2>&1 || {
+    echo_date "解压失败"
+    rm -rf "$DL_DIR"
+    exit 1
+}
+
+SRC=""
+for f in gossh GoWebSSH webssh GoWebSSH-linux-arm64; do
+    if [ -f "${DL_DIR}/${f}" ]; then
+        SRC="${DL_DIR}/${f}"
+        break
+    fi
+done
+if [ -z "$SRC" ]; then
+    SRC=$(find "$DL_DIR" -type f ! -name '*.zip' 2>/dev/null | xargs ls -S 2>/dev/null | head -n 1)
+fi
+if [ ! -f "$SRC" ]; then
+    echo_date "未在压缩包中找到可执行文件"
+    ls -la "$DL_DIR"
+    rm -rf "$DL_DIR"
+    exit 1
+fi
+
+mkdir -p /data/softcenter/bin
+if pgrep -f webssh-core >/dev/null 2>&1; then
+    [ -x "$WEBSSH_BIN" ] && "$WEBSSH_BIN" stop
+fi
+mv -f "$SRC" "$BIN"
+chmod +x "$BIN"
+echo_date "已安装 ${BIN} (${TAG:-unknown})"
+
+rm -rf "$DL_DIR"
+
+if [ "$SSUP_NO_START" = "1" ]; then
+    echo_date "SSUP_NO_START=1，跳过拉起 webssh"
+elif [ -x "$WEBSSH_BIN" ]; then
+    "$WEBSSH_BIN" start
+fi

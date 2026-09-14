@@ -1,0 +1,105 @@
+#!/bin/sh
+
+# UniFi SoftCenter · WebSSH (GoWebSSH)
+# 面板配置：/data/softcenter/config/webssh.env
+# 二进制：/data/softcenter/bin/webssh-core（缺则由 webssh-dl 下载）
+
+# 状态探针：轻量，不写日志
+if [ "$1" = "status" ]; then
+    if pgrep -f webssh-core >/dev/null 2>&1; then
+        echo "running"
+        exit 0
+    fi
+    echo "stopped"
+    exit 1
+fi
+
+CONFIG="/data/softcenter/config/webssh.env"
+[ -f "$CONFIG" ] && . "$CONFIG"
+
+BIN="/data/softcenter/bin/webssh-core"
+DL="/data/softcenter/bin/webssh-dl"
+# GoWebSSH 默认 8899；数据/配置目录 $HOME/.GoWebSSH
+export HOME="${WEBSSH_HOME:-/data/softcenter/bin/websshdata}"
+export TERM=xterm
+LOG="/var/log/webssh.log"
+PIDFILE="/var/run/webssh.pid"
+
+log_date() {
+    local line="【$(date '+%Y年%m月%d日 %H:%M:%S')】: $1"
+    echo "$line"
+    echo "$line" >> "$LOG"
+}
+
+ensure_bin() {
+    [ -x "$BIN" ] && return 0
+    log_date "未找到 $BIN，调用 webssh-dl 下载..."
+    if [ -x "$DL" ]; then
+        SSUP_NO_START=1 "$DL"
+    else
+        log_date "未找到下载脚本 $DL"
+        return 1
+    fi
+    [ -x "$BIN" ] || return 1
+}
+
+is_running() {
+    pgrep -f webssh-core >/dev/null 2>&1
+}
+
+start_webssh() {
+    ensure_bin || { log_date "WebSSH 二进制不可用"; exit 1; }
+    if is_running; then
+        echo "webssh 已在运行"
+        return 0
+    fi
+    mkdir -p "$HOME/.GoWebSSH"
+    # 首次运行会生成 GoWebSSH.toml；端口默认 8899
+    nohup "$BIN" >> "$LOG" 2>&1 &
+    sleep 1
+    if is_running; then
+        pid=$(pgrep -f webssh-core | head -n 1)
+        echo "$pid" > "$PIDFILE"
+        log_date "WebSSH 启动成功 PID=$pid HOME=$HOME"
+        echo "WebSSH 已启动，访问 http://$(hostname -I 2>/dev/null | awk '{print $1}'):8899/"
+    else
+        rm -f "$PIDFILE"
+        log_date "WebSSH 启动失败，详见 $LOG"
+        echo "启动失败，请查看 $LOG"
+        exit 1
+    fi
+}
+
+stop_webssh() {
+    if is_running; then
+        pkill -f webssh-core 2>/dev/null
+        sleep 1
+        pkill -9 -f webssh-core 2>/dev/null
+        log_date "WebSSH 已停止"
+        echo "WebSSH 已停止"
+    else
+        echo "WebSSH 未在运行"
+    fi
+    rm -f "$PIDFILE"
+}
+
+case "${1}" in
+start)
+    start_webssh
+    ;;
+stop)
+    stop_webssh
+    ;;
+restart)
+    stop_webssh
+    sleep 1
+    start_webssh
+    ;;
+status)
+    exit 1
+    ;;
+*)
+    echo "Usage: $0 {start|stop|restart|status}"
+    exit 1
+    ;;
+esac

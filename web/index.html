@@ -48,6 +48,55 @@
             border-radius: 8px;
         }
 
+        .app-card {
+            transition: box-shadow 0.2s ease, border-color 0.2s ease;
+        }
+
+        .drag-handle {
+            touch-action: none;
+        }
+
+        /* 拖拽中：关闭 backdrop-filter，避免卡顿 */
+        .sc-dragging,
+        .sc-dragging.glass {
+            backdrop-filter: none !important;
+            -webkit-backdrop-filter: none !important;
+            background: rgba(255, 255, 255, 0.96) !important;
+        }
+
+        .sc-dragging .app-card {
+            user-select: none;
+        }
+
+        .card-dragging {
+            opacity: 0.55;
+            transform: scale(0.98);
+        }
+
+        .card-drag-over {
+            border: 2px dashed #3b82f6 !important;
+            box-shadow: 0 0 0 4px rgba(59, 130, 246, 0.15);
+        }
+
+        body.sc-dragging-active {
+            cursor: grabbing;
+            user-select: none;
+        }
+
+        /* 跟随鼠标的拖拽预览 */
+        .drag-ghost {
+            position: fixed;
+            z-index: 9999;
+            pointer-events: none;
+            transform: translate(-50%, -50%) rotate(-2deg);
+            min-width: 160px;
+            max-width: 240px;
+            background: rgba(255, 255, 255, 0.98) !important;
+            backdrop-filter: none !important;
+            -webkit-backdrop-filter: none !important;
+            border: 1px solid rgba(59, 130, 246, 0.4);
+        }
+
         .sidebar-item {
             transition: all 0.18s cubic-bezier(0.4, 0, 0.2, 1);
         }
@@ -145,7 +194,7 @@
                 </div>
                 <div class="flex items-center bg-gray-100/80 rounded-xl px-3 py-2 border border-gray-200">
                     <i data-lucide="key" class="w-4 h-4 text-gray-400 mr-2 shrink-0"></i>
-                    <input :type="tokenInputType" v-model="token" placeholder="访问令牌"
+                    <input :type="tokenInputType" v-model="token" name="sc_token" autocomplete="off" placeholder="访问令牌"
                         @focus="tokenInputType = 'text'" @blur="handleTokenSubmit" @keyup.enter="handleTokenSubmit"
                         class="bg-transparent border-none text-xs focus:outline-none w-full">
                 </div>
@@ -194,7 +243,7 @@
                         <div
                             class="flex items-center bg-white border border-gray-200 rounded-full px-4 py-2 shadow-sm focus-within:ring-2 focus-within:ring-blue-500 w-full lg:w-72">
                             <i data-lucide="search" class="w-4 h-4 text-gray-400 mr-2 shrink-0"></i>
-                            <input v-model="searchQuery" type="text" placeholder="搜索应用名称或 ID..."
+                            <input v-model="searchQuery" type="text" name="sc_search" autocomplete="off" placeholder="搜索应用名称或 ID..."
                                 class="bg-transparent border-none outline-none text-sm w-full text-gray-700">
                         </div>
                     </div>
@@ -224,14 +273,19 @@
                     </div>
 
                     <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5">
-                        <div v-for="(app, index) in filteredApps" :key="app.id" draggable="true"
-                            @dragstart="onDragStart($event, index)" @dragover.prevent @dragenter.prevent
-                            @drop="onDrop($event, index)" @dragend="onDragEnd"
-                            :class="{'opacity-50 border-dashed border-2 border-blue-400': draggedIndex === index}"
-                            class="glass rounded-3xl p-5 shadow-sm hover:shadow-md transition-all relative flex flex-col min-h-[260px]">
-                            <div class="absolute top-4 right-4 cursor-move text-gray-300 hover:text-gray-500 z-10"
-                                title="拖拽排序">
-                                <i data-lucide="grip-vertical" class="w-5 h-5"></i>
+                        <div v-for="(app, index) in filteredApps" :key="app.id"
+                            :data-index="index"
+                            :class="{
+                                'card-dragging': dragFromIndex === index,
+                                'card-drag-over': isDragging && dragOverIndex === index && dragFromIndex !== index,
+                                'sc-dragging': isDragging
+                            }"
+                            class="app-card glass rounded-3xl p-5 shadow-sm hover:shadow-md relative flex flex-col min-h-[260px]">
+
+                            <div class="drag-handle absolute top-4 right-4 z-20 p-2 -m-1 cursor-grab active:cursor-grabbing text-gray-400 hover:text-gray-700 select-none"
+                                @pointerdown="onHandlePointerDown($event, index)"
+                                title="按住手柄拖拽排序">
+                                <i data-lucide="grip-vertical" class="w-5 h-5 pointer-events-none"></i>
                             </div>
                             <div class="flex justify-between items-start mb-5">
                                 <div :class="app.isRunning ? 'bg-blue-600' : 'bg-gray-400'"
@@ -317,6 +371,20 @@
                             <h3 class="text-base font-medium text-gray-500 group-hover:text-blue-600">从应用商店安装</h3>
                             <p class="text-xs text-gray-400 mt-1">浏览云端插件库</p>
                         </button>
+                    </div>
+
+                    <!-- 拖拽时跟随鼠标的浮动预览 -->
+                    <div v-if="isDragging && dragGhostApp" class="drag-ghost glass rounded-2xl px-4 py-3 shadow-2xl"
+                        :style="{ left: ghostX + 'px', top: ghostY + 'px' }">
+                        <div class="flex items-center space-x-3">
+                            <div class="w-9 h-9 rounded-xl bg-blue-600 text-white flex items-center justify-center shrink-0">
+                                <i :data-lucide="dragGhostApp.icon || 'box'" class="w-4 h-4"></i>
+                            </div>
+                            <div class="min-w-0">
+                                <div class="text-sm font-semibold truncate">{{ dragGhostApp.name }}</div>
+                                <div class="text-[10px] text-gray-500 font-mono">移动到第 {{ (dragOverIndex ?? 0) + 1 }} 位</div>
+                            </div>
+                        </div>
                     </div>
                 </section>
 
@@ -965,21 +1033,91 @@
                     return apps.value.filter(a => a.name.toLowerCase().includes(q) || a.id.toLowerCase().includes(q));
                 });
 
-                const draggedIndex = ref(null);
+                const isDragging = ref(false);
+                const dragFromIndex = ref(null);
+                const dragOverIndex = ref(null);
+                const ghostX = ref(0);
+                const ghostY = ref(0);
+                const dragGhostApp = computed(() => {
+                    const i = dragFromIndex.value;
+                    if (i === null || i < 0 || i >= apps.value.length) return null;
+                    return apps.value[i];
+                });
+                let iconsTimer = null;
+                const refreshIcons = () => {
+                    if (iconsTimer) clearTimeout(iconsTimer);
+                    iconsTimer = setTimeout(() => {
+                        if (isDragging.value) return;
+                        try { lucide.createIcons(); } catch (e) { }
+                    }, 50);
+                };
 
                 const getLocalApp = (id) => apps.value.find(a => a.id === id);
 
-                const onDragStart = (e, index) => { draggedIndex.value = index; e.dataTransfer.effectAllowed = 'move'; };
-                const onDragEnd = () => { draggedIndex.value = null; };
-                const onDrop = async (e, index) => {
-                    if (draggedIndex.value === null || draggedIndex.value === index) return;
-                    if (searchQuery.value) { alert('当前处于搜索模式，暂不支持拖拽排序。'); draggedIndex.value = null; return; }
-                    const draggedApp = apps.value[draggedIndex.value];
-                    apps.value.splice(draggedIndex.value, 1);
-                    apps.value.splice(index, 0, draggedApp);
-                    draggedIndex.value = null;
-                    const orderReq = apps.value.map((a, i) => ({ id: a.id, sortOrder: i }));
+                // 基于 Pointer Events 的排序，避免 HTML5 DnD 在不同浏览器下的中断问题
+                const onHandlePointerDown = (e, index) => {
+                    if (searchQuery.value) return;
+                    if (e.button !== undefined && e.button !== 0) return;
+                    e.preventDefault();
+                    e.stopPropagation();
+
+                    isDragging.value = true;
+                    dragFromIndex.value = index;
+                    dragOverIndex.value = index;
+                    ghostX.value = e.clientX;
+                    ghostY.value = e.clientY;
+                    document.body.classList.add('sc-dragging-active');
+
+                    window.addEventListener('pointermove', onDragPointerMove);
+                    window.addEventListener('pointerup', onDragPointerUp);
+                    window.addEventListener('pointercancel', onDragPointerUp);
+
+                    // 渲染浮动预览里的图标
+                    nextTick(() => { try { lucide.createIcons(); } catch (err) { } });
+                };
+
+                const onDragPointerMove = (e) => {
+                    if (!isDragging.value) return;
+                    ghostX.value = e.clientX;
+                    ghostY.value = e.clientY;
+                    const el = document.elementFromPoint(e.clientX, e.clientY);
+                    const card = el && el.closest ? el.closest('.app-card') : null;
+                    if (!card) return;
+                    const idx = Number(card.dataset.index);
+                    if (!Number.isNaN(idx)) dragOverIndex.value = idx;
+                };
+
+                const onDragPointerUp = async () => {
+                    window.removeEventListener('pointermove', onDragPointerMove);
+                    window.removeEventListener('pointerup', onDragPointerUp);
+                    window.removeEventListener('pointercancel', onDragPointerUp);
+                    document.body.classList.remove('sc-dragging-active');
+
+                    const from = dragFromIndex.value;
+                    const to = dragOverIndex.value;
+                    isDragging.value = false;
+                    dragFromIndex.value = null;
+                    dragOverIndex.value = null;
+
+                    if (from === null || to === null || from === to) {
+                        refreshIcons();
+                        return;
+                    }
+                    if (from < 0 || from >= apps.value.length || to < 0 || to >= apps.value.length) {
+                        refreshIcons();
+                        return;
+                    }
+
+                    const moved = apps.value.splice(from, 1)[0];
+                    apps.value.splice(to, 0, moved);
+
+                    const orderReq = apps.value.map((item, idx) => {
+                        item.sortOrder = idx;
+                        return { id: item.id, sortOrder: idx };
+                    });
+
                     await callApi('/api/apps/reorder', 'POST', orderReq);
+                    refreshIcons();
                 };
 
                 const callApi = async (url, method = 'GET', body = null) => {
@@ -1162,6 +1300,7 @@
                 };
 
                 const loadRealApps = async () => {
+                    if (isDragging.value) return;
                     const data = await callApi('/api/apps');
                     if (data) {
                         apps.value = data.map(i => ({
@@ -1185,7 +1324,8 @@
                             version: i.version || i.Version || '1.0.0', description: i.description || i.Description || '',
                             customCommands: (() => { try { return JSON.parse(i.customCommands || i.CustomCommands || '[]'); } catch { return []; } })()
                         }));
-                        setTimeout(() => lucide.createIcons(), 100);
+                        // 异步加载完成后需要重建图标；拖拽中跳过
+                        refreshIcons();
                     }
                 };
 
@@ -1201,6 +1341,7 @@
                 const startPolling = () => {
                     if (pollTimer) clearInterval(pollTimer);
                     pollTimer = setInterval(() => {
+                        if (isDragging.value) return;
                         loadRealApps();
                         loadSystemInfo();
                     }, 3000);
@@ -1294,11 +1435,12 @@
                     }
                     goPage('apps');
                     loadRealApps();
+                    nextTick(() => lucide.createIcons());
                     alert(`"${appData.Name}" 安装完成`);
                 };
 
                 const deleteApp = async (app) => {
-                    if (!confirm(`确定要从管理中心移除 "${app.name}" 吗？\n注意：这仅移除配置，不会物理删除路由器上的脚本文件。`)) return;
+                    if (!confirm(`确定要移除 "${app.name}" 吗？\n将清理 /data/softcenter/bin 下以 ${app.id} 开头的文件/目录，以及 config/${app.id}.env。`)) return;
                     const res = await callApi(`/api/apps/${app.id}`, 'DELETE');
                     if (res !== null) loadRealApps();
                 };
@@ -1644,6 +1786,13 @@
                 onMounted(() => {
                     if (token.value) handleTokenSubmit();
                     lucide.createIcons();
+                    // 安全兜底：意外中断时复位拖拽状态
+                    window.addEventListener('blur', () => {
+                        isDragging.value = false;
+                        dragFromIndex.value = null;
+                        dragOverIndex.value = null;
+                        document.body.classList.remove('sc-dragging-active');
+                    });
                 });
 
                 return {
@@ -1656,7 +1805,7 @@
                     isFieldVisible, toggleSection, toggleSwitchField, multiSelected, toggleMulti, toggleAutoStartInModal,
                     addTab, isFetchingStore, onlineStore, fetchOnlineStore, onNewAppIdChange, submitManualApp,
                     newApp, logModalApp, logContent, isLoadingLogs, cronModalApp, newCronReq, hasUpdate, latestVersion, isUpgrading, upgradeLog, doUpgrade,
-                    searchQuery, filteredApps, draggedIndex, getLocalApp, isNewerVersion, appUpdates, appHasUpdate, cloudVersionOf, onDragStart, onDragEnd, onDrop, deleteApp, toggleApp, restartApp, saveAutoStart,
+                    searchQuery, filteredApps, isDragging, dragFromIndex, dragOverIndex, ghostX, ghostY, dragGhostApp, onHandlePointerDown, getLocalApp, isNewerVersion, appUpdates, appHasUpdate, cloudVersionOf, deleteApp, toggleApp, restartApp, saveAutoStart,
                     installApp, updateAppConfigFromCloud, showSystemLogs, showLogModal, refreshLogs, runCustomCommand, loadCronJobs, openConfig, saveAppConfig, showCronModal, submitCron, deleteCron,
                     sysConfigForm, isSavingSettings, openSettings, saveSettings, activeCmdMenu, showCronModalVisible, goToRouterAdmin
                 };

@@ -7,8 +7,8 @@
 alias echo_date='echo 【$(date "+%Y年%m月%d日 %H:%M:%S")】:'
 
 XRAY_CONFIG_FILE="/tmp/xray.json"
-XRAY_BIN="/data/softcenter/bin/xray"
-SSUP_BIN="/data/softcenter/bin/ssup"
+XRAY_BIN="/data/softcenter/bin/koolss-xray"
+SSUP_BIN="/data/softcenter/bin/koolss-ssup"
 GITHUB_API="https://api.github.com/repos/XTLS/Xray-core/releases/latest"
 FORCE_DOWNLOAD="${FORCE_DOWNLOAD:-0}"
 SSUP_NO_START="${SSUP_NO_START:-0}"

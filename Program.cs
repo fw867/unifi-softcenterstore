@@ -188,6 +188,60 @@ string GetBashOutput(string cmd)
 static string AppEnvDir() => $"{BaseDir}/config";
 static string AppEnvPath(string appId) => $"{AppEnvDir()}/{appId}.env";
 
+// 卸载插件：优先按 Files[].Name 清理，再按插件 Id 前缀兜底
+static void CleanupAppBinFiles(string appId, string? filesJson = null)
+{
+    if (string.IsNullOrWhiteSpace(appId)) return;
+    if (appId.Contains("..") || appId.Contains('/') || appId.Contains('\\') || appId.Contains('\0')) return;
+    if (!Directory.Exists(BinDir)) return;
+    try
+    {
+        // 1) Files 清单（ssup/ssrule 等非 Id 前缀文件也能删掉）
+        if (!string.IsNullOrWhiteSpace(filesJson))
+        {
+            try
+            {
+                var files = JsonSerializer.Deserialize(filesJson, AppJsonContext.Default.ListAppFileItem);
+                if (files != null)
+                {
+                    foreach (var f in files)
+                    {
+                        if (string.IsNullOrWhiteSpace(f.Name)) continue;
+                        var rel = f.Name.Replace('\\', '/').TrimStart('/');
+                        if (rel.Contains("..") || rel.StartsWith('/')) continue;
+                        var path = Path.Combine(BinDir, rel);
+                        try
+                        {
+                            if (Directory.Exists(path)) Directory.Delete(path, true);
+                            else if (File.Exists(path)) File.Delete(path);
+                        }
+                        catch { }
+                    }
+                }
+            }
+            catch { }
+        }
+
+        // 2) Id 前缀兜底（webssh-dl / koolssrule 等）
+        foreach (var path in Directory.EnumerateFileSystemEntries(BinDir))
+        {
+            var name = Path.GetFileName(path);
+            if (string.IsNullOrEmpty(name)) continue;
+            if (!name.StartsWith(appId, StringComparison.Ordinal)) continue;
+            try
+            {
+                if (Directory.Exists(path)) Directory.Delete(path, true);
+                else File.Delete(path);
+            }
+            catch { }
+        }
+
+        var env = AppEnvPath(appId);
+        if (File.Exists(env)) File.Delete(env);
+    }
+    catch { }
+}
+
 static string JsonGetString(JsonElement el, string name)
 {
     if (el.ValueKind != JsonValueKind.Object) return "";
@@ -422,11 +476,22 @@ app.MapPost("/api/apps", (AppEntity a) => {
 });
 
 app.MapDelete("/api/apps/{id}", (string id) => {
-    using var conn = new SqliteConnection(DbPath); conn.Open();
-    using var cmd = conn.CreateCommand();
-    cmd.CommandText = "DELETE FROM apps_registry WHERE Id = @id";
-    cmd.Parameters.AddWithValue("@id", id);
-    cmd.ExecuteNonQuery(); return Results.Ok(new SimpleSuccess(true));
+    string? filesJson = null;
+    using (var conn = new SqliteConnection(DbPath))
+    {
+        conn.Open();
+        using var sel = conn.CreateCommand();
+        sel.CommandText = "SELECT Files FROM apps_registry WHERE Id=@id";
+        sel.Parameters.AddWithValue("@id", id);
+        filesJson = sel.ExecuteScalar()?.ToString();
+
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "DELETE FROM apps_registry WHERE Id = @id";
+        cmd.Parameters.AddWithValue("@id", id);
+        cmd.ExecuteNonQuery();
+    }
+    CleanupAppBinFiles(id, filesJson);
+    return Results.Ok(new SimpleSuccess(true));
 });
 
 app.MapPost("/api/apps/reorder", (List<AppOrderReq> req) => {
