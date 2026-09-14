@@ -450,13 +450,13 @@
             {
                 "Name": "webssh",
                 "Path": "apps/webssh/webssh",
-                "Sha256": "f9de6b42b3c334e587dc6f3154007ae5fc464f145a7ba01dfcdf4a5fffb271ed",
+                "Sha256": "6d7007dea8a9e9360eb35c74fba0ff00e54163ec86eacf6f464ed6611488003a",
                 "Mode": "0755"
             },
             {
                 "Name": "webssh-dl",
                 "Path": "apps/webssh/webssh-dl",
-                "Sha256": "7aae19ab9733daf031fbc7b8d1a40fa00b895f4669f84129e760821c94766aec",
+                "Sha256": "481c0b3426e722198c07cde6435957ca1796a242ac63dd83b3e5db349d2cc1fd",
                 "Mode": "0755"
             }
         ],
