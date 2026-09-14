@@ -998,7 +998,7 @@
     </div>
 
     <script>
-        const { createApp, ref, reactive, onMounted, nextTick, computed } = Vue;
+        const { createApp, ref, reactive, onMounted, nextTick, computed, watch } = Vue;
 
         createApp({
             setup() {
@@ -1442,8 +1442,23 @@
                     try {
                         const res = await fetch('https://raw.githubusercontent.com/fw867/unifi-softcenterstore/master/apps/apps.json?_t=' + Date.now());
                         onlineStore.value = await res.json();
-                    } catch (e) { } finally { isFetchingStore.value = false; }
+                    } catch (e) { } finally {
+                        isFetchingStore.value = false;
+                        // 列表整段重绘后必须重跑 createIcons（双 nextTick 等 DOM patch 完成）
+                        nextTick(() => {
+                            nextTick(() => {
+                                try { lucide.createIcons(); } catch (e) { }
+                            });
+                        });
+                    }
                 };
+
+                // 刷新结束 / 可更新数量变化时，重绘后的 data-lucide 需要重新实例化
+                watch([isFetchingStore, () => appUpdates.value.length], () => {
+                    nextTick(() => {
+                        try { lucide.createIcons(); } catch (e) { }
+                    });
+                });
 
                 const updateAppConfigFromCloud = async (app) => {
                     if (!confirm(`确定要从云端获取 "${app.name}" 的最新系统配置参数并覆盖本地吗？\n(注意：这只会更新系统运行参数，不会改变您的开机自启状态)`)) return;
