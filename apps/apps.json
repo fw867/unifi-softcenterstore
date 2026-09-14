@@ -108,7 +108,7 @@
             {
                 "Name": "koolss-ssrule",
                 "Path": "apps/koolss/koolss-ssrule",
-                "Sha256": "3572da0fc7d4fef85f772bf827b056e24e4f32ac28e8b41e4e2c11291dc529b0",
+                "Sha256": "4e765ab7f8bde47b145b53394ef9a152b0e55ad04b891ab17b33ba0642083b41",
                 "Mode": "0755"
             },
             {
