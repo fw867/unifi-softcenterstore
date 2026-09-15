@@ -995,7 +995,7 @@
         "Id": "fakehttp",
         "Name": "FakeHTTP",
         "Type": "Binary Core",
-        "Version": "1.0.2",
+        "Version": "1.0.3",
         "Description": "将 TCP 连接伪装为 HTTP/HTTPS 以规避 DPI（基于 nftables/NFQUEUE）。",
         "Icon": "shield",
         "StartCommand": "/data/softcenter/bin/fakehttp start",
@@ -1047,9 +1047,9 @@
                             "Key": "FAKEHTTP_IFACE",
                             "Label": "网络接口",
                             "Type": "text",
-                            "Default": "",
-                            "Placeholder": "留空=自动探测 WAN",
-                            "Help": "对应 -i；留空时从 /etc/ppp/peers/ppp0 或默认路由自动探测（如 eth6）"
+                            "Default": "ppp0",
+                            "Placeholder": "ppp0",
+                            "Help": "对应 -i；默认 ppp0。清空则自动探测（ppp0 → PPPoE 物理口 → 默认路由）"
                         }
                     ]
                 },
@@ -1094,7 +1094,7 @@
         "Id": "fakesip",
         "Name": "FakeSIP",
         "Type": "Binary Core",
-        "Version": "1.0.2",
+        "Version": "1.0.3",
         "Description": "将 UDP 流量伪装为 SIP 以规避 DPI（基于 nftables/NFQUEUE）。",
         "Icon": "radio",
         "StartCommand": "/data/softcenter/bin/fakesip start",
@@ -1129,9 +1129,9 @@
                             "Key": "FAKESIP_IFACE",
                             "Label": "网络接口",
                             "Type": "text",
-                            "Default": "",
-                            "Placeholder": "留空=自动探测 WAN",
-                            "Help": "对应 -i；留空时从 /etc/ppp/peers/ppp0 或默认路由自动探测（如 eth6）"
+                            "Default": "ppp0",
+                            "Placeholder": "ppp0",
+                            "Help": "对应 -i；默认 ppp0。清空则自动探测（ppp0 → PPPoE 物理口 → 默认路由）"
                         },
                         {
                             "Key": "FAKESIP_URI",

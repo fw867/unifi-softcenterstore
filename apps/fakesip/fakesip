@@ -58,17 +58,17 @@ is_running() {
     pgrep -x fakesip-core >/dev/null 2>&1
 }
 
-# 自动探测 WAN 物理口：优先 /etc/ppp/peers/ppp0（如 eth6），其次默认路由
+# 自动探测 WAN：优先 ppp0，其次 PPPoE 物理口 / 默认路由
 detect_wan_iface() {
     local iface=""
-    if [ -f /etc/ppp/peers/ppp0 ]; then
+    if [ -d /sys/class/net/ppp0 ]; then
+        iface="ppp0"
+    fi
+    if [ -z "$iface" ] && [ -f /etc/ppp/peers/ppp0 ]; then
         iface=$(sed -n 's/^plugin[[:space:]].*[[:space:]]\([^[:space:]]*\)[[:space:]]*$/\1/p' /etc/ppp/peers/ppp0 | head -n1)
     fi
     if [ -z "$iface" ]; then
         iface=$(ip -4 route show default 2>/dev/null | sed -n 's/.*dev \([^[:space:]]*\).*/\1/p' | head -n1)
-    fi
-    if [ -z "$iface" ] && [ -d /sys/class/net/ppp0 ]; then
-        iface="ppp0"
     fi
     printf '%s' "$iface"
 }
