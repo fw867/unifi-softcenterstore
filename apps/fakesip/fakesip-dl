@@ -1,0 +1,229 @@
+#!/bin/sh
+
+# UniFi SoftCenter · 下载最新 FakeSIP (linux-arm64)
+# https://github.com/MikeWang000000/FakeSIP/releases
+
+alias echo_date='echo 【$(date "+%Y年%m月%d日 %H:%M:%S")】:'
+
+BIN="/data/softcenter/bin/fakesip-core"
+WRAPPER="/data/softcenter/bin/fakesip"
+VER_FILE="/data/softcenter/bin/fakesip-core.version"
+DL_DIR="/tmp/fakesip_download"
+ZIP_NAME="fakesip-linux-arm64.tar.gz"
+API_LATEST="https://api.github.com/repos/MikeWang000000/FakeSIP/releases/latest"
+FORCE_DOWNLOAD="${FORCE_DOWNLOAD:-0}"
+SSUP_NO_START="${SSUP_NO_START:-0}"
+
+# 代理：读软件中心「系统设置 → 全局更新代理」
+SC_PROXY=$(sed -n 's/.*"LocalProxy"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' /data/softcenter/config.json 2>/dev/null | head -n1)
+CURL_OPT=""
+if [ -n "$SC_PROXY" ]; then
+    CURL_OPT="-x $SC_PROXY"
+    echo_date "升级代理（全局更新代理）: $SC_PROXY"
+else
+    echo_date "未配置全局更新代理，直连 GitHub"
+fi
+
+arch=$(uname -m)
+case $arch in
+    aarch64|arm64) ;;
+    *)
+        echo_date "暂不支持的架构: $arch（仅 arm64）"
+        exit 1
+        ;;
+esac
+
+is_valid_version() {
+    echo "$1" | grep -Eq '^[0-9]+(\.[0-9]+)+$'
+}
+
+# 只读版本文件，禁止用二进制探测（可能拉起服务）
+get_local_version() {
+    local v=""
+    if [ -f "$VER_FILE" ]; then
+        v=$(tr -d ' \r\n' < "$VER_FILE")
+    fi
+    printf '%s' "$v"
+}
+
+human_size() {
+    awk -v b="${1:-0}" 'BEGIN{
+        split("B KB MB GB", u, " ")
+        i = 1
+        while (b >= 1024 && i < 4) { b /= 1024; i++ }
+        if (i == 1) printf "%d %s", b, u[i]
+        else printf "%.1f %s", b, u[i]
+    }'
+}
+
+download_with_progress() {
+    local url="$1"
+    local out="$2"
+    local err="/tmp/fakesip_curl.err"
+    local pid last=0 p got
+
+    : > "$err"
+    curl $CURL_OPT -fL --connect-timeout 15 --max-time 300 -o "$out" "$url" 2>"$err" &
+    pid=$!
+
+    while kill -0 "$pid" 2>/dev/null; do
+        sleep 1
+        p=$(tr '\r' '\n' < "$err" 2>/dev/null | sed -n 's/.*[[:space:]]\([0-9][0-9]*\)[[:space:]]*%.*/\1/p' | tail -n1)
+        p=${p:-0}
+        if [ "$p" -ge $((last + 10)) ] || [ "$p" -ge 100 ]; then
+            got=$(wc -c < "$out" 2>/dev/null || echo 0)
+            echo_date "▸ 进度 ${p}%  已下载 $(human_size "$got")"
+            last=$p
+        fi
+    done
+
+    wait "$pid"
+}
+
+is_elf() {
+    [ -f "$1" ] && [ -s "$1" ] || return 1
+    [ "$(dd if="$1" bs=1 count=4 2>/dev/null | od -An -tx1 | tr -d ' \n')" = "7f454c46" ]
+}
+
+echo_date "查询 GitHub latest release..."
+LATEST_JSON=$(curl $CURL_OPT --connect-timeout 10 --max-time 30 -fsSL "$API_LATEST")
+if [ -z "$LATEST_JSON" ]; then
+    echo_date "获取 latest 失败，请检查网络或全局更新代理后重试"
+    exit 1
+fi
+
+TAG=$(printf '%s' "$LATEST_JSON" | grep -m1 '"tag_name"' | sed -E 's/.*"tag_name"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/')
+# 精确匹配 arm64 包，避免误下其它架构
+DL_URL=$(printf '%s' "$LATEST_JSON" | grep -oE "https://[^\"]*${ZIP_NAME}" | head -n1)
+# digest 与包名配对
+ZIP_SHA256=$(printf '%s' "$LATEST_JSON" | tr ',' '\n' | awk -v want="$ZIP_NAME" '
+{
+    if ($0 ~ /"name"[[:space:]]*:/) {
+        n = $0
+        sub(/.*"name"[[:space:]]*:[[:space:]]*"/, "", n)
+        sub(/".*/, "", n)
+        name = n
+    }
+    if (name == want && $0 ~ /sha256:[a-fA-F0-9]/) {
+        h = $0
+        sub(/.*sha256:/, "", h)
+        sub(/".*/, "", h)
+        gsub(/[[:space:]]/, "", h)
+        print h
+        exit
+    }
+}')
+
+if [ -z "$DL_URL" ]; then
+    echo_date "未找到 ${ZIP_NAME} 的下载地址（tag=${TAG:-?}）"
+    exit 1
+fi
+if [ -z "$ZIP_SHA256" ]; then
+    echo_date "Release 资源缺少 SHA256 digest，为安全起见中止"
+    echo_date "  下载地址: $DL_URL"
+    exit 1
+fi
+
+# tag 形如 0.9.1（无 v 前缀）
+ONLINE_VER=$(printf '%s' "$TAG" | sed 's/^[vV]//')
+if ! is_valid_version "$ONLINE_VER"; then
+    echo_date "解析线上版本号失败（得到：${TAG:-空}），已中止"
+    exit 1
+fi
+echo_date "线上最新版本: v${ONLINE_VER}"
+
+if [ -x "$BIN" ] && [ "$FORCE_DOWNLOAD" != "1" ]; then
+    CUR_VER=$(get_local_version)
+    if [ -n "$CUR_VER" ]; then
+        echo_date "当前已安装版本: v${CUR_VER}"
+        if [ "$CUR_VER" = "$ONLINE_VER" ]; then
+            echo_date "本地已是最新版本，无需更新"
+            if [ "$SSUP_NO_START" != "1" ] && [ -x "$WRAPPER" ]; then
+                "$WRAPPER" start
+            fi
+            exit 0
+        fi
+    else
+        echo_date "无法识别本地版本，将强制下载覆盖"
+    fi
+else
+    echo_date "本地无核心或指定强制更新，开始下载"
+fi
+
+echo_date "下载: $DL_URL"
+echo_date "期望校验: $ZIP_SHA256"
+
+rm -rf "$DL_DIR"
+mkdir -p "$DL_DIR" || exit 1
+
+echo_date "▸ 下载更新包"
+if ! download_with_progress "$DL_URL" "${DL_DIR}/${ZIP_NAME}" || [ ! -s "${DL_DIR}/${ZIP_NAME}" ]; then
+    echo_date "下载失败"
+    rm -rf "$DL_DIR"
+    exit 1
+fi
+ZIP_SIZE=$(wc -c < "${DL_DIR}/${ZIP_NAME}" | tr -d ' ')
+echo_date "  下载完成: $(human_size "$ZIP_SIZE")"
+
+echo_date "▸ 比对 SHA256"
+LOCAL_HASH=$(sha256sum "${DL_DIR}/${ZIP_NAME}" | awk '{print $1}')
+if [ "$LOCAL_HASH" != "$ZIP_SHA256" ]; then
+    echo_date "SHA256 校验失败，已中止，不会覆盖本地文件"
+    echo_date "  期望: $ZIP_SHA256"
+    echo_date "  实际: $LOCAL_HASH"
+    rm -rf "$DL_DIR"
+    exit 1
+fi
+echo_date "✅ 校验通过  $LOCAL_HASH"
+
+echo_date "▸ 解压"
+tar -xzf "${DL_DIR}/${ZIP_NAME}" -C "$DL_DIR" || {
+    echo_date "解压失败"
+    rm -rf "$DL_DIR"
+    exit 1
+}
+
+SRC=""
+for f in fakesip; do
+    if is_elf "${DL_DIR}/${f}"; then
+        SRC="${DL_DIR}/${f}"
+        break
+    fi
+done
+if [ -z "$SRC" ]; then
+    for f in $(find "$DL_DIR" -type f ! -name '*.tar.gz' ! -name '*.tgz' 2>/dev/null); do
+        if is_elf "$f"; then
+            SRC="$f"
+            break
+        fi
+    done
+fi
+if [ -z "$SRC" ] || ! is_elf "$SRC"; then
+    echo_date "未在压缩包中找到 ELF 可执行文件，已中止安装"
+    ls -la "$DL_DIR" 2>/dev/null
+    rm -rf "$DL_DIR"
+    exit 1
+fi
+echo_date "选用可执行文件: $SRC ($(wc -c < "$SRC" | tr -d ' ') bytes)"
+
+mkdir -p /data/softcenter/bin
+if pgrep -x fakesip-core >/dev/null 2>&1; then
+    [ -x "$WRAPPER" ] && "$WRAPPER" stop
+fi
+cp -f "$SRC" "$BIN"
+chmod +x "$BIN"
+if ! is_elf "$BIN"; then
+    echo_date "安装后校验失败：$BIN 不是有效 ELF，已删除"
+    rm -f "$BIN"
+    exit 1
+fi
+printf '%s\n' "$ONLINE_VER" > "$VER_FILE"
+echo_date "已安装 ${BIN} v${ONLINE_VER}"
+
+rm -rf "$DL_DIR"
+
+if [ "$SSUP_NO_START" = "1" ]; then
+    echo_date "SSUP_NO_START=1，跳过拉起 fakesip"
+elif [ -x "$WRAPPER" ]; then
+    "$WRAPPER" start
+fi

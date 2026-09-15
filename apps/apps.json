@@ -995,7 +995,7 @@
         "Id": "fakehttp",
         "Name": "FakeHTTP",
         "Type": "Binary Core",
-        "Version": "1.0.0",
+        "Version": "1.0.2",
         "Description": "将 TCP 连接伪装为 HTTP/HTTPS 以规避 DPI（基于 nftables/NFQUEUE）。",
         "Icon": "shield",
         "StartCommand": "/data/softcenter/bin/fakehttp start",
@@ -1048,8 +1048,8 @@
                             "Label": "网络接口",
                             "Type": "text",
                             "Default": "",
-                            "Placeholder": "留空=全部接口 (-a)",
-                            "Help": "对应 -i；如 br0、eth0。留空则作用于所有接口"
+                            "Placeholder": "留空=自动探测 WAN",
+                            "Help": "对应 -i；留空时从 /etc/ppp/peers/ppp0 或默认路由自动探测（如 eth6）"
                         }
                     ]
                 },
@@ -1072,10 +1072,107 @@
                             "Help": "对应 -s；日志中不记录 IP"
                         },
                         {
+                            "Key": "FAKEHTTP_DEBUG",
+                            "Label": "调试日志",
+                            "Type": "switch",
+                            "Default": "0",
+                            "Help": "开启后核心运行日志写入下方日志路径（fakehttp -w）"
+                        },
+                        {
                             "Key": "FAKEHTTP_LOG",
                             "Label": "日志路径",
                             "Type": "path",
                             "Default": "/var/log/fakehttp.log",
+                            "Monospace": true
+                        }
+                    ]
+                }
+            ]
+        }
+    },
+    {
+        "Id": "fakesip",
+        "Name": "FakeSIP",
+        "Type": "Binary Core",
+        "Version": "1.0.2",
+        "Description": "将 UDP 流量伪装为 SIP 以规避 DPI（基于 nftables/NFQUEUE）。",
+        "Icon": "radio",
+        "StartCommand": "/data/softcenter/bin/fakesip start",
+        "StopCommand": "/data/softcenter/bin/fakesip stop",
+        "StatusCommand": "/data/softcenter/bin/fakesip status",
+        "IsAutoStart": 0,
+        "ConfigPath": "/data/softcenter/config/fakesip.env",
+        "ConfigKeys": "",
+        "LogPath": "/var/log/fakesip.log",
+        "CustomCommands": "[{\"name\":\"升级fakesip\",\"command\":\"/data/softcenter/bin/fakesip-dl\"},{\"name\":\"强制重下核心\",\"command\":\"FORCE_DOWNLOAD=1 /data/softcenter/bin/fakesip-dl\"}]",
+        "Files": [
+            {
+                "Name": "fakesip",
+                "Path": "apps/fakesip/fakesip",
+                "Sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+                "Mode": "0755"
+            },
+            {
+                "Name": "fakesip-dl",
+                "Path": "apps/fakesip/fakesip-dl",
+                "Sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+                "Mode": "0755"
+            }
+        ],
+        "ConfigSchema": {
+            "Sections": [
+                {
+                    "Title": "运行设置",
+                    "Tab": "基本设置",
+                    "Fields": [
+                        {
+                            "Key": "FAKESIP_IFACE",
+                            "Label": "网络接口",
+                            "Type": "text",
+                            "Default": "",
+                            "Placeholder": "留空=自动探测 WAN",
+                            "Help": "对应 -i；留空时从 /etc/ppp/peers/ppp0 或默认路由自动探测（如 eth6）"
+                        },
+                        {
+                            "Key": "FAKESIP_URI",
+                            "Label": "SIP URI",
+                            "Type": "text",
+                            "Default": "",
+                            "Placeholder": "可选，对应 -u",
+                            "Help": "自定义 UDP 负载中的 SIP URI；留空使用程序默认值"
+                        }
+                    ]
+                },
+                {
+                    "Title": "进阶选项",
+                    "Tab": "进阶设置",
+                    "Fields": [
+                        {
+                            "Key": "FAKESIP_USE_IPTABLES",
+                            "Label": "使用 iptables",
+                            "Type": "switch",
+                            "Default": "0",
+                            "Help": "对应 -z；默认优先 nftables"
+                        },
+                        {
+                            "Key": "FAKESIP_SILENT",
+                            "Label": "静默模式",
+                            "Type": "switch",
+                            "Default": "0",
+                            "Help": "对应 -s；日志中不记录 IP"
+                        },
+                        {
+                            "Key": "FAKESIP_DEBUG",
+                            "Label": "调试日志",
+                            "Type": "switch",
+                            "Default": "0",
+                            "Help": "开启后核心运行日志写入下方日志路径（fakesip -w）"
+                        },
+                        {
+                            "Key": "FAKESIP_LOG",
+                            "Label": "日志路径",
+                            "Type": "path",
+                            "Default": "/var/log/fakesip.log",
                             "Monospace": true
                         }
                     ]

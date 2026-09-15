@@ -1,12 +1,12 @@
 #!/bin/sh
 
-# UniFi SoftCenter · FakeHTTP (DPI 协议伪装)
-# 面板配置：/data/softcenter/config/fakehttp.env
-# 二进制：/data/softcenter/bin/fakehttp-core（缺则由 fakehttp-dl 下载）
-# 文档：https://github.com/MikeWang000000/FakeHTTP/wiki
+# UniFi SoftCenter · FakeSIP (UDP 协议伪装为 SIP)
+# 面板配置：/data/softcenter/config/fakesip.env
+# 二进制：/data/softcenter/bin/fakesip-core（缺则由 fakesip-dl 下载）
+# 文档：https://github.com/MikeWang000000/FakeSIP/wiki
 
 if [ "$1" = "status" ]; then
-    if pgrep -x fakehttp-core >/dev/null 2>&1; then
+    if pgrep -x fakesip-core >/dev/null 2>&1; then
         echo "running"
         exit 0
     fi
@@ -14,24 +14,23 @@ if [ "$1" = "status" ]; then
     exit 1
 fi
 
-CONFIG="/data/softcenter/config/fakehttp.env"
+CONFIG="/data/softcenter/config/fakesip.env"
 [ -f "$CONFIG" ] && . "$CONFIG"
 
-BIN="/data/softcenter/bin/fakehttp-core"
-DL="/data/softcenter/bin/fakehttp-dl"
-LOG="${FAKEHTTP_LOG:-/var/log/fakehttp.log}"
+BIN="/data/softcenter/bin/fakesip-core"
+DL="/data/softcenter/bin/fakesip-dl"
+LOG="${FAKESIP_LOG:-/var/log/fakesip.log}"
 
-# 混淆域名：HTTP 必填，HTTPS 可选
-HTTP_HOST="${FAKEHTTP_HOST:-}"
-HTTPS_HOST="${FAKEHTTP_HTTPS_HOST:-}"
 # 网卡：空则 -a 全部接口
-IFACE="${FAKEHTTP_IFACE:-}"
+IFACE="${FAKESIP_IFACE:-}"
+# 自定义 SIP URI（可选，对应 -u）
+SIP_URI="${FAKESIP_URI:-}"
 # 使用 iptables 而不是 nft
-USE_IPTABLES="${FAKEHTTP_USE_IPTABLES:-0}"
+USE_IPTABLES="${FAKESIP_USE_IPTABLES:-0}"
 # 静默模式（不记录 IP）
-SILENT="${FAKEHTTP_SILENT:-0}"
-# 调试日志：1 时 fakehttp -w 写入插件日志；0 时不写核心日志
-DEBUG="${FAKEHTTP_DEBUG:-0}"
+SILENT="${FAKESIP_SILENT:-0}"
+# 调试日志：1 时 fakesip -w 写入插件日志；0 时不写核心日志
+DEBUG="${FAKESIP_DEBUG:-0}"
 
 log_date() {
     local line="【$(date '+%Y年%m月%d日 %H:%M:%S')】: $1"
@@ -56,7 +55,7 @@ ensure_bin() {
 }
 
 is_running() {
-    pgrep -x fakehttp-core >/dev/null 2>&1
+    pgrep -x fakesip-core >/dev/null 2>&1
 }
 
 # 自动探测 WAN 物理口：优先 /etc/ppp/peers/ppp0（如 eth6），其次默认路由
@@ -74,86 +73,77 @@ detect_wan_iface() {
     printf '%s' "$iface"
 }
 
-start_fakehttp() {
-    ensure_bin || { log_date "FakeHTTP 二进制不可用"; exit 1; }
+start_fakesip() {
+    ensure_bin || { log_date "FakeSIP 二进制不可用"; exit 1; }
     if is_running; then
-        echo "fakehttp 已在运行"
+        echo "fakesip 已在运行"
         return 0
     fi
 
-    if [ -z "$HTTP_HOST" ] && [ -z "$HTTPS_HOST" ]; then
-        log_date "未配置混淆域名，请在面板填写 FAKEHTTP_HOST 或 FAKEHTTP_HTTPS_HOST"
-        echo "请先配置混淆域名后再启动"
-        exit 1
-    fi
-
-    ARGS=""
-    [ -n "$HTTP_HOST" ] && ARGS="$ARGS -h \"$HTTP_HOST\""
-    [ -n "$HTTPS_HOST" ] && ARGS="$ARGS -e \"$HTTPS_HOST\""
     if [ -n "$IFACE" ]; then
-        ARGS="$ARGS -i \"$IFACE\""
+        ARGS="-i \"$IFACE\""
         log_date "使用配置网卡: $IFACE"
     else
         WAN_IF=$(detect_wan_iface)
         if [ -n "$WAN_IF" ]; then
-            ARGS="$ARGS -i \"$WAN_IF\""
+            ARGS="-i \"$WAN_IF\""
             log_date "自动探测 WAN 网卡: $WAN_IF"
         else
-            ARGS="$ARGS -a"
+            ARGS="-a"
             log_date "未能探测 WAN 网卡，作用于全部接口 (-a)"
         fi
     fi
+    [ -n "$SIP_URI" ] && ARGS="$ARGS -u \"$SIP_URI\""
     [ "$USE_IPTABLES" = "1" ] && ARGS="$ARGS -z"
     [ "$SILENT" = "1" ] && ARGS="$ARGS -s"
     if [ "$DEBUG" = "1" ]; then
+        # 开启调试：核心运行日志写入插件日志（LogPath）
         mkdir -p "$(dirname "$LOG")"
         touch "$LOG" 2>/dev/null
         ARGS="$ARGS -w \"$LOG\""
         log_date "调试日志已开启 → $LOG"
     fi
 
-    # 官方支持 -d 守护进程；用 nohup 前台方式便于 SoftCenter 管进程
-    log_date "启动 FakeHTTP ARGS=$ARGS"
+    log_date "启动 FakeSIP ARGS=$ARGS"
     eval "nohup \"$BIN\" $ARGS >/dev/null 2>&1 &"
     sleep 1
     if is_running; then
-        log_date "FakeHTTP 启动成功 PID=$(pgrep -x fakehttp-core | head -n 1)"
-        echo "FakeHTTP 已启动"
+        log_date "FakeSIP 启动成功 PID=$(pgrep -x fakesip-core | head -n 1)"
+        echo "FakeSIP 已启动"
     else
-        log_date "FakeHTTP 启动失败，详见 $LOG"
+        log_date "FakeSIP 启动失败，详见 $LOG"
         echo "启动失败，请查看 $LOG"
         tail -n 20 "$LOG" 2>/dev/null
         exit 1
     fi
 }
 
-stop_fakehttp() {
+stop_fakesip() {
     if is_running; then
-        # 优先用官方 -k 清理 nft/iptables 规则
         [ -x "$BIN" ] && "$BIN" -k 2>/dev/null
         sleep 1
-        pkill -x fakehttp-core 2>/dev/null
+        pkill -x fakesip-core 2>/dev/null
         sleep 1
-        pkill -9 -x fakehttp-core 2>/dev/null
-        log_date "FakeHTTP 已停止"
-        echo "FakeHTTP 已停止"
+        pkill -9 -x fakesip-core 2>/dev/null
+        log_date "FakeSIP 已停止"
+        echo "FakeSIP 已停止"
     else
         [ -x "$BIN" ] && "$BIN" -k 2>/dev/null
-        echo "FakeHTTP 未在运行"
+        echo "FakeSIP 未在运行"
     fi
 }
 
 case "${1}" in
 start)
-    start_fakehttp
+    start_fakesip
     ;;
 stop)
-    stop_fakehttp
+    stop_fakesip
     ;;
 restart)
-    stop_fakehttp
+    stop_fakesip
     sleep 1
-    start_fakehttp
+    start_fakesip
     ;;
 status)
     exit 1
