@@ -31,6 +31,9 @@ USE_IPTABLES="${FAKESIP_USE_IPTABLES:-0}"
 SILENT="${FAKESIP_SILENT:-0}"
 # 调试日志：1 时 fakesip -w 写入插件日志；0 时不写核心日志
 DEBUG="${FAKESIP_DEBUG:-0}"
+# 动态 TTL：开启后将 TTL 提升至估算跃点数的 TTL_PCT%（对应 -y）
+DYN_TTL="${FAKESIP_DYN_TTL:-0}"
+TTL_PCT="${FAKESIP_TTL_PCT:-100}"
 
 log_date() {
     local line="【$(date '+%Y年%m月%d日 %H:%M:%S')】: $1"
@@ -96,6 +99,13 @@ start_fakesip() {
     [ -n "$SIP_URI" ] && ARGS="$ARGS -u \"$SIP_URI\""
     [ "$USE_IPTABLES" = "1" ] && ARGS="$ARGS -z"
     [ "$SILENT" = "1" ] && ARGS="$ARGS -s"
+    if [ "$DYN_TTL" = "1" ]; then
+        case "$TTL_PCT" in
+            ''|*[!0-9]*) TTL_PCT=100 ;;
+        esac
+        ARGS="$ARGS -y $TTL_PCT"
+        log_date "动态 TTL 已开启，提升至估算跃点数的 ${TTL_PCT}%"
+    fi
     if [ "$DEBUG" = "1" ]; then
         # 开启调试：核心运行日志写入插件日志（LogPath）
         mkdir -p "$(dirname "$LOG")"
@@ -104,8 +114,10 @@ start_fakesip() {
         log_date "调试日志已开启 → $LOG"
     fi
 
+    # 默认 -d 守护进程运行（官方推荐）
+    ARGS="-d $ARGS"
     log_date "启动 FakeSIP ARGS=$ARGS"
-    eval "nohup \"$BIN\" $ARGS >/dev/null 2>&1 &"
+    eval "\"$BIN\" $ARGS"
     sleep 1
     if is_running; then
         log_date "FakeSIP 启动成功 PID=$(pgrep -x fakesip-core | head -n 1)"

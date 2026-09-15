@@ -122,9 +122,10 @@ start_fakehttp() {
         log_date "调试日志已开启 → $LOG"
     fi
 
-    # 官方支持 -d 守护进程；用 nohup 前台方式便于 SoftCenter 管进程
+    # 默认 -d 守护进程运行（官方推荐）
+    ARGS="-d $ARGS"
     log_date "启动 FakeHTTP ARGS=$ARGS"
-    eval "nohup \"$BIN\" $ARGS >/dev/null 2>&1 &"
+    eval "\"$BIN\" $ARGS"
     sleep 1
     if is_running; then
         log_date "FakeHTTP 启动成功 PID=$(pgrep -x fakehttp-core | head -n 1)"
