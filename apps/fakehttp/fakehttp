@@ -34,7 +34,7 @@ SILENT="${FAKEHTTP_SILENT:-0}"
 DEBUG="${FAKEHTTP_DEBUG:-0}"
 # 动态 TTL：开启后将 TTL 提升至估算跃点数的 TTL_PCT%（对应 -y）
 DYN_TTL="${FAKEHTTP_DYN_TTL:-0}"
-TTL_PCT="${FAKEHTTP_TTL_PCT:-100}"
+TTL_PCT="${FAKEHTTP_TTL_PCT:-50}"
 
 log_date() {
     local line="【$(date '+%Y年%m月%d日 %H:%M:%S')】: $1"

@@ -2033,7 +2033,12 @@
                                 isSavingConfig.value = false;
                                 return;
                             }
-                            payload = { ...configValues.value };
+                            // number 输入会得到 JS number；后端 Dictionary<string,string> 需要全字符串
+                            payload = {};
+                            for (const k in configValues.value) {
+                                const v = configValues.value[k];
+                                payload[k] = (v === undefined || v === null) ? '' : String(v);
+                            }
                         } else if (configMode.value === 'legacy') {
                             for (const k in appConfig.value) payload[k] = appConfig.value[k].value;
                         } else {
