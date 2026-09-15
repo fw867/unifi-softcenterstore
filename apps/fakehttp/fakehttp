@@ -32,6 +32,9 @@ USE_IPTABLES="${FAKEHTTP_USE_IPTABLES:-0}"
 SILENT="${FAKEHTTP_SILENT:-0}"
 # 调试日志：1 时 fakehttp -w 写入插件日志；0 时不写核心日志
 DEBUG="${FAKEHTTP_DEBUG:-0}"
+# 动态 TTL：开启后将 TTL 提升至估算跃点数的 TTL_PCT%（对应 -y）
+DYN_TTL="${FAKEHTTP_DYN_TTL:-0}"
+TTL_PCT="${FAKEHTTP_TTL_PCT:-100}"
 
 log_date() {
     local line="【$(date '+%Y年%m月%d日 %H:%M:%S')】: $1"
@@ -105,6 +108,13 @@ start_fakehttp() {
     fi
     [ "$USE_IPTABLES" = "1" ] && ARGS="$ARGS -z"
     [ "$SILENT" = "1" ] && ARGS="$ARGS -s"
+    if [ "$DYN_TTL" = "1" ]; then
+        case "$TTL_PCT" in
+            ''|*[!0-9]*) TTL_PCT=100 ;;
+        esac
+        ARGS="$ARGS -y $TTL_PCT"
+        log_date "动态 TTL 已开启，提升至估算跃点数的 ${TTL_PCT}%"
+    fi
     if [ "$DEBUG" = "1" ]; then
         mkdir -p "$(dirname "$LOG")"
         touch "$LOG" 2>/dev/null
