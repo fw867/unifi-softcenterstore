@@ -607,9 +607,11 @@ void SetInstallProgress(string appId, InstallProgress p) => InstallProgressStore
 app.MapPost("/api/apps/{id}/install", async (string id) => {
     using var conn = new SqliteConnection(DbPath); conn.Open();
     using var cmd = conn.CreateCommand();
-    cmd.CommandText = "SELECT Files, StopCommand FROM apps_registry WHERE Id=@id";
+    cmd.CommandText = "SELECT Files, StopCommand, StartCommand, StatusCommand FROM apps_registry WHERE Id=@id";
     cmd.Parameters.AddWithValue("@id", id);
     string? stopCmd = null;
+    string? startCmd = null;
+    string? statusCmd = null;
     string? filesJson;
     using (var reader = cmd.ExecuteReader())
     {
@@ -620,6 +622,8 @@ app.MapPost("/api/apps/{id}/install", async (string id) => {
         }
         filesJson = reader.IsDBNull(0) ? null : reader.GetString(0);
         stopCmd = reader.IsDBNull(1) ? null : reader.GetString(1);
+        startCmd = reader.IsDBNull(2) ? null : reader.GetString(2);
+        statusCmd = reader.IsDBNull(3) ? null : reader.GetString(3);
     }
     if (string.IsNullOrWhiteSpace(filesJson))
     {
@@ -715,11 +719,29 @@ app.MapPost("/api/apps/{id}/install", async (string id) => {
         SetInstallProgress(id, new InstallProgress(id, "downloading", i + 1, files.Count, f.Name, bytes.Length, bytes.Length, $"{f.Name} 校验通过", false, false));
     }
 
-    // 阶段 2：先停掉运行中的进程，避免替换正在执行的二进制（Text file busy）
-    if (!string.IsNullOrWhiteSpace(stopCmd))
+    // 阶段 2：若插件正在运行则先停掉，替换完成后按原状态恢复
+    var wasRunning = false;
+    if (!string.IsNullOrWhiteSpace(statusCmd))
+    {
+        try
+        {
+            using var st = Process.Start(new ProcessStartInfo
+            {
+                FileName = "/bin/bash",
+                Arguments = $"-c \"{statusCmd}\"",
+                UseShellExecute = false,
+                CreateNoWindow = true
+            });
+            st?.WaitForExit(5000);
+            wasRunning = st?.ExitCode == 0;
+        }
+        catch { }
+    }
+
+    if (wasRunning && !string.IsNullOrWhiteSpace(stopCmd))
     {
         SetInstallProgress(id, new InstallProgress(id, "writing", 0, pending.Count, "", 0, null, "正在停止运行中的插件…", false, false));
-        logs.Add($"执行停止命令: {stopCmd}");
+        logs.Add($"插件原为运行中，执行停止: {stopCmd}");
         try
         {
             using var stopP = Process.Start(new ProcessStartInfo
@@ -765,8 +787,31 @@ app.MapPost("/api/apps/{id}/install", async (string id) => {
         return Results.BadRequest(new InstallResult(false, logs, $"文件数量不完整（{pending.Count}/{files.Count}）"));
     }
 
+    // 更新前在运行的插件，替换成功后拉回原状态
+    if (wasRunning && !string.IsNullOrWhiteSpace(startCmd))
+    {
+        SetInstallProgress(id, new InstallProgress(id, "writing", pending.Count, pending.Count, "", 0, null, "正在恢复运行中的插件…", false, false));
+        logs.Add($"恢复启动: {startCmd}");
+        try
+        {
+            using var startP = Process.Start(new ProcessStartInfo
+            {
+                FileName = "/bin/bash",
+                Arguments = $"-c \"{startCmd}\"",
+                UseShellExecute = false,
+                CreateNoWindow = true
+            });
+            startP?.WaitForExit(30000);
+        }
+        catch { }
+        logs.Add("已按更新前状态重新启动插件");
+    }
+
     logs.Add($"全部 {pending.Count} 个文件下载、校验并替换成功");
-    SetInstallProgress(id, new InstallProgress(id, "done", pending.Count, pending.Count, "", 0, null, $"全部 {pending.Count} 个文件安装成功", true, true));
+    var doneMsg = wasRunning
+        ? $"全部 {pending.Count} 个文件安装成功，已恢复运行"
+        : $"全部 {pending.Count} 个文件安装成功";
+    SetInstallProgress(id, new InstallProgress(id, "done", pending.Count, pending.Count, "", 0, null, doneMsg, true, true));
     return Results.Ok(new InstallResult(true, logs, null));
 });
 

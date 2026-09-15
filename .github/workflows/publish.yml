@@ -4,6 +4,8 @@ on:
   push:
     tags:
       - 'v*'
+    branches:
+      - master
   workflow_dispatch:
 
 permissions:
@@ -12,6 +14,13 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+    # 推送到 master 时：仅当提交信息含 [publish] / [release] 才真正编译发版
+    # 打 tag（v*）或手动 workflow_dispatch 始终执行
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      github.ref_type == 'tag' ||
+      contains(github.event.head_commit.message, '[publish]') ||
+      contains(github.event.head_commit.message, '[release]')
     # UCG-Fiber 底层 GLIBC 2.31；debian:11 镜像与 archive/snapshot 包版本常年对不齐，
     # 改用仍在官方源维护的 ubuntu:20.04（同为 GLIBC 2.31）。
     container: ubuntu:20.04

@@ -1455,8 +1455,8 @@
                     }
                 };
 
-                // 刷新结束 / 可更新数量变化时，重绘后的 data-lucide 需要重新实例化
-                watch([isFetchingStore, () => appUpdates.value.length], () => {
+                // 刷新结束 / 可更新数量 / 商店 Tab 切换时，重绘后的 data-lucide 需要重新实例化
+                watch([isFetchingStore, addTab, () => appUpdates.value.length], () => {
                     nextTick(() => {
                         try { lucide.createIcons(); } catch (e) { }
                     });
