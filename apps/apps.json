@@ -1010,13 +1010,13 @@
             {
                 "Name": "fakehttp",
                 "Path": "apps/fakehttp/fakehttp",
-                "Sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+                "Sha256": "7df2b2c20888bd6e868293cfaad06821fe238bffceecb5e02bd1f7f5969e347d",
                 "Mode": "0755"
             },
             {
                 "Name": "fakehttp-dl",
                 "Path": "apps/fakehttp/fakehttp-dl",
-                "Sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+                "Sha256": "4883a0eda7888ceb48e0a9c318f24c6c0ff5b20050b09b3fd7447570ab49ef19",
                 "Mode": "0755"
             }
         ],
