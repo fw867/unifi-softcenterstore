@@ -119,6 +119,7 @@ using (var conn = new SqliteConnection(DbPath))
 }
 
 string bootLock = "/tmp/softcenter_booted.lock";
+string? DeviceModelCache = null;
 if (!File.Exists(bootLock))
 {
     try
@@ -1080,7 +1081,21 @@ app.MapGet("/api/system/info", () => {
         else { uptime = uptimeRaw; }
     }
 
-    return Results.Ok(new SystemInfo(rawVersion.Split('+')[0], "NativeAOT-.NET10", "UCG-Fiber", cpuTemp, sfpTemp, uptime));
+    // 设备型号：mca-cli-op info → Model: UniFi Cloud Gateway Fiber（进程开销大，缓存）
+    var model = DeviceModelCache;
+    if (string.IsNullOrEmpty(model))
+    {
+        var infoRaw = GetBashOutput("mca-cli-op info 2>/dev/null");
+        if (!string.IsNullOrEmpty(infoRaw))
+        {
+            var m = Regex.Match(infoRaw, @"^Model:\s*(.+)$", RegexOptions.Multiline);
+            if (m.Success) model = m.Groups[1].Value.Trim();
+        }
+        if (string.IsNullOrEmpty(model)) model = "UCG-Fiber";
+        DeviceModelCache = model;
+    }
+
+    return Results.Ok(new SystemInfo(rawVersion.Split('+')[0], "NativeAOT-.NET10", model, cpuTemp, sfpTemp, uptime));
 });
 
 app.MapGet("/api/system/config", () => Results.Ok(sysConfig));

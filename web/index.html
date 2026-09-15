@@ -186,6 +186,12 @@
             </nav>
 
             <div class="p-3 border-t border-gray-200/80 space-y-2">
+                <div v-show="sysInfo.Device"
+                    class="bg-white/60 border border-gray-200 rounded-xl px-3 py-2 flex items-center space-x-2"
+                    title="设备型号">
+                    <i data-lucide="server" class="w-3.5 h-3.5 text-blue-600 shrink-0"></i>
+                    <span class="text-[11px] font-medium text-gray-700 truncate">{{ sysInfo.Device }}</span>
+                </div>
                 <div class="grid grid-cols-3 gap-1.5">
                     <div class="bg-white/60 border border-gray-200 rounded-xl px-2 py-2 text-center"
                         title="CPU 温度">
@@ -1007,7 +1013,7 @@
                 const token = ref(localStorage.getItem('sc_token') || '');
                 const tokenInputType = ref('password');
 
-                const sysInfo = ref({ Version: '0.0.0', CpuTemp: '--', SfpTemp: '--', Uptime: '--' });
+                const sysInfo = ref({ Version: '0.0.0', Device: '', CpuTemp: '--', SfpTemp: '--', Uptime: '--' });
                 const apps = ref([]);
                 const cronJobs = ref([]);
 
@@ -1366,6 +1372,7 @@
                         const rawVersion = data.version || data.Version || '0.0.0';
                         sysInfo.value = {
                             Version: rawVersion.split('+')[0],
+                            Device: data.device || data.Device || '',
                             CpuTemp: data.cpuTemp || data.CpuTemp || '--',
                             SfpTemp: data.sfpTemp || data.SfpTemp || '--',
                             Uptime: data.uptime || data.Uptime || '--'
