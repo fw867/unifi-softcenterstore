@@ -1,0 +1,135 @@
+#!/bin/sh
+
+# UniFi SoftCenter · FakeHTTP (DPI 协议伪装)
+# 面板配置：/data/softcenter/config/fakehttp.env
+# 二进制：/data/softcenter/bin/fakehttp-core（缺则由 fakehttp-dl 下载）
+# 文档：https://github.com/MikeWang000000/FakeHTTP/wiki
+
+if [ "$1" = "status" ]; then
+    if pgrep -x fakehttp-core >/dev/null 2>&1; then
+        echo "running"
+        exit 0
+    fi
+    echo "stopped"
+    exit 1
+fi
+
+CONFIG="/data/softcenter/config/fakehttp.env"
+[ -f "$CONFIG" ] && . "$CONFIG"
+
+BIN="/data/softcenter/bin/fakehttp-core"
+DL="/data/softcenter/bin/fakehttp-dl"
+LOG="${FAKEHTTP_LOG:-/var/log/fakehttp.log}"
+
+# 混淆域名：HTTP 必填，HTTPS 可选
+HTTP_HOST="${FAKEHTTP_HOST:-}"
+HTTPS_HOST="${FAKEHTTP_HTTPS_HOST:-}"
+# 网卡：空则 -a 全部接口
+IFACE="${FAKEHTTP_IFACE:-}"
+# 使用 iptables 而不是 nft
+USE_IPTABLES="${FAKEHTTP_USE_IPTABLES:-0}"
+# 静默模式（不记录 IP）
+SILENT="${FAKEHTTP_SILENT:-0}"
+
+log_date() {
+    local line="【$(date '+%Y年%m月%d日 %H:%M:%S')】: $1"
+    echo "$line"
+    echo "$line" >> "$LOG"
+}
+
+ensure_bin() {
+    if [ -f "$BIN" ] && [ -x "$BIN" ]; then
+        magic=$(dd if="$BIN" bs=1 count=4 2>/dev/null | od -An -tx1 | tr -d ' \n')
+        [ "$magic" = "7f454c46" ] && return 0
+        log_date "$BIN 不是有效 ELF，强制重新下载"
+        FORCE_DOWNLOAD=1
+    fi
+    if [ -x "$DL" ]; then
+        SSUP_NO_START=1 FORCE_DOWNLOAD="${FORCE_DOWNLOAD:-1}" "$DL"
+    else
+        log_date "未找到下载脚本 $DL"
+        return 1
+    fi
+    [ -x "$BIN" ] || return 1
+}
+
+is_running() {
+    pgrep -x fakehttp-core >/dev/null 2>&1
+}
+
+start_fakehttp() {
+    ensure_bin || { log_date "FakeHTTP 二进制不可用"; exit 1; }
+    if is_running; then
+        echo "fakehttp 已在运行"
+        return 0
+    fi
+
+    if [ -z "$HTTP_HOST" ] && [ -z "$HTTPS_HOST" ]; then
+        log_date "未配置混淆域名，请在面板填写 FAKEHTTP_HOST 或 FAKEHTTP_HTTPS_HOST"
+        echo "请先配置混淆域名后再启动"
+        exit 1
+    fi
+
+    ARGS=""
+    [ -n "$HTTP_HOST" ] && ARGS="$ARGS -h \"$HTTP_HOST\""
+    [ -n "$HTTPS_HOST" ] && ARGS="$ARGS -e \"$HTTPS_HOST\""
+    if [ -n "$IFACE" ]; then
+        ARGS="$ARGS -i \"$IFACE\""
+    else
+        ARGS="$ARGS -a"
+    fi
+    [ "$USE_IPTABLES" = "1" ] && ARGS="$ARGS -z"
+    [ "$SILENT" = "1" ] && ARGS="$ARGS -s"
+    ARGS="$ARGS -w \"$LOG\""
+
+    # 官方支持 -d 守护进程；用 nohup 前台方式便于 SoftCenter 管进程
+    log_date "启动 FakeHTTP ARGS=$ARGS"
+    eval "nohup \"$BIN\" $ARGS >/dev/null 2>&1 &"
+    sleep 1
+    if is_running; then
+        log_date "FakeHTTP 启动成功 PID=$(pgrep -x fakehttp-core | head -n 1)"
+        echo "FakeHTTP 已启动"
+    else
+        log_date "FakeHTTP 启动失败，详见 $LOG"
+        echo "启动失败，请查看 $LOG"
+        tail -n 20 "$LOG" 2>/dev/null
+        exit 1
+    fi
+}
+
+stop_fakehttp() {
+    if is_running; then
+        # 优先用官方 -k 清理 nft/iptables 规则
+        [ -x "$BIN" ] && "$BIN" -k 2>/dev/null
+        sleep 1
+        pkill -x fakehttp-core 2>/dev/null
+        sleep 1
+        pkill -9 -x fakehttp-core 2>/dev/null
+        log_date "FakeHTTP 已停止"
+        echo "FakeHTTP 已停止"
+    else
+        [ -x "$BIN" ] && "$BIN" -k 2>/dev/null
+        echo "FakeHTTP 未在运行"
+    fi
+}
+
+case "${1}" in
+start)
+    start_fakehttp
+    ;;
+stop)
+    stop_fakehttp
+    ;;
+restart)
+    stop_fakehttp
+    sleep 1
+    start_fakehttp
+    ;;
+status)
+    exit 1
+    ;;
+*)
+    echo "Usage: $0 {start|stop|restart|status}"
+    exit 1
+    ;;
+esac

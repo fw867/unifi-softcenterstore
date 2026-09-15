@@ -990,5 +990,97 @@
                 }
             ]
         }
+    },
+    {
+        "Id": "fakehttp",
+        "Name": "FakeHTTP",
+        "Type": "Binary Core",
+        "Version": "1.0.0",
+        "Description": "将 TCP 连接伪装为 HTTP/HTTPS 以规避 DPI（基于 nftables/NFQUEUE）。",
+        "Icon": "shield",
+        "StartCommand": "/data/softcenter/bin/fakehttp start",
+        "StopCommand": "/data/softcenter/bin/fakehttp stop",
+        "StatusCommand": "/data/softcenter/bin/fakehttp status",
+        "IsAutoStart": 0,
+        "ConfigPath": "/data/softcenter/config/fakehttp.env",
+        "ConfigKeys": "",
+        "LogPath": "/var/log/fakehttp.log",
+        "CustomCommands": "[{\"name\":\"升级fakehttp\",\"command\":\"/data/softcenter/bin/fakehttp-dl\"},{\"name\":\"强制重下核心\",\"command\":\"FORCE_DOWNLOAD=1 /data/softcenter/bin/fakehttp-dl\"}]",
+        "Files": [
+            {
+                "Name": "fakehttp",
+                "Path": "apps/fakehttp/fakehttp",
+                "Sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+                "Mode": "0755"
+            },
+            {
+                "Name": "fakehttp-dl",
+                "Path": "apps/fakehttp/fakehttp-dl",
+                "Sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+                "Mode": "0755"
+            }
+        ],
+        "ConfigSchema": {
+            "Sections": [
+                {
+                    "Title": "混淆设置",
+                    "Tab": "基本设置",
+                    "Fields": [
+                        {
+                            "Key": "FAKEHTTP_HOST",
+                            "Label": "HTTP 混淆域名",
+                            "Type": "text",
+                            "Default": "www.example.com",
+                            "Required": true,
+                            "Placeholder": "www.example.com",
+                            "Help": "对应 -h；与 HTTPS 域名至少填一个"
+                        },
+                        {
+                            "Key": "FAKEHTTP_HTTPS_HOST",
+                            "Label": "HTTPS 混淆域名",
+                            "Type": "text",
+                            "Default": "",
+                            "Placeholder": "www.example.com",
+                            "Help": "对应 -e，可选"
+                        },
+                        {
+                            "Key": "FAKEHTTP_IFACE",
+                            "Label": "网络接口",
+                            "Type": "text",
+                            "Default": "",
+                            "Placeholder": "留空=全部接口 (-a)",
+                            "Help": "对应 -i；如 br0、eth0。留空则作用于所有接口"
+                        }
+                    ]
+                },
+                {
+                    "Title": "运行选项",
+                    "Tab": "进阶设置",
+                    "Fields": [
+                        {
+                            "Key": "FAKEHTTP_USE_IPTABLES",
+                            "Label": "使用 iptables",
+                            "Type": "switch",
+                            "Default": "0",
+                            "Help": "对应 -z；默认优先 nftables"
+                        },
+                        {
+                            "Key": "FAKEHTTP_SILENT",
+                            "Label": "静默模式",
+                            "Type": "switch",
+                            "Default": "0",
+                            "Help": "对应 -s；日志中不记录 IP"
+                        },
+                        {
+                            "Key": "FAKEHTTP_LOG",
+                            "Label": "日志路径",
+                            "Type": "path",
+                            "Default": "/var/log/fakehttp.log",
+                            "Monospace": true
+                        }
+                    ]
+                }
+            ]
+        }
     }
 ]
