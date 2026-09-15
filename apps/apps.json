@@ -1010,7 +1010,7 @@
             {
                 "Name": "fakehttp",
                 "Path": "apps/fakehttp/fakehttp",
-                "Sha256": "7df2b2c20888bd6e868293cfaad06821fe238bffceecb5e02bd1f7f5969e347d",
+                "Sha256": "0d85c553009b66b282160f856f742be0cea875fe811efab785595f8213c45724",
                 "Mode": "0755"
             },
             {
@@ -1109,13 +1109,13 @@
             {
                 "Name": "fakesip",
                 "Path": "apps/fakesip/fakesip",
-                "Sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+                "Sha256": "210e0c69bce5179916aa9df694b8d3b0e632ffac4b404232ec520babf277cc37",
                 "Mode": "0755"
             },
             {
                 "Name": "fakesip-dl",
                 "Path": "apps/fakesip/fakesip-dl",
-                "Sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+                "Sha256": "f84a9127785d0053a9cc2966f65fbee26dea6df6bf2637072dbb4f9c40d24e25",
                 "Mode": "0755"
             }
         ],
