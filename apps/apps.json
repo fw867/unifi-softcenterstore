@@ -18,7 +18,7 @@
             {
                 "Name": "tomodem",
                 "Path": "apps/tomodem/tomodem",
-                "Sha256": "a4d144a9c2cf9d9f04d33699d434c53dbc4220257baf06d83356551da9c8fc72",
+                "Sha256": "2a18c017eaa6802063090cf7b1e8fb21fcfe7f1d2df50dec1ccf4acd1570ac0e",
                 "Mode": "0755"
             }
         ],

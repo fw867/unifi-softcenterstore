@@ -9,17 +9,25 @@ CONFIG="/data/softcenter/config/tomodem.env"
 tomodem_ip="${tomodem_ip:-192.168.11.1}"
 tomodem_eth="${tomodem_eth:-eth4}"
 
+# 网口必须配置，否则后续 ip 命令会作用到空设备
+if [ -z "$tomodem_eth" ]; then
+	echo "错误：未配置 tomodem_eth" >&2
+	exit 1
+fi
+
 # 由光猫 IP 推算：路由侧地址 / 广播地址
 ethip1=$(echo "$tomodem_ip" | awk -F. '{print $1"."$2"."$3".2"}')
 ethip2=$(echo "$tomodem_ip" | awk -F. '{print $1"."$2"."$3".255"}')
 
 HOOK_PPP="/etc/ppp/ip-up.d/tomodem"
 HOOK_IFUP="/etc/network/if-up.d/tomodem"
+CRON_TAG="softcenter:tomodem"
 HOOK_BODY='#!/bin/sh
 /data/softcenter/bin/tomodem up'
 
 log_date() {
-	echo "【$(date +%Y年%m月%d日 %X)】: $1" >> /var/log/tomodem.log
+	msg="$1"
+	echo "【$(date '+%Y年%m月%d日 %H:%M:%S')】: $msg" >> /var/log/tomodem.log
 }
 
 # 网口上是否已有路由侧 IP（检查 ethip1，不是 tomodem_ip）
@@ -45,17 +53,20 @@ set_eth() {
 		return 1
 	}
 
-	# 网口未 UP 时先拉起（不改变已有的 UP/DOWN 以外配置）
+	# 已是网桥成员时直接给从属网口加 IP 通常无效，给出明确提示
+	if [ -d "/sys/class/net/$tomodem_eth/brport" ]; then
+		log_date "警告：$tomodem_eth 是网桥成员，直接配 IP 可能被 UniFi 覆盖，建议改用网桥接口名"
+	fi
+
+	has_eth_ip && return 0
+
+	# 网口未 UP 时先拉起
 	ip link set "$tomodem_eth" up 2>/dev/null || true
 
 	try=0
 	max_try="${tomodem_retry:-3}"
 	while [ "$try" -lt "$max_try" ]; do
-		if has_eth_ip; then
-			# 确保广播/掩码正确（replace 幂等）
-			ip addr replace "$ethip1/24" brd "$ethip2" dev "$tomodem_eth" 2>/dev/null || true
-			return 0
-		fi
+		# replace 幂等：已存在则更新，不存在则新增
 		ip addr replace "$ethip1/24" brd "$ethip2" dev "$tomodem_eth" >/dev/null 2>&1
 		sleep 1
 		if has_eth_ip; then
@@ -78,7 +89,7 @@ set_forwarding() {
 }
 
 install_hook() {
-	# 内容始终按当前路径重写，避免旧路径残留
+	# 事件钩子：内容始终按当前路径重写
 	for hook in "$HOOK_PPP" "$HOOK_IFUP"; do
 		mkdir -p "$(dirname "$hook")"
 		printf '%s\n' "$HOOK_BODY" > "$hook"
@@ -87,31 +98,44 @@ install_hook() {
 	log_date "已安装 PPP/IF-UP 钩子"
 }
 
+# 每 2 分钟对账一次（带标签，避免重复与误删他人任务）
+install_cron() {
+	remove_cron
+	(crontab -l 2>/dev/null; echo "*/2 * * * * /data/softcenter/bin/tomodem check >/dev/null 2>&1 # $CRON_TAG") | crontab - 2>/dev/null || true
+	log_date "已注册定时对账（每 2 分钟）"
+}
+
+remove_cron() {
+	crontab -l 2>/dev/null | grep -v "$CRON_TAG" | crontab - 2>/dev/null || true
+}
+
 clean_nat() {
 	forwarding_exist=$(iptables -L FORWARD 2>/dev/null | grep -c "softcenter:tomodem")
 	if [ -n "$forwarding_exist" ] && [ "$forwarding_exist" -gt 0 ] 2>/dev/null; then
-		until [ "$forwarding_exist" = 0 ]; do
+		while :; do
 			relay_nu=$(iptables -L FORWARD -v -n --line-numbers | grep "softcenter:tomodem" | awk '{print $1}' | head -1)
-			[ -n "$relay_nu" ] && iptables -D FORWARD "$relay_nu" >/dev/null 2>&1
-			forwarding_exist=$((forwarding_exist - 1))
+			[ -n "$relay_nu" ] || break
+			iptables -D FORWARD "$relay_nu" >/dev/null 2>&1 || break
 		done
 	fi
 	postrouting_exist=$(iptables -t nat -L POSTROUTING 2>/dev/null | grep -c "softcenter:tomodem")
 	if [ -n "$postrouting_exist" ] && [ "$postrouting_exist" -gt 0 ] 2>/dev/null; then
-		until [ "$postrouting_exist" = 0 ]; do
+		while :; do
 			relay1_nu=$(iptables -t nat -L POSTROUTING -v -n --line-numbers | grep "softcenter:tomodem" | awk '{print $1}' | head -1)
-			[ -n "$relay1_nu" ] && iptables -t nat -D POSTROUTING "$relay1_nu" >/dev/null 2>&1
-			postrouting_exist=$((postrouting_exist - 1))
+			[ -n "$relay1_nu" ] || break
+			iptables -t nat -D POSTROUTING "$relay1_nu" >/dev/null 2>&1 || break
 		done
 	fi
 	ip addr del "$ethip1/24" dev "$tomodem_eth" >/dev/null 2>&1
 	rm -f "$HOOK_PPP" "$HOOK_IFUP"
+	remove_cron
 	log_date "规则与钩子清理完成"
 }
 
-# 对账：IP 或防火墙缺失则补齐（供 start / 检查命令复用）
+# 对账：IP 或防火墙缺失则补齐；返回 0 表示最终状态正常
 reconcile() {
-	local ip_ok=0 fw_ok=0
+	ip_ok=0
+	fw_ok=0
 	has_eth_ip && ip_ok=1
 	iptables -C FORWARD -d "$tomodem_ip" -m comment --comment "softcenter:tomodem" -j ACCEPT 2>/dev/null && fw_ok=1
 	if [ "$ip_ok" = "1" ] && [ "$fw_ok" = "1" ]; then
@@ -121,6 +145,10 @@ reconcile() {
 	[ "$ip_ok" = "0" ] && set_eth
 	[ "$fw_ok" = "0" ] && set_forwarding
 	install_hook
+
+	# 修复后复检，如实返回结果
+	has_eth_ip || return 1
+	iptables -C FORWARD -d "$tomodem_ip" -m comment --comment "softcenter:tomodem" -j ACCEPT 2>/dev/null || return 1
 	return 0
 }
 
@@ -128,6 +156,7 @@ start_tomodem() {
 	set_eth
 	set_forwarding
 	install_hook
+	install_cron
 }
 
 stop_tomodem() {
@@ -136,10 +165,9 @@ stop_tomodem() {
 
 # SoftCenter 状态：IP 与防火墙都在才算 running
 status_check() {
-	local ok=1
-	has_eth_ip || ok=0
-	iptables -C FORWARD -d "$tomodem_ip" -m comment --comment "softcenter:tomodem" -j ACCEPT 2>/dev/null || ok=0
-	[ "$ok" = "1" ]
+	has_eth_ip || return 1
+	iptables -C FORWARD -d "$tomodem_ip" -m comment --comment "softcenter:tomodem" -j ACCEPT 2>/dev/null || return 1
+	return 0
 }
 
 case ${1} in
@@ -151,14 +179,14 @@ up)
 	set_eth
 	;;
 check)
-	# 周期性对账（可挂 SoftCenter 定时任务）
+	# 周期性对账（cron 每 2 分钟调用）
 	reconcile
 	;;
 stop)
 	stop_tomodem
 	;;
 status)
-	status_check && exit 0 || exit 1
+	status_check
 	;;
 *)
 	echo "Usage: $0 {start|up|check|stop|status}"
