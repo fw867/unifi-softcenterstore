@@ -6,77 +6,140 @@
 CONFIG="/data/softcenter/config/tomodem.env"
 [ -f "$CONFIG" ] && . "$CONFIG"
 
-# 光猫 IP
 tomodem_ip="${tomodem_ip:-192.168.11.1}"
-# 路由连接光猫的网卡
 tomodem_eth="${tomodem_eth:-eth4}"
 
-# 由光猫 IP 自动推算：路由侧地址 / 广播地址
+# 由光猫 IP 推算：路由侧地址 / 广播地址
 ethip1=$(echo "$tomodem_ip" | awk -F. '{print $1"."$2"."$3".2"}')
 ethip2=$(echo "$tomodem_ip" | awk -F. '{print $1"."$2"."$3".255"}')
 
+HOOK_PPP="/etc/ppp/ip-up.d/tomodem"
+HOOK_IFUP="/etc/network/if-up.d/tomodem"
+HOOK_BODY='#!/bin/sh
+/data/softcenter/bin/tomodem up'
+
 log_date() {
-	echo "【$(date +%Y年%m月%d日\ %X)】: $1" >> /var/log/tomodem.log
+	echo "【$(date +%Y年%m月%d日 %X)】: $1" >> /var/log/tomodem.log
 }
 
+# 网口上是否已有路由侧 IP（检查 ethip1，不是 tomodem_ip）
+has_eth_ip() {
+	ip -4 addr show dev "$tomodem_eth" 2>/dev/null | grep -q "inet ${ethip1}/"
+}
+
+# 等待网口存在（最多 wait 秒）
+wait_iface() {
+	i=0
+	while [ "$i" -lt "${1:-5}" ]; do
+		[ -d "/sys/class/net/$tomodem_eth" ] && return 0
+		sleep 1
+		i=$((i + 1))
+	done
+	return 1
+}
+
+# 统一、幂等的网口 IP 配置；失败自动重试
 set_eth() {
-	local runstatus
-	runstatus=$(ifconfig "$tomodem_eth" 2>/dev/null | grep "$tomodem_ip")
-	[ -n "$runstatus" ] || {
-		ifconfig "$tomodem_eth" "$ethip1" netmask 255.255.255.0 broadcast "$ethip2" >/dev/null 2>&1
-		log_date "PPPOE重新拨号，添加网口IP"
+	wait_iface 5 || {
+		log_date "网口 $tomodem_eth 不存在，跳过"
+		return 1
 	}
+
+	# 网口未 UP 时先拉起（不改变已有的 UP/DOWN 以外配置）
+	ip link set "$tomodem_eth" up 2>/dev/null || true
+
+	try=0
+	max_try="${tomodem_retry:-3}"
+	while [ "$try" -lt "$max_try" ]; do
+		if has_eth_ip; then
+			# 确保广播/掩码正确（replace 幂等）
+			ip addr replace "$ethip1/24" brd "$ethip2" dev "$tomodem_eth" 2>/dev/null || true
+			return 0
+		fi
+		ip addr replace "$ethip1/24" brd "$ethip2" dev "$tomodem_eth" >/dev/null 2>&1
+		sleep 1
+		if has_eth_ip; then
+			log_date "已添加网口IP $ethip1/24 (dev $tomodem_eth, 第$((try + 1))次)"
+			return 0
+		fi
+		try=$((try + 1))
+	done
+	log_date "添加网口IP失败：$tomodem_eth <- $ethip1 (重试${max_try}次)"
+	return 1
 }
 
-set_autostart() {
-	log_date "系统启动，添加系统服务"
-	[ -f "/etc/ppp/ip-up.d/tomodem" ] || {
-		cat > /etc/ppp/ip-up.d/tomodem << "END"
-#!/bin/sh
-
-/data/softcenter/bin/tomodem up
-END
-		chmod a+x /etc/ppp/ip-up.d/tomodem
-		log_date "系统服务添加成功！"
-	}
-}
-
+# 只在缺失时补规则，避免重复插入
 set_forwarding() {
-	iptables -I FORWARD -d "$tomodem_ip" -m comment --comment "softcenter:tomodem" -j ACCEPT >/dev/null 2>&1
-	iptables -t nat -I POSTROUTING -d "$tomodem_ip" -m comment --comment "softcenter:tomodem" -j MASQUERADE >/dev/null 2>&1
-	log_date "防火墙规则添加成功！"
+	iptables -C FORWARD -d "$tomodem_ip" -m comment --comment "softcenter:tomodem" -j ACCEPT 2>/dev/null \
+		|| iptables -I FORWARD -d "$tomodem_ip" -m comment --comment "softcenter:tomodem" -j ACCEPT >/dev/null 2>&1
+	iptables -t nat -C POSTROUTING -d "$tomodem_ip" -m comment --comment "softcenter:tomodem" -j MASQUERADE 2>/dev/null \
+		|| iptables -t nat -I POSTROUTING -d "$tomodem_ip" -m comment --comment "softcenter:tomodem" -j MASQUERADE >/dev/null 2>&1
+	log_date "防火墙规则已就绪"
+}
+
+install_hook() {
+	# 内容始终按当前路径重写，避免旧路径残留
+	for hook in "$HOOK_PPP" "$HOOK_IFUP"; do
+		mkdir -p "$(dirname "$hook")"
+		printf '%s\n' "$HOOK_BODY" > "$hook"
+		chmod a+x "$hook"
+	done
+	log_date "已安装 PPP/IF-UP 钩子"
 }
 
 clean_nat() {
-	forwarding_exist=$(iptables -L FORWARD | grep -c "softcenter:tomodem")
-	if [ -n "$forwarding_exist" ]; then
+	forwarding_exist=$(iptables -L FORWARD 2>/dev/null | grep -c "softcenter:tomodem")
+	if [ -n "$forwarding_exist" ] && [ "$forwarding_exist" -gt 0 ] 2>/dev/null; then
 		until [ "$forwarding_exist" = 0 ]; do
 			relay_nu=$(iptables -L FORWARD -v -n --line-numbers | grep "softcenter:tomodem" | awk '{print $1}' | head -1)
 			[ -n "$relay_nu" ] && iptables -D FORWARD "$relay_nu" >/dev/null 2>&1
-			forwarding_exist=$(expr "$forwarding_exist" - 1)
+			forwarding_exist=$((forwarding_exist - 1))
 		done
 	fi
-	postrouting_exist=$(iptables -t nat -L POSTROUTING | grep -c "softcenter:tomodem")
-	if [ -n "$postrouting_exist" ]; then
+	postrouting_exist=$(iptables -t nat -L POSTROUTING 2>/dev/null | grep -c "softcenter:tomodem")
+	if [ -n "$postrouting_exist" ] && [ "$postrouting_exist" -gt 0 ] 2>/dev/null; then
 		until [ "$postrouting_exist" = 0 ]; do
 			relay1_nu=$(iptables -t nat -L POSTROUTING -v -n --line-numbers | grep "softcenter:tomodem" | awk '{print $1}' | head -1)
 			[ -n "$relay1_nu" ] && iptables -t nat -D POSTROUTING "$relay1_nu" >/dev/null 2>&1
-			postrouting_exist=$(expr "$postrouting_exist" - 1)
+			postrouting_exist=$((postrouting_exist - 1))
 		done
 	fi
-	ip -f inet addr delete "$ethip1/24" dev "$tomodem_eth" >/dev/null 2>&1
-	[ -f "/etc/ppp/ip-up.d/tomodem" ] && rm -rf /etc/ppp/ip-up.d/tomodem
-	log_date "系统服务清理完成！"
+	ip addr del "$ethip1/24" dev "$tomodem_eth" >/dev/null 2>&1
+	rm -f "$HOOK_PPP" "$HOOK_IFUP"
+	log_date "规则与钩子清理完成"
+}
+
+# 对账：IP 或防火墙缺失则补齐（供 start / 检查命令复用）
+reconcile() {
+	local ip_ok=0 fw_ok=0
+	has_eth_ip && ip_ok=1
+	iptables -C FORWARD -d "$tomodem_ip" -m comment --comment "softcenter:tomodem" -j ACCEPT 2>/dev/null && fw_ok=1
+	if [ "$ip_ok" = "1" ] && [ "$fw_ok" = "1" ]; then
+		return 0
+	fi
+	log_date "对账：IP=$ip_ok 防火墙=$fw_ok，执行修复"
+	[ "$ip_ok" = "0" ] && set_eth
+	[ "$fw_ok" = "0" ] && set_forwarding
+	install_hook
+	return 0
 }
 
 start_tomodem() {
 	set_eth
 	set_forwarding
-	set_autostart
+	install_hook
 }
 
 stop_tomodem() {
 	clean_nat
+}
+
+# SoftCenter 状态：IP 与防火墙都在才算 running
+status_check() {
+	local ok=1
+	has_eth_ip || ok=0
+	iptables -C FORWARD -d "$tomodem_ip" -m comment --comment "softcenter:tomodem" -j ACCEPT 2>/dev/null || ok=0
+	[ "$ok" = "1" ]
 }
 
 case ${1} in
@@ -84,13 +147,21 @@ start)
 	start_tomodem
 	;;
 up)
+	# 钩子触发：只补网口 IP
 	set_eth
+	;;
+check)
+	# 周期性对账（可挂 SoftCenter 定时任务）
+	reconcile
 	;;
 stop)
 	stop_tomodem
 	;;
+status)
+	status_check && exit 0 || exit 1
+	;;
 *)
-	echo "Usage: $0 {start|stop|up}"
+	echo "Usage: $0 {start|up|check|stop|status}"
 	exit 1
 	;;
 esac
