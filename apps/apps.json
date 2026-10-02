@@ -3,7 +3,7 @@
         "Id": "tomodem",
         "Name": "光猫助手",
         "Type": "Shell Script",
-        "Version": "1.3.0",
+        "Version": "1.3.1",
         "Description": "配置路由和光猫IP，完美解决内网和光猫互通问题。",
         "Icon": "router",
         "StartCommand": "/data/softcenter/bin/tomodem start",
@@ -18,7 +18,7 @@
             {
                 "Name": "tomodem",
                 "Path": "apps/tomodem/tomodem",
-                "Sha256": "2a18c017eaa6802063090cf7b1e8fb21fcfe7f1d2df50dec1ccf4acd1570ac0e",
+                "Sha256": "38c5a813816d9b5382fe19084a0e8959d0f0a1243ad7ff38869f49751aa38822",
                 "Mode": "0755"
             }
         ],

@@ -3,17 +3,39 @@
 # UniFi SoftCenter · 光猫助手
 # 面板配置：tomodem_ip、tomodem_eth → /data/softcenter/config/tomodem.env
 
+# cron 默认 PATH 通常只有 /usr/bin:/bin，而 iptables 在 /usr/sbin：
+# 不显式补齐会导致定时对账里 iptables 找不到，检测恒为「防火墙=0」并每 2 分钟重复"修复"。
+PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+export PATH
+
 CONFIG="/data/softcenter/config/tomodem.env"
 [ -f "$CONFIG" ] && . "$CONFIG"
 
-tomodem_ip="${tomodem_ip:-192.168.11.1}"
-tomodem_eth="${tomodem_eth:-eth4}"
+# 去掉配置值里可能混入的 CR/首尾空白（CRLF 配置文件、手工改过 env）
+trim() {
+	printf '%s' "$1" | tr -d '\r\n' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//'
+}
+
+tomodem_ip=$(trim "${tomodem_ip:-192.168.11.1}")
+tomodem_eth=$(trim "${tomodem_eth:-eth4}")
 
 # 网口必须配置，否则后续 ip 命令会作用到空设备
 if [ -z "$tomodem_eth" ]; then
 	echo "错误：未配置 tomodem_eth" >&2
 	exit 1
 fi
+
+# IP 必须是 IPv4 字面量：带 \r 或空值时 iptables 会报错，规则永远补不上
+case "$tomodem_ip" in
+	"" | *[!0-9.]*)
+		echo "错误：tomodem_ip 非法：$tomodem_ip" >&2
+		exit 1
+		;;
+esac
+
+# 工具走解析后的绝对路径，避免 cron/面板环境差异
+IP_BIN=$(command -v ip 2>/dev/null || echo /usr/sbin/ip)
+IPT_BIN=$(command -v iptables 2>/dev/null || echo /usr/sbin/iptables)
 
 # 由光猫 IP 推算：路由侧地址 / 广播地址
 ethip1=$(echo "$tomodem_ip" | awk -F. '{print $1"."$2"."$3".2"}')
@@ -22,6 +44,7 @@ ethip2=$(echo "$tomodem_ip" | awk -F. '{print $1"."$2"."$3".255"}')
 HOOK_PPP="/etc/ppp/ip-up.d/tomodem"
 HOOK_IFUP="/etc/network/if-up.d/tomodem"
 CRON_TAG="softcenter:tomodem"
+TAG="$CRON_TAG"
 HOOK_BODY='#!/bin/sh
 /data/softcenter/bin/tomodem up'
 
@@ -32,7 +55,7 @@ log_date() {
 
 # 网口上是否已有路由侧 IP（检查 ethip1，不是 tomodem_ip）
 has_eth_ip() {
-	ip -4 addr show dev "$tomodem_eth" 2>/dev/null | grep -q "inet ${ethip1}/"
+	"$IP_BIN" -4 addr show dev "$tomodem_eth" 2>/dev/null | grep -q "inet ${ethip1}/"
 }
 
 # 等待网口存在（最多 wait 秒）
@@ -61,13 +84,13 @@ set_eth() {
 	has_eth_ip && return 0
 
 	# 网口未 UP 时先拉起
-	ip link set "$tomodem_eth" up 2>/dev/null || true
+	"$IP_BIN" link set "$tomodem_eth" up 2>/dev/null || true
 
 	try=0
 	max_try="${tomodem_retry:-3}"
 	while [ "$try" -lt "$max_try" ]; do
 		# replace 幂等：已存在则更新，不存在则新增
-		ip addr replace "$ethip1/24" brd "$ethip2" dev "$tomodem_eth" >/dev/null 2>&1
+		"$IP_BIN" addr replace "$ethip1/24" brd "$ethip2" dev "$tomodem_eth" >/dev/null 2>&1
 		sleep 1
 		if has_eth_ip; then
 			log_date "已添加网口IP $ethip1/24 (dev $tomodem_eth, 第$((try + 1))次)"
@@ -79,23 +102,79 @@ set_eth() {
 	return 1
 }
 
-# 只在缺失时补规则，避免重复插入
-set_forwarding() {
-	iptables -C FORWARD -d "$tomodem_ip" -m comment --comment "softcenter:tomodem" -j ACCEPT 2>/dev/null \
-		|| iptables -I FORWARD -d "$tomodem_ip" -m comment --comment "softcenter:tomodem" -j ACCEPT >/dev/null 2>&1
-	iptables -t nat -C POSTROUTING -d "$tomodem_ip" -m comment --comment "softcenter:tomodem" -j MASQUERADE 2>/dev/null \
-		|| iptables -t nat -I POSTROUTING -d "$tomodem_ip" -m comment --comment "softcenter:tomodem" -j MASQUERADE >/dev/null 2>&1
-	log_date "防火墙规则已就绪"
+# 列出规则（带行号、不做 DNS 解析）：comment 扩展会以 /* softcenter:tomodem */ 展示
+list_rules() {
+	"$IPT_BIN" -t "$1" -L "$2" -v -n --line-numbers 2>/dev/null
 }
 
+# 本插件在该链上的规则条数（0 表示没有，>1 表示历史遗留重复）
+fw_rule_count() {
+	list_rules "$1" "$2" | grep -cF -- "$TAG"
+}
+
+# 删除一条匹配规则（按行号，避免误删同链表其他规则）
+delete_one_rule() {
+	nu=$(list_rules "$1" "$2" | grep -F -- "$TAG" | head -1 | awk '{print $1}')
+	[ -n "$nu" ] || return 1
+	"$IPT_BIN" -t "$1" -D "$2" "$nu" >/dev/null 2>&1
+}
+
+# 重复规则只保留一条（旧版 -C 检测失效时反复 -I 的遗留）
+dedupe_rules() {
+	while [ "$(fw_rule_count "$1" "$2")" -gt 1 ] 2>/dev/null; do
+		delete_one_rule "$1" "$2" || break
+	done
+}
+
+remove_rules() {
+	while [ "$(fw_rule_count "$1" "$2")" -gt 0 ] 2>/dev/null; do
+		delete_one_rule "$1" "$2" || break
+	done
+}
+
+# FORWARD 与 nat POSTROUTING 都必须存在，任一缺失都要补
+has_fw_rules() {
+	[ "$(fw_rule_count filter FORWARD)" -gt 0 ] 2>/dev/null || return 1
+	[ "$(fw_rule_count nat POSTROUTING)" -gt 0 ] 2>/dev/null || return 1
+	return 0
+}
+
+# 确保规则存在：以实际规则列表为准（不依赖 iptables -C 的匹配语义）
+ensure_rule() {
+	table="$1"
+	chain="$2"
+	shift 2
+	dedupe_rules "$table" "$chain"
+	[ "$(fw_rule_count "$table" "$chain")" -gt 0 ] 2>/dev/null && return 0
+	err=$("$IPT_BIN" -t "$table" -I "$chain" "$@" 2>&1)
+	[ -n "$err" ] && log_date "添加规则失败($table/$chain)：$err"
+	[ "$(fw_rule_count "$table" "$chain")" -gt 0 ] 2>/dev/null
+}
+
+# 只在缺失时补规则，避免重复插入；结果以复检为准，不再无条件报"已就绪"
+set_forwarding() {
+	ensure_rule filter FORWARD -d "$tomodem_ip" -m comment --comment "$TAG" -j ACCEPT
+	ensure_rule nat POSTROUTING -d "$tomodem_ip" -m comment --comment "$TAG" -j MASQUERADE
+	if has_fw_rules; then
+		log_date "防火墙规则已就绪"
+	else
+		log_date "防火墙规则未生效：FORWARD=$(fw_rule_count filter FORWARD) POSTROUTING=$(fw_rule_count nat POSTROUTING)"
+	fi
+}
+
+# 钩子内容一致时不再重写、不再刷日志
 install_hook() {
-	# 事件钩子：内容始终按当前路径重写
+	changed=0
 	for hook in "$HOOK_PPP" "$HOOK_IFUP"; do
 		mkdir -p "$(dirname "$hook")"
-		printf '%s\n' "$HOOK_BODY" > "$hook"
-		chmod a+x "$hook"
+		if [ ! -f "$hook" ] || [ "$(cat "$hook" 2>/dev/null)" != "$HOOK_BODY" ]; then
+			printf '%s\n' "$HOOK_BODY" > "$hook"
+			chmod a+x "$hook"
+			changed=1
+		fi
 	done
-	log_date "已安装 PPP/IF-UP 钩子"
+	[ "$changed" = "1" ] && log_date "已安装 PPP/IF-UP 钩子"
+	return 0
 }
 
 # 每 2 分钟对账一次（带标签，避免重复与误删他人任务）
@@ -110,23 +189,9 @@ remove_cron() {
 }
 
 clean_nat() {
-	forwarding_exist=$(iptables -L FORWARD 2>/dev/null | grep -c "softcenter:tomodem")
-	if [ -n "$forwarding_exist" ] && [ "$forwarding_exist" -gt 0 ] 2>/dev/null; then
-		while :; do
-			relay_nu=$(iptables -L FORWARD -v -n --line-numbers | grep "softcenter:tomodem" | awk '{print $1}' | head -1)
-			[ -n "$relay_nu" ] || break
-			iptables -D FORWARD "$relay_nu" >/dev/null 2>&1 || break
-		done
-	fi
-	postrouting_exist=$(iptables -t nat -L POSTROUTING 2>/dev/null | grep -c "softcenter:tomodem")
-	if [ -n "$postrouting_exist" ] && [ "$postrouting_exist" -gt 0 ] 2>/dev/null; then
-		while :; do
-			relay1_nu=$(iptables -t nat -L POSTROUTING -v -n --line-numbers | grep "softcenter:tomodem" | awk '{print $1}' | head -1)
-			[ -n "$relay1_nu" ] || break
-			iptables -t nat -D POSTROUTING "$relay1_nu" >/dev/null 2>&1 || break
-		done
-	fi
-	ip addr del "$ethip1/24" dev "$tomodem_eth" >/dev/null 2>&1
+	remove_rules filter FORWARD
+	remove_rules nat POSTROUTING
+	"$IP_BIN" addr del "$ethip1/24" dev "$tomodem_eth" >/dev/null 2>&1
 	rm -f "$HOOK_PPP" "$HOOK_IFUP"
 	remove_cron
 	log_date "规则与钩子清理完成"
@@ -137,19 +202,28 @@ reconcile() {
 	ip_ok=0
 	fw_ok=0
 	has_eth_ip && ip_ok=1
-	iptables -C FORWARD -d "$tomodem_ip" -m comment --comment "softcenter:tomodem" -j ACCEPT 2>/dev/null && fw_ok=1
+	# 幂等去重：规则重复不会影响健康判断，但会越积越多
+	dedupe_rules filter FORWARD
+	dedupe_rules nat POSTROUTING
+	has_fw_rules && fw_ok=1
 	if [ "$ip_ok" = "1" ] && [ "$fw_ok" = "1" ]; then
 		return 0
 	fi
-	log_date "对账：IP=$ip_ok 防火墙=$fw_ok，执行修复"
+	log_date "对账：IP=$ip_ok 防火墙=$fw_ok（FORWARD=$(fw_rule_count filter FORWARD)，POSTROUTING=$(fw_rule_count nat POSTROUTING)），执行修复"
 	[ "$ip_ok" = "0" ] && set_eth
 	[ "$fw_ok" = "0" ] && set_forwarding
 	install_hook
 
 	# 修复后复检，如实返回结果
-	has_eth_ip || return 1
-	iptables -C FORWARD -d "$tomodem_ip" -m comment --comment "softcenter:tomodem" -j ACCEPT 2>/dev/null || return 1
-	return 0
+	ip_ok=0
+	fw_ok=0
+	has_eth_ip && ip_ok=1
+	has_fw_rules && fw_ok=1
+	if [ "$ip_ok" = "1" ] && [ "$fw_ok" = "1" ]; then
+		return 0
+	fi
+	log_date "修复后仍异常：IP=$ip_ok 防火墙=$fw_ok（FORWARD=$(fw_rule_count filter FORWARD)，POSTROUTING=$(fw_rule_count nat POSTROUTING)）"
+	return 1
 }
 
 start_tomodem() {
@@ -166,7 +240,7 @@ stop_tomodem() {
 # SoftCenter 状态：IP 与防火墙都在才算 running
 status_check() {
 	has_eth_ip || return 1
-	iptables -C FORWARD -d "$tomodem_ip" -m comment --comment "softcenter:tomodem" -j ACCEPT 2>/dev/null || return 1
+	has_fw_rules || return 1
 	return 0
 }
 
