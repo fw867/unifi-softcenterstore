@@ -88,6 +88,11 @@ log_date() {
     echo "【$(date '+%Y年%m月%d日 %X')】: $1" | tee -a "$LOG_FILE"
 }
 
+# 分隔线：把每次启动/停止/重启切开，便于在一份日志里分清轮次
+log_sep() {
+    log_date "════════════════════ $1 ════════════════════"
+}
+
 trim() {
     printf '%s' "$1" | tr -d '\r' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//'
 }
@@ -266,10 +271,23 @@ build_xray_config() {
         log_date "「配置文件」里没有 tag 为 proxy 的出站，无法分流！请保留一个 \"tag\": \"proxy\" 的出站"
         exit 1
     fi
-    extra_keys=$(jq -r '[keys[] | select(. != "outbounds")] | join("、")' "$USER_JSON" 2>/dev/null)
+    extra_keys=$(jq -r '[keys[] | select(. != "outbounds")] | join("、")' "$USER_JSON" 2>/dev/null | tr -d '\r')
     [ -n "$extra_keys" ] && log_date "提示：配置文件里的 $extra_keys 不生效（inbounds/dns/routing/fakedns/log 等由插件生成）"
-    dropped_tags=$(jq -r '[.outbounds[]? | select(.tag == "direct" or .tag == "block" or .tag == "dns-out") | .tag] | join("、")' "$USER_JSON" 2>/dev/null)
+    dropped_tags=$(jq -r '[.outbounds[]? | select(.tag == "direct" or .tag == "block" or .tag == "dns-out") | .tag] | join("、")' "$USER_JSON" 2>/dev/null | tr -d '\r')
     [ -n "$dropped_tags" ] && log_date "提示：已忽略配置文件里 tag 为 $dropped_tags 的出站（这些由插件生成）"
+
+    # 代理服务器自身的域名要在 Xray 路由里直连（避免客户端访问该域名时又绕回代理形成回环）
+    server_domain_rule='[]'
+    local d
+    for d in ${PROXY_DOMAINS:-}; do
+        [ -z "$d" ] && continue
+        if [ "$server_domain_rule" = '[]' ]; then
+            server_domain_rule="[\"domain:$d\""
+        else
+            server_domain_rule="$server_domain_rule,\"domain:$d\""
+        fi
+    done
+    [ "$server_domain_rule" != '[]' ] && server_domain_rule="$server_domain_rule]"
 
     # 客户端侧入站：只有这些入站接住的 53 端口流量才交给 dns-out（DNS 模块自己的上游查询不带入站标签，
     # 因此不会被这条规则抓回；再加上 iptables 的 dst-type LOCAL，回包也不会被 TPROXY 劫持）
@@ -279,6 +297,7 @@ build_xray_config() {
 
     jq -n --slurpfile user "$USER_JSON" \
        --argjson baseRules "$routing_rules" \
+       --argjson serverDomains "${server_domain_rule:-[]}" \
        --argjson proxyDomains "$proxy_domains" \
        --argjson clientInbounds "$client_inbounds" \
        --arg whiteDomains "$white_domains" \
@@ -393,6 +412,8 @@ build_xray_config() {
             {"type": "field", "inboundTag": $clientInbounds, "port": 53, "outboundTag": "dns-out"}
           ] + (if $dnsHijack == "1" then [
             {"type": "field", "inboundTag": ["dns-in"], "outboundTag": "dns-out"}
+          ] else [] end) + (if ($serverDomains | length) > 0 then [
+            {"type": "field", "domain": $serverDomains, "outboundTag": "direct"}
           ] else [] end) + (if ($whiteDomRule | length) > 0 then [
             {"type": "field", "domain": $whiteDomRule, "outboundTag": "direct"}
           ] else [] end) + (if ($whiteIpRule | length) > 0 then [
@@ -421,7 +442,8 @@ build_xray_config() {
     fi
 
     mv -f "$XRAY_JSON.tmp" "$XRAY_JSON"
-    log_date "Xray 运行配置生成成功：$XRAY_JSON（代理模式=$PROXY_MODE $mode_name，国内 DNS=$DNS_CN，国外 DNS=$DNS_FOREIGN，域名劫持=$DNS_HIJACK，错误日志级别=$XRAY_LOG_LEVEL，访问日志=关闭）"
+    log_date "Xray 运行配置生成成功：$XRAY_JSON（代理模式=$PROXY_MODE $mode_name）"
+    log_date "DNS：国内=$DNS_CN，国外=$DNS_FOREIGN；域名劫持=$DNS_HIJACK；错误日志级别=$XRAY_LOG_LEVEL；访问日志=关闭"
     if [ "$DNS_HIJACK" = "1" ]; then
         log_date "DNS 走向：客户端查询经 nat REDIRECT 进 dns-in(:$DNS_PORT)，已省略 port 53 路由规则（规避 DNS 出口回环）"
     else
@@ -484,9 +506,12 @@ prepare_config() {
         log_date "「配置文件」不是合法 JSON，请检查（只填 outbounds 即可）"
         exit 1
     fi
+    # 先解析代理服务器地址：Xray 配置里要为服务器域名下发直连规则，iptables 白名单也要用它
+    collect_proxy_servers
     build_xray_config
     validate_config || exit 1
 }
+
 
 # ================= 进程锁 =================
 set_lock() {
@@ -507,26 +532,97 @@ create_ipsetlist() {
 }
 
 add_bypass_ip() {
-    # 代理服务器自身必须直连，否则会回环
-    local proxy_server proxy_ip
-    proxy_server=$(jq -r '.outbounds[]? | select(.tag == "proxy") | (.settings.vnext[0].address // .settings.servers[0].address // .settings.address // empty)' "$XRAY_JSON" 2>/dev/null | head -n1)
-    proxy_ip=""
-    if [ -n "$proxy_server" ]; then
-        case "$proxy_server" in
-            *[!0-9a-fA-F.:]*)
-                # 域名：用国内 DNS 解析（取 Name 之后的第一条 Address，兼容 bind/busybox 两种输出）
-                proxy_ip=$(nslookup "$proxy_server" "$DNS_CN" 2>/dev/null | awk '/^Name:/{f=1;next} f && /^Address/{print $NF; exit}')
-                ;;
-            *) proxy_ip="$proxy_server" ;;
-        esac
-    fi
-    [ -n "$proxy_ip" ] && log_date "代理服务器地址 $proxy_server → $proxy_ip（加入直连名单）"
-
+    # 代理服务器自身必须直连，否则会回环；地址已在 collect_proxy_servers 里解析好
+    local ip_lan ip msg
+    ip_lan="0.0.0.0/8 10.0.0.0/8 100.64.0.0/10 127.0.0.0/8 169.254.0.0/16 172.16.0.0/12 192.168.0.0/16 224.0.0.0/4 240.0.0.0/4 $DNS_CN"
     {
-        local ip_lan="0.0.0.0/8 10.0.0.0/8 100.64.0.0/10 127.0.0.0/8 169.254.0.0/16 172.16.0.0/12 192.168.0.0/16 224.0.0.0/4 240.0.0.0/4 $DNS_CN ${proxy_ip:-}"
-        for ip in $ip_lan; do [ -n "$ip" ] && echo "add $IPSET_BYPASS $ip"; done
+        for ip in $ip_lan ${PROXY_IPS:-}; do [ -n "$ip" ] && echo "add $IPSET_BYPASS $ip"; done
     } | ipset -! restore
+
+    msg="直连白名单已下发：内网网段 + 国内 DNS"
+    if [ -n "${PROXY_IPS// /}" ]; then
+        msg="$msg + 代理服务器 $(printf '%s' "$PROXY_IPS" | sed 's/^ *//;s/  */,/g')"
+    else
+        msg="$msg（未识别到代理服务器 IP，回环保护可能失效）"
+    fi
+    log_date "$msg"
     # 注意：国外 DNS 不加入直连名单，它需要经 Xray 代理出去，避免被污染
+}
+
+# ================= 代理服务器地址：从用户配置的出站里提取 =================
+# 解析域名 → 逐行输出所有 IPv4（兼容 bind / busybox / dnsmasq 的 nslookup 输出）
+# IPv6 不做旁路：插件本身只接管 IPv4，不经由透明代理也就不会回环
+resolve_host() {
+    local host="$1" dns out ips ip
+    ips=""
+    for dns in "$DNS_CN" "$DNS_FOREIGN" ""; do
+        if [ -n "$dns" ]; then
+            if command -v timeout >/dev/null 2>&1; then
+                out=$(timeout 5 nslookup "$host" "$dns" 2>/dev/null)
+            else
+                out=$(nslookup "$host" "$dns" 2>/dev/null)
+            fi
+        else
+            out=$(nslookup "$host" 2>/dev/null)
+        fi
+        ips=$(printf '%s\n' "$out" | awk '/^Name:/{f=1;next} f && /^Address/{print $NF}' | tr -d '\r' | grep -v ':')
+        [ -n "$ips" ] && break
+    done
+    for ip in $ips; do printf '%s\n' "$ip"; done
+}
+
+# 从用户配置里所有出站提取服务器地址（域名或 IP），覆盖各家协议与多节点写法：
+#   vless/vmess → settings.vnext[].address      trojan/shadowsocks/socks/http → settings.servers[].address
+#   其它 → settings.address / settings.server   wireguard → settings.peers[].endpoint（去掉端口）
+# 结果放到 PROXY_SERVERS（原始地址）/ PROXY_DOMAINS（其中的域名）/ PROXY_IPS（解析出的 IPv4）
+collect_proxy_servers() {
+    PROXY_SERVERS=""
+    PROXY_DOMAINS=""
+    PROXY_IPS=""
+    local servers server resolved ip
+
+    servers=$(jq -r '
+        [ .outbounds[]?
+          | select((.tag // "") != "direct" and (.tag // "") != "block" and (.tag // "") != "dns-out")
+          | ( (.settings.vnext[]?.address), (.settings.servers[]?.address),
+              (.settings.address?), (.settings.server?),
+              ((.settings.peers[]?.endpoint?) | sub(":[0-9]+$"; "") | sub("^\\[(.*)\\]$"; "\\1")) )
+          | select(. != null and . != "")
+        ] | unique | .[]' "$USER_JSON" 2>/dev/null | tr -d '\r')
+
+    if [ -z "$servers" ]; then
+        log_date "警告：未从「配置文件」的出站里识别到代理服务器地址（回环保护可能失效）"
+        return 0
+    fi
+
+    for server in $servers; do
+        PROXY_SERVERS="$PROXY_SERVERS $server"
+        resolved=""
+        case "$server" in
+            *:*)   # IPv6 地址
+                log_date "代理服务器 $server 是 IPv6（插件只接管 IPv4，无需加入白名单）"
+                continue
+                ;;
+            *[!0-9.]*)   # 含数字/点以外的字符 → 域名
+                PROXY_DOMAINS="$PROXY_DOMAINS $server"
+                resolved=$(resolve_host "$server")
+                if [ -z "$resolved" ]; then
+                    log_date "警告：代理服务器域名 $server 解析失败，未能加入直连白名单（可能回环，请检查 DNS）"
+                    continue
+                fi
+                log_date "代理服务器域名 $server → $(printf '%s' "$resolved" | tr '\n' ' ')(加入直连白名单)"
+                ;;
+            *) resolved="$server" ;;
+        esac
+        for ip in $resolved; do
+            case " $PROXY_IPS " in
+                *" $ip "*) ;;
+                *) PROXY_IPS="$PROXY_IPS $ip" ;;
+            esac
+        done
+    done
+    log_date "代理出站服务器（共 $(printf '%s' "$PROXY_SERVERS" | wc -w | tr -d ' ') 个）：$(printf '%s' "$PROXY_SERVERS" | sed 's/^ *//;s/  */,/g')"
+    return 0
 }
 
 # ================= 直连白名单（局域网设备旁路） =================
@@ -643,6 +739,14 @@ start_v2ray() {
     # 清理旧版本遗留的临时日志（旧版把 stdout/访问日志写在这里）
     rm -f /tmp/xwall_core.log 2>/dev/null
 
+    # 透明代理的 UDP 是"一会话一套接字"，繁忙网络下同时占用数百个 fd 很正常。
+    # 只在当前上限偏低时才抬高；系统已给出更大值时绝不覆盖（避免把 524287 调成 65535）
+    local cur_fd
+    cur_fd=$(ulimit -n 2>/dev/null)
+    if [ -n "$cur_fd" ] && [ "$cur_fd" -lt 65535 ] 2>/dev/null; then
+        ulimit -n 65535 2>/dev/null || log_date "提示：文件描述符上限提升失败（当前 $cur_fd），大量 UDP 会话时可能触碰上限"
+    fi
+
     # 内核 stdout/stderr 一并追加到同一个日志文件：不额外产生文件，且启动期报错仍可回看
     "$XRAY_BIN" run -c "$XRAY_JSON" >>"$XRAY_LOG" 2>&1 &
 
@@ -669,6 +773,7 @@ kill_process() {
 
 # ================= 主流程 =================
 start() {
+    log_sep "XWall 启动"
     set_lock
 
     if ! ensure_core; then
@@ -703,6 +808,7 @@ start() {
 }
 
 stop() {
+    log_sep "XWall 停止"
     set_lock
     kill_process
     ipts_origin

@@ -355,7 +355,7 @@
             {
                 "Name": "xwall",
                 "Path": "apps/xwall/xwall",
-                "Sha256": "25c4965f8146302e1d225b1171f012c917cb7adb1eaf35644a0599b4010d68b9",
+                "Sha256": "16d75c4cf73a398f8ea1cd87740458fdfdd36c6f787e6be1799bf6e1774b904e",
                 "Mode": "0755"
             },
             {
@@ -380,7 +380,7 @@
                             "Monospace": true,
                             "Required": true,
                             "Placeholder": "{\n  \"outbounds\": [\n    { \"tag\": \"proxy\", \"protocol\": \"vless\", \"settings\": { ... } }\n  ]\n}",
-                            "Help": "只取本项里的 outbounds：inbounds / dns / routing / fakedns / log 全部由插件自动生成，其它顶层项（api、stats、policy、observatory、geodata 等）即使写了也会被忽略。outbounds 里必须有一个 tag 为 proxy 的出站；direct / block / dns-out 由插件补齐，同 tag 的重复出站会被丢弃"
+                            "Help": "只取本项里的 outbounds：inbounds / dns / routing / fakedns / log 全部由插件自动生成，其它顶层项（api、stats、policy、observatory、geodata 等）即使写了也会被忽略。outbounds 里必须有一个 tag 为 proxy 的出站；direct / block / dns-out 由插件补齐，同 tag 的重复出站会被丢弃；出站里的服务器地址（域名或 IP）会自动解析并加入直连白名单，避免流量绕回代理形成回环"
                         },
                         {
                             "Key": "PROXY_MODE",
