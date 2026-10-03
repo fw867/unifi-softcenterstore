@@ -340,7 +340,7 @@
         "Id": "xwall",
         "Name": "XWall",
         "Type": "Binary Core",
-        "Version": "1.0.0",
+        "Version": "1.0.1",
         "Description": "全流量交给 Xray，由 Xray 规则集自动分流（国内直连 / 国外代理）。",
         "Icon": "shield-check",
         "StartCommand": "/data/softcenter/bin/xwall start",
@@ -350,12 +350,12 @@
         "ConfigPath": "/data/softcenter/config/xwall.env",
         "ConfigKeys": "",
         "LogPath": "/var/log/xwall.log",
-        "CustomCommands": "[{\"name\":\"升级Xray核心\",\"command\":\"/data/softcenter/bin/xwall-ssup\"},{\"name\":\"强制重下核心\",\"command\":\"FORCE_DOWNLOAD=1 /data/softcenter/bin/xwall-ssup\"},{\"name\":\"查看Xray运行日志\",\"command\":\"echo '===== Xray 运行日志 ====='; echo \\\"级别: $(sed -n 's/^XRAY_LOG_LEVEL=//p' /data/softcenter/config/xwall.env 2>/dev/null | head -n1)\\\"; echo; if [ -s /var/log/xwall-xray.log ]; then tail -n 150 /var/log/xwall-xray.log; else echo '(暂无日志：进程未运行，或日志级别为 none)'; fi; echo; if [ -s /tmp/xwall_core.log ]; then echo '===== 内核 stdout/stderr（末尾 20 行）====='; tail -n 20 /tmp/xwall_core.log; fi\"},{\"name\":\"清空Xray日志\",\"command\":\": > /var/log/xwall-xray.log; echo 'Xray 运行日志已清空'\"}]",
+        "CustomCommands": "[{\"name\":\"升级Xray核心\",\"command\":\"/data/softcenter/bin/xwall-ssup\"},{\"name\":\"强制重下核心\",\"command\":\"FORCE_DOWNLOAD=1 /data/softcenter/bin/xwall-ssup\"},{\"name\":\"查看Xray运行日志\",\"command\":\"echo '===== Xray 运行日志 ====='; sed -n 's/^XRAY_LOG_LEVEL=/错误日志级别: /p' /data/softcenter/config/xwall.env 2>/dev/null | head -n1; echo; if [ -s /var/log/xwall-xray.log ]; then tail -n 150 /var/log/xwall-xray.log; else echo '(暂无日志：进程未运行，或日志级别为 none)'; fi\"},{\"name\":\"清空Xray日志\",\"command\":\": > /var/log/xwall-xray.log; echo 'Xray 运行日志已清空'\"}]",
         "Files": [
             {
                 "Name": "xwall",
                 "Path": "apps/xwall/xwall",
-                "Sha256": "3310c3fd321deeee84fb0378f089b6eeb19a24a8694a62bb89d17298d15f458d",
+                "Sha256": "25c4965f8146302e1d225b1171f012c917cb7adb1eaf35644a0599b4010d68b9",
                 "Mode": "0755"
             },
             {
@@ -434,7 +434,7 @@
                                     "Value": "none"
                                 }
                             ],
-                            "Help": "写入 /var/log/xwall-xray.log，随时可用「扩展 → 查看Xray运行日志」查看；每次启动会清空上一轮日志，避免 debug 级别长期累积"
+                            "Help": "只控制错误日志级别，写入 /var/log/xwall-xray.log（可用「扩展 → 查看Xray运行日志」查看）；访问日志默认关闭，不会产生 /tmp 下的临时日志；内核 stdout/stderr 也并入同一文件，每次启动清空上一轮"
                         }
                     ]
                 },

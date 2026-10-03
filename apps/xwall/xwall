@@ -29,8 +29,8 @@ XRAY_BIN="$XWALL_DIR/xwall-xray"
 ASSET_DIR="$XWALL_DIR"
 USER_JSON="/tmp/xwall_user.json"        # 面板粘贴的原始配置
 XRAY_JSON="/tmp/xwall.json"             # 插件生成后的运行配置
-CORE_LOG="/tmp/xwall_core.log"          # 内核 stdout/stderr（启动期报错也在这里）
-XRAY_LOG="/var/log/xwall-xray.log"      # 内核自身运行日志（级别由面板设置决定）
+# 内核自身日志：错误日志按面板级别写文件；访问日志默认关闭（不设 access 时 Xray 会把它灌到 stdout）
+XRAY_LOG="/var/log/xwall-xray.log"
 LOG_FILE="/var/log/xwall.log"
 LOCK_FILE="/var/lock/xwall.lock"
 CHAIN="XWALL"                           # nat / mangle 自定义链名
@@ -185,21 +185,41 @@ build_xray_config() {
     esac
 
     # ===== 默认代理模式 → Xray 规则集（iptables 只负责把流量交给 Xray） =====
-    #   1 GFWList   ：只代理 geosite:gfw / telegram，其余直连
+    #   1 GFWList   ：只代理名单内域名/IP，其余直连
     #   2 国内白名单 ：国内域名/IP 直连，其余走代理（默认）
     #   3 游戏模式   ：TCP 全部走代理，UDP 仅非国内走代理
     #   4 全局代理   ：除内网外全部走代理
     #   不提供"不代理"：需要不代理直接停用插件即可
-    default_target="proxy"
+    #
+    # proxy_domains = "确定要走代理的域名集合"，只维护这一处：
+    #   - 路由规则：命中 → proxy
+    #   - DNS/FakeDNS：只有这个集合才发假地址，避免"假地址被直连"（默认直连模式下尤其致命）
+    # geoip 只列官方 dat 里确实存在的分类（geoip:line / geoip:discord 不存在，加了内核会拒绝启动）
+    proxy_domains='[]'
     case "$PROXY_MODE" in
         1)
+            proxy_domains='[
+                "geosite:gfw",
+                "geosite:telegram",
+                "geosite:google",
+                "geosite:facebook",
+                "geosite:twitter",
+                "geosite:discord",
+                "geosite:line",
+                "geosite:netflix"
+            ]'
             routing_rules='[
                 {"type": "field", "outboundTag": "direct", "ip": ["geoip:private"]},
-                {"type": "field", "outboundTag": "proxy", "domain": ["geosite:gfw", "geosite:telegram"]},
-                {"type": "field", "outboundTag": "proxy", "ip": ["geoip:telegram"]},
+                {"type": "field", "outboundTag": "proxy", "domain": '"$proxy_domains"'},
+                {"type": "field", "outboundTag": "proxy", "ip": [
+                    "geoip:telegram",
+                    "geoip:google",
+                    "geoip:facebook",
+                    "geoip:twitter",
+                    "geoip:netflix"
+                ]},
                 {"type": "field", "outboundTag": "direct", "network": "tcp,udp"}
             ]'
-            default_target="direct"
             mode_name="GFWList"
             ;;
         3)
@@ -251,15 +271,22 @@ build_xray_config() {
     dropped_tags=$(jq -r '[.outbounds[]? | select(.tag == "direct" or .tag == "block" or .tag == "dns-out") | .tag] | join("、")' "$USER_JSON" 2>/dev/null)
     [ -n "$dropped_tags" ] && log_date "提示：已忽略配置文件里 tag 为 $dropped_tags 的出站（这些由插件生成）"
 
+    # 客户端侧入站：只有这些入站接住的 53 端口流量才交给 dns-out（DNS 模块自己的上游查询不带入站标签，
+    # 因此不会被这条规则抓回；再加上 iptables 的 dst-type LOCAL，回包也不会被 TPROXY 劫持）
+    client_inbounds='["tproxy-tcp","tproxy-udp"'
+    if [ "$XWALL_SOCKS_ENABLE" = "1" ]; then client_inbounds="$client_inbounds"',"socks-in"'; fi
+    client_inbounds="$client_inbounds"']'
+
     jq -n --slurpfile user "$USER_JSON" \
        --argjson baseRules "$routing_rules" \
+       --argjson proxyDomains "$proxy_domains" \
+       --argjson clientInbounds "$client_inbounds" \
        --arg whiteDomains "$white_domains" \
        --arg whiteIps "$white_ips" \
        --arg blackDomains "$black_domains" \
        --arg blackIps "$black_ips" \
        --argjson localDomains "$DNS_LOCAL_DOMAINS" \
        --arg fakePool "$fake_pool" \
-       --arg defaultTarget "$default_target" \
        --arg logLevel "$XRAY_LOG_LEVEL" \
        --arg logFile "$XRAY_LOG" \
        --arg dnsCn "$DNS_CN" \
@@ -298,7 +325,7 @@ build_xray_config() {
       (($bdAll | map(select(isIpEntry))) + ($biAll | map(select(isIpEntry)))) as $blackIpRule |
 
       {
-      "log": { "loglevel": $logLevel, "error": $logFile },
+      "log": { "loglevel": $logLevel, "access": "none", "error": $logFile },
       "fakedns": [ { "ipPool": $fakePool, "poolSize": 65535 } ],
       "inbounds": ([
         {
@@ -340,18 +367,30 @@ build_xray_config() {
         }
       ] else [] end)),
       "dns": {
-        "servers": [
-          { "address": $dnsCn, "domains": (["geosite:cn"] + $whiteDomRule) },
-          { "address": $localDns, "domains": $localDomains },
-          "fakedns",
-          $dnsForeign
-        ]
+        "servers": (
+          [
+            { "address": $dnsCn, "domains": (["geosite:cn"] + $whiteDomRule) },
+            { "address": $localDns, "domains": $localDomains },
+            (if ($proxyDomains | length) > 0 then
+               { "address": "fakedns", "domains": $proxyDomains }
+             else "fakedns" end)
+          ]
+          # 默认直连的模式（GFWList）：走代理的域名其非 A/AAAA 查询仍交给国外 DNS，
+          # 其余未列出的域名（含大量未收录的国内站点）用国内 DNS 真实解析，最后才兜底国外 DNS
+          + (if ($proxyDomains | length) > 0 then
+               [ { "address": $dnsForeign, "domains": $proxyDomains }, $dnsCn ]
+             else [] end)
+          + [ $dnsForeign ]
+        )
       },
       "routing": {
         "domainStrategy": "IPIfNonMatch",
         "rules": (
+          # 任何被透明入站接住的 53 端口流量都交给 Xray 内部 DNS 模块清洗（不论是否开启域名劫持）。
+          # 规则限定在客户端侧入站：DNS 模块自己的上游查询不带这些入站标签，
+          # 不会被同一条规则抓回 dns-out（上游回包另有 iptables 的 dst-type LOCAL 兜底）。
           [
-            {"type": "field", "port": 53, "outboundTag": "dns-out"}
+            {"type": "field", "inboundTag": $clientInbounds, "port": 53, "outboundTag": "dns-out"}
           ] + (if $dnsHijack == "1" then [
             {"type": "field", "inboundTag": ["dns-in"], "outboundTag": "dns-out"}
           ] else [] end) + (if ($whiteDomRule | length) > 0 then [
@@ -363,7 +402,7 @@ build_xray_config() {
           ] else [] end) + (if ($blackIpRule | length) > 0 then [
             {"type": "field", "ip": $blackIpRule, "outboundTag": "proxy"}
           ] else [] end) + [
-            {"type": "field", "ip": [$fakePool], "outboundTag": $defaultTarget}
+            {"type": "field", "ip": [$fakePool], "outboundTag": "proxy"}
           ] + $baseRules
         )
       },
@@ -382,7 +421,12 @@ build_xray_config() {
     fi
 
     mv -f "$XRAY_JSON.tmp" "$XRAY_JSON"
-    log_date "Xray 运行配置生成成功：$XRAY_JSON（代理模式=$PROXY_MODE $mode_name，国内 DNS=$DNS_CN，国外 DNS=$DNS_FOREIGN，域名劫持=$DNS_HIJACK，日志级别=$XRAY_LOG_LEVEL）"
+    log_date "Xray 运行配置生成成功：$XRAY_JSON（代理模式=$PROXY_MODE $mode_name，国内 DNS=$DNS_CN，国外 DNS=$DNS_FOREIGN，域名劫持=$DNS_HIJACK，错误日志级别=$XRAY_LOG_LEVEL，访问日志=关闭）"
+    if [ "$DNS_HIJACK" = "1" ]; then
+        log_date "DNS 走向：客户端查询经 nat REDIRECT 进 dns-in(:$DNS_PORT)，已省略 port 53 路由规则（规避 DNS 出口回环）"
+    else
+        log_date "DNS 走向：未开启域名劫持，客户端查外部 DNS 的流量由 port 53 路由规则接住"
+    fi
     log_date "名单：域名白名单 $(count_entries "$white_domains") 条 / IP 白名单 $(count_entries "$white_ips") 条 / 域名黑名单 $(count_entries "$black_domains") 条 / IP 黑名单 $(count_entries "$black_ips") 条（白名单优先）"
 }
 
@@ -519,21 +563,29 @@ ipts_update() {
     ip rule add fwmark "$FWMARK" table "$ROUTE_TABLE" pref 789 2>/dev/null
     ip route add local 0.0.0.0/0 dev lo table "$ROUTE_TABLE" 2>/dev/null
 
-    # 1. 防回环：内网 / DNS / 代理服务器自身直连
+    # 1. 【最优先】目标为本机地址的包一律放行，绝不透明代理。
+    #    关键：上游 DNS / 代理服务器的**回包**也是"发往路由器自身 IP"的入站包，
+    #    同样会走 mangle PREROUTING；若不在这里 RETURN，它们会被自己的 TPROXY 规则
+    #    抓回 Xray，每次回包凭空变成一个 UDP 会话并新建套接字 —— 直到临时端口耗尽，
+    #    同时 DNS 客户端永远收不到应答（app/dns: cannot find the pending request）。
+    iptables -t nat -A "$CHAIN" -m addrtype --dst-type LOCAL -j RETURN
+    iptables -t mangle -A "$CHAIN" -m addrtype --dst-type LOCAL -j RETURN
+
+    # 2. 防回环：内网 / DNS / 代理服务器自身直连
     iptables -t nat -A "$CHAIN" -m set --match-set "$IPSET_BYPASS" dst -j RETURN
     iptables -t mangle -A "$CHAIN" -m set --match-set "$IPSET_BYPASS" dst -j RETURN
 
-    # 2. 代理白名单：名单内的局域网设备直连（旁路 Xray）
+    # 3. 代理白名单：名单内的局域网设备直连（旁路 Xray）
     if [ -n "$DIRECT_LIST" ]; then
         add_direct_rule "nat"
         add_direct_rule "mangle"
     fi
 
-    # 3. 兜底：其余流量全部交给 Xray（规则集分流由 Xray 负责）
+    # 4. 兜底：其余流量全部交给 Xray（规则集分流由 Xray 负责）
     iptables -t nat -A "$CHAIN" -p tcp -j REDIRECT --to-ports "$TCP_PORT"
     iptables -t mangle -A "$CHAIN" -p udp -j TPROXY --on-port "$UDP_PORT" --tproxy-mark "$FWMARK"
 
-    # 4. 挂到 PREROUTING：插在 UniFi 自己的跳转之后，避免被其规则先处理
+    # 5. 挂到 PREROUTING：插在 UniFi 自己的跳转之后，避免被其规则先处理
     local PR_INDEX MA_INDEX
     PR_INDEX=$(iptables -t nat -L PREROUTING --line-numbers 2>/dev/null | awk '/UBIOS_PREROUTING_JUMP/{print $1}' | head -n1)
     [ -n "$PR_INDEX" ] && RULE_INDEX=$((PR_INDEX + 1)) || RULE_INDEX=1
@@ -583,13 +635,16 @@ ipfwd_on() {
 
 # ================= 进程 =================
 start_v2ray() {
-    log_date "启动 Xray 主进程（$XRAY_BIN，日志级别 $XRAY_LOG_LEVEL）..."
+    log_date "启动 Xray 主进程（$XRAY_BIN，日志级别 $XRAY_LOG_LEVEL，访问日志关闭）..."
 
     # 每次启动清空上一轮内核日志，避免 debug 级别长期累积
     mkdir -p "$(dirname "$XRAY_LOG")" 2>/dev/null
     : > "$XRAY_LOG" 2>/dev/null
+    # 清理旧版本遗留的临时日志（旧版把 stdout/访问日志写在这里）
+    rm -f /tmp/xwall_core.log 2>/dev/null
 
-    "$XRAY_BIN" run -c "$XRAY_JSON" >"$CORE_LOG" 2>&1 &
+    # 内核 stdout/stderr 一并追加到同一个日志文件：不额外产生文件，且启动期报错仍可回看
+    "$XRAY_BIN" run -c "$XRAY_JSON" >>"$XRAY_LOG" 2>&1 &
 
     local i=10
     while [ "$i" -gt 0 ]; do
@@ -598,8 +653,8 @@ start_v2ray() {
         i=$((i - 1))
     done
 
-    log_date "Xray 启动失败，内核输出（末尾 5 行）："
-    tail -n 5 "$CORE_LOG" 2>/dev/null | tee -a "$LOG_FILE"
+    log_date "Xray 启动失败，内核输出（末尾 10 行）："
+    tail -n 10 "$XRAY_LOG" 2>/dev/null | tee -a "$LOG_FILE"
     return 1
 }
 
@@ -651,7 +706,7 @@ stop() {
     set_lock
     kill_process
     ipts_origin
-    rm -f "$XRAY_JSON" "$XRAY_JSON.tmp" "$USER_JSON"
+    rm -f "$XRAY_JSON" "$XRAY_JSON.tmp" "$USER_JSON" /tmp/xwall_core.log
     log_date "XWall 已停止，规则与运行配置已清理（内核日志保留在 $XRAY_LOG）"
     unset_lock
 }

@@ -176,6 +176,20 @@ echo "connecting to ${tomodem_ip:-192.168.1.1} via ${tomodem_eth:-eth0}"
 
 systemd 服务可用 `EnvironmentFile=/data/softcenter/config/<id>.env`。
 
+### 扩展按钮（CustomCommands）注意事项
+
+面板执行扩展命令的方式是 `/bin/bash -c "export TERM=xterm; <命令>"`，即命令被**外层双引号包裹**后交给 .NET 的
+`Arguments` 解析器切成 argv。因此命令里**不能出现双引号**（外层引号会被提前闭合，命令被切成多段，只有最前面
+一小段会真正执行，后面的 `if`/`tail` 等会当作位置参数被忽略，表现为"点了没反应/没有输出"），
+反斜杠也会被解析器吃掉。需要引号时只用单引号，例如：
+
+```jsonc
+// ❌ 双引号会把命令截断，tail 永远不执行
+"command": "echo \"级别: $(sed -n 's/^LEVEL=//p' /data/softcenter/config/x.env)\"; tail -n 50 /var/log/x.log"
+// ✅ 只用单引号，或让 sed 直接输出整行
+"command": "sed -n 's/^LEVEL=/级别: /p' /data/softcenter/config/x.env; tail -n 50 /var/log/x.log"
+```
+
 ---
 
 ## 🤝 贡献与反馈
