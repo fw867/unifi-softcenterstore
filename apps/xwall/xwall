@@ -41,6 +41,12 @@ TCP_PORT="1280"                         # TCP 透明代理端口
 UDP_PORT="1281"                         # UDP TPROXY 端口
 DNS_PORT="15353"                        # 域名劫持用的 DNS 入站端口（仅本机/LAN 可达）
 DNS_LOCAL_DOMAINS='["domain:local","domain:localdomain","domain:lan","domain:home.arpa","domain:invalid","domain:localhost"]'
+# 定时自检：UniFi/UBIOS 重建 nat/mangle 表时会清掉自定义链与 PREROUTING 跳转，
+# 所以需要像 tomodem 一样定期确认并补齐（健康时完全静默，不进日志）
+CRON_TAG="softcenter:xwall"
+CHECK_INTERVAL="2"                      # 自检周期（分钟）
+STATE_FILE="/tmp/xwall.state"           # 自检状态（ok/bad），用于只在状态变化时记日志
+CACHE_IPS="/tmp/xwall_bypass.list"      # 直连白名单缓存（自检时免去再次 DNS 解析）
 
 # 明确告知 Xray 数据文件目录，不依赖各版本的默认搜索顺序
 XRAY_LOCATION_ASSET="$ASSET_DIR"
@@ -82,6 +88,8 @@ XWALL_SOCKS_LISTEN="${XWALL_SOCKS_LISTEN:-0}"   # 0: 仅本机 127.0.0.1, 1: 局
 XWALL_SOCKS_AUTH="${XWALL_SOCKS_AUTH:-0}"       # 0: 无验证, 1: 用户名密码
 XWALL_SOCKS_USER="${XWALL_SOCKS_USER:-}"
 XWALL_SOCKS_PASS="${XWALL_SOCKS_PASS:-}"
+# 操作锁最长等待秒数（避免多个 start/stop 叠在一起永久卡死）
+LOCK_WAIT="${LOCK_WAIT:-20}"
 # =============================================
 
 log_date() {
@@ -516,12 +524,26 @@ prepare_config() {
 # ================= 进程锁 =================
 set_lock() {
     mkdir -p /var/lock 2>/dev/null
-    exec 9>"$LOCK_FILE"
-    flock -x 9 2>/dev/null
+    exec 9>"$LOCK_FILE" 2>/dev/null
+    # 绝不无限等锁：曾经踩过坑 —— 上一次 start 异常退出没解锁，锁被它拉起的 xray 子进程
+    # 继承持有，后续每次 stop/start 都永久卡死（ps 里堆一串 /bin/sh xwall stop）。
+    # 各版本 flock 对 -w 支持不一致，所以用 -n 轮询，最多等 LOCK_WAIT 秒。
+    local i=0
+    while ! flock -n 9 2>/dev/null; do
+        i=$((i + 1))
+        if [ "$i" -ge "$LOCK_WAIT" ]; then
+            log_date "已有另一个 XWall 操作正在进行（锁被占用，等待 ${LOCK_WAIT}s 超时），本次跳过；若确认无其它操作：killall -9 $PROC_NAME 后重试"
+            return 1
+        fi
+        sleep 1
+    done
+    return 0
 }
+
 unset_lock() {
     flock -u 9 2>/dev/null
-    rm -f "$LOCK_FILE"
+    exec 9>&- 2>/dev/null
+    rm -f "$LOCK_FILE" 2>/dev/null
 }
 
 # ================= ipset：防回环目标名单 =================
@@ -533,20 +555,42 @@ create_ipsetlist() {
 
 add_bypass_ip() {
     # 代理服务器自身必须直连，否则会回环；地址已在 collect_proxy_servers 里解析好
-    local ip_lan ip msg
-    ip_lan="0.0.0.0/8 10.0.0.0/8 100.64.0.0/10 127.0.0.0/8 169.254.0.0/16 172.16.0.0/12 192.168.0.0/16 224.0.0.0/4 240.0.0.0/4 $DNS_CN"
-    {
-        for ip in $ip_lan ${PROXY_IPS:-}; do [ -n "$ip" ] && echo "add $IPSET_BYPASS $ip"; done
-    } | ipset -! restore
+    local msg
+    bypass_ip_list > "$CACHE_IPS" 2>/dev/null
+    bypass_from_cache || log_date "警告：直连白名单写入失败（$CACHE_IPS 或 ipset 不可用）"
 
     msg="直连白名单已下发：内网网段 + 国内 DNS"
-    if [ -n "${PROXY_IPS// /}" ]; then
+    # 注意：这里只能用 POSIX 写法。脚本是 #!/bin/sh，UniFi 的 /bin/sh 是 busybox ash，
+    # 不支持 ${VAR//pat/rep}，一写就会 "Bad substitution" 直接终止整个脚本（规则就下发不了了）
+    if [ -n "$(printf '%s' "${PROXY_IPS:-}" | tr -d ' ')" ]; then
         msg="$msg + 代理服务器 $(printf '%s' "$PROXY_IPS" | sed 's/^ *//;s/  */,/g')"
     else
         msg="$msg（未识别到代理服务器 IP，回环保护可能失效）"
     fi
     log_date "$msg"
     # 注意：国外 DNS 不加入直连名单，它需要经 Xray 代理出去，避免被污染
+}
+
+# 直连白名单的完整 IP 列表（内网网段 + 国内 DNS + 代理服务器）
+bypass_ip_list() {
+    local ip_lan ip
+    ip_lan="0.0.0.0/8 10.0.0.0/8 100.64.0.0/10 127.0.0.0/8 169.254.0.0/16 172.16.0.0/12 192.168.0.0/16 224.0.0.0/4 240.0.0.0/4 $DNS_CN"
+    for ip in $ip_lan ${PROXY_IPS:-}; do
+        [ -n "$ip" ] && printf '%s\n' "$ip"
+    done
+    return 0
+}
+
+# 从缓存恢复白名单（定时自检用，免去每次重新做 DNS 解析）
+bypass_from_cache() {
+    [ -s "$CACHE_IPS" ] || return 1
+    local ip
+    {
+        while IFS= read -r ip; do
+            [ -n "$ip" ] && echo "add $IPSET_BYPASS $ip"
+        done < "$CACHE_IPS"
+    } | ipset -! restore
+    return 0
 }
 
 # ================= 代理服务器地址：从用户配置的出站里提取 =================
@@ -702,18 +746,31 @@ ipts_update() {
 }
 
 ipts_origin() {
-    log_date "清除已存在的 iptables 规则..."
-    while iptables -t nat -D PREROUTING -p udp --dport 53 -j REDIRECT --to-ports "$DNS_PORT" 2>/dev/null; do :; done
-    while iptables -t nat -D PREROUTING -p tcp --dport 53 -j REDIRECT --to-ports "$DNS_PORT" 2>/dev/null; do :; done
-    while iptables -t nat -D PREROUTING -p tcp -j "$CHAIN" 2>/dev/null; do :; done
-    while iptables -t mangle -D PREROUTING -p udp -j "$CHAIN" 2>/dev/null; do :; done
+    # 只回收"本插件自己下发"的规则，便于反复 start 不叠加：
+    #   1) 本插件加的 53 端口 REDIRECT（目标端口就是本插件的 DNS_PORT）
+    #   2) 本插件在 PREROUTING 里挂的 -j XWALL 跳转
+    #   3) 本插件自己的 XWALL 链（nat/mangle 各一张）
+    #   4) 本插件的策略路由 / ipset
+    # 绝不触碰 UniFi 及其它插件的任何规则（没有 -F PREROUTING、没有整表清空）
+    local n53=0 njmp=0 nchain=0
+    while iptables -t nat -D PREROUTING -p udp --dport 53 -j REDIRECT --to-ports "$DNS_PORT" 2>/dev/null; do n53=$((n53 + 1)); done
+    while iptables -t nat -D PREROUTING -p tcp --dport 53 -j REDIRECT --to-ports "$DNS_PORT" 2>/dev/null; do n53=$((n53 + 1)); done
+    while iptables -t nat -D PREROUTING -p tcp -j "$CHAIN" 2>/dev/null; do njmp=$((njmp + 1)); done
+    while iptables -t mangle -D PREROUTING -p udp -j "$CHAIN" 2>/dev/null; do njmp=$((njmp + 1)); done
     for table in nat mangle; do
+        if iptables -t "$table" -S "$CHAIN" >/dev/null 2>&1; then nchain=$((nchain + 1)); fi
         iptables -t "$table" -F "$CHAIN" 2>/dev/null
         iptables -t "$table" -X "$CHAIN" 2>/dev/null
     done
 
+    if [ $((n53 + njmp + nchain)) -eq 0 ]; then
+        log_date "本插件没有遗留的 iptables 规则需要清理（其它规则一律不动）"
+    else
+        log_date "只清理本插件上轮下发的规则：53 劫持 $n53 条 / XWALL 跳转 $njmp 条 / XWALL 链 $nchain 张（UniFi 与其它插件规则不动）"
+    fi
+
     if ip rule show 2>/dev/null | grep -q "lookup $ROUTE_TABLE"; then
-        log_date "清理策略路由（table $ROUTE_TABLE）..."
+        log_date "清理本插件的策略路由（table $ROUTE_TABLE）..."
         while ip rule show 2>/dev/null | grep -q "lookup $ROUTE_TABLE"; do
             ip rule del fwmark "$FWMARK" table "$ROUTE_TABLE" 2>/dev/null || break
         done
@@ -748,7 +805,8 @@ start_v2ray() {
     fi
 
     # 内核 stdout/stderr 一并追加到同一个日志文件：不额外产生文件，且启动期报错仍可回看
-    "$XRAY_BIN" run -c "$XRAY_JSON" >>"$XRAY_LOG" 2>&1 &
+    # 9>&- 很关键：不要把操作锁的描述符传给子进程，否则内核会一直替我们"占着锁"
+    "$XRAY_BIN" run -c "$XRAY_JSON" >>"$XRAY_LOG" 2>&1 9>&- &
 
     local i=10
     while [ "$i" -gt 0 ]; do
@@ -772,9 +830,84 @@ kill_process() {
 }
 
 # ================= 主流程 =================
+# ================= 定时自检（UniFi 重建规则表后自动补齐） =================
+# 健康判据：内核进程 + nat/mangle 两张链 + PREROUTING 跳转 + 兜底规则 + 策略路由 + ipset
+xwall_healthy() {
+    pidof "$PROC_NAME" >/dev/null 2>&1 || return 1
+    iptables -t nat -S "$CHAIN" >/dev/null 2>&1 || return 1
+    iptables -t mangle -S "$CHAIN" >/dev/null 2>&1 || return 1
+    iptables -t nat -S PREROUTING 2>/dev/null | grep -q -- "-j $CHAIN" || return 1
+    iptables -t mangle -S PREROUTING 2>/dev/null | grep -q -- "-j $CHAIN" || return 1
+    iptables -t nat -S "$CHAIN" 2>/dev/null | grep -q -- "REDIRECT --to-ports $TCP_PORT" || return 1
+    iptables -t mangle -S "$CHAIN" 2>/dev/null | grep -q -- "TPROXY" || return 1
+    ip rule show 2>/dev/null | grep -q "lookup $ROUTE_TABLE" || return 1
+    ipset list "$IPSET_BYPASS" >/dev/null 2>&1 || return 1
+    return 0
+}
+
+install_cron() {
+    remove_cron
+    if (crontab -l 2>/dev/null; echo "*/$CHECK_INTERVAL * * * * /data/softcenter/bin/xwall check >/dev/null 2>&1 # $CRON_TAG") | crontab - 2>/dev/null; then
+        log_date "已注册定时自检：每 $CHECK_INTERVAL 分钟核对一次劫持规则（正常时静默）"
+    else
+        log_date "提示：crontab 注册失败，规则被 UniFi 清掉后需手动执行 check 或 start"
+    fi
+}
+
+remove_cron() {
+    crontab -l 2>/dev/null | grep -v "$CRON_TAG" | crontab - 2>/dev/null || true
+}
+
+check() {
+    local prev
+    set_lock || exit 1
+    prev=$(cat "$STATE_FILE" 2>/dev/null)
+
+    if xwall_healthy; then
+        if [ "$prev" != "ok" ]; then
+            echo ok > "$STATE_FILE" 2>/dev/null
+            log_date "自检正常：劫持规则、策略路由与直连白名单均就绪"
+        fi
+        unset_lock
+        return 0
+    fi
+
+    if ! pidof "$PROC_NAME" >/dev/null 2>&1; then
+        if [ "$prev" != "bad-noproc" ]; then
+            log_date "自检：Xray 未运行，未做规则修复（请执行 start）"
+        fi
+        echo bad-noproc > "$STATE_FILE" 2>/dev/null
+        unset_lock
+        return 1
+    fi
+
+    log_date "自检：劫持规则缺失（UniFi/UBIOS 重建规则表会清掉自定义链与跳转），正在重新下发..."
+    ipts_origin
+    create_ipsetlist
+    if ! bypass_from_cache; then
+        # 缓存丢失（例如路由器重启过）：重新解析代理服务器地址后再下发
+        decode_config 2>/dev/null
+        collect_proxy_servers >/dev/null 2>&1
+        add_bypass_ip
+    fi
+    ipfwd_on
+    ipts_update
+
+    if xwall_healthy; then
+        echo ok > "$STATE_FILE" 2>/dev/null
+        log_date "自检修复完成：劫持规则已恢复"
+        unset_lock
+        return 0
+    fi
+    echo bad > "$STATE_FILE" 2>/dev/null
+    log_date "自检修复失败：请检查 iptables / ipset / ip 命令是否可用"
+    unset_lock
+    return 1
+}
+
 start() {
     log_sep "XWall 启动"
-    set_lock
+    set_lock || exit 1
 
     if ! ensure_core; then
         log_date "内核/数据文件未就绪，启动中止"
@@ -804,28 +937,35 @@ start() {
         unset_lock
         exit 1
     fi
+    echo ok > "$STATE_FILE" 2>/dev/null
+    install_cron
     unset_lock
 }
 
 stop() {
     log_sep "XWall 停止"
-    set_lock
+    set_lock || exit 1
+    remove_cron
     kill_process
     ipts_origin
-    rm -f "$XRAY_JSON" "$XRAY_JSON.tmp" "$USER_JSON" /tmp/xwall_core.log
+    rm -f "$XRAY_JSON" "$XRAY_JSON.tmp" "$USER_JSON" /tmp/xwall_core.log "$STATE_FILE"
     log_date "XWall 已停止，规则与运行配置已清理（内核日志保留在 $XRAY_LOG）"
     unset_lock
 }
+
+# 任何异常退出都要释放锁（曾经因为异常退出没解锁，把后续所有 start/stop 都卡死）
+trap 'unset_lock' EXIT INT TERM
 
 case ${1} in
     start) start ;;
     stop) stop ;;
     restart) stop; sleep 1; start ;;
+    check) check ;;
     status)
         if pgrep -x "$PROC_NAME" >/dev/null 2>&1; then echo "running"; else echo "stopped"; exit 1; fi
         ;;
     *)
-        echo "Usage: $0 {start|stop|restart|status}"
+        echo "Usage: $0 {start|stop|restart|check|status}"
         exit 1
         ;;
 esac
