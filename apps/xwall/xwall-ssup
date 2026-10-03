@@ -1,0 +1,373 @@
+#!/bin/sh
+
+# UniFi SoftCenter · XWall 内核/数据文件更新脚本（GitHub 官方源 + 全局更新代理）
+#
+# 做三件事：
+#   1. 下载并安装 Xray 主程序 → $XWALL_DIR/xwall-xray
+#   2. 把发布包里的 geoip.dat / geosite.dat 一起复制到 $XWALL_DIR（Xray 要求两者同目录可用）
+#   3. 若发布包未带数据文件，则从规则库兜底下载
+#
+# 环境变量：
+#   FORCE_DOWNLOAD=1   强制重下内核
+#   SSUP_NO_START=1    只安装不拉起 xwall（供 xwall 启动时调用）
+
+# 时间戳输出（用函数而非 alias：bash 非交互模式下 alias 不展开）
+echo_date() {
+    echo "【$(date "+%Y年%m月%d日 %H:%M:%S")】: $1"
+}
+
+XWALL_DIR="/data/softcenter/bin/xwall-core"   # 内核 + geoip.dat + geosite.dat（bin/xwall 是脚本本体）
+XRAY_BIN="$XWALL_DIR/xwall-xray"
+ASSET_DIR="$XWALL_DIR"
+XWALL_BIN="/data/softcenter/bin/xwall"
+SSUP_BIN="/data/softcenter/bin/xwall-ssup"
+PROC_NAME="xwall-xray"
+GITHUB_API="https://api.github.com/repos/XTLS/Xray-core/releases/latest"
+DAT_GEOIP_URL="${DAT_GEOIP_URL:-https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/geoip.dat}"
+DAT_GEOSITE_URL="${DAT_GEOSITE_URL:-https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/geosite.dat}"
+FORCE_DOWNLOAD="${FORCE_DOWNLOAD:-0}"
+SSUP_NO_START="${SSUP_NO_START:-0}"
+
+# 数据文件必须与内核同目录，Xray 按此变量查找 geoip.dat / geosite.dat
+XRAY_LOCATION_ASSET="$ASSET_DIR"
+export XRAY_LOCATION_ASSET
+
+# 代理：读软件中心「系统设置 → 全局更新代理」(/data/softcenter/config.json 的 LocalProxy)
+SC_PROXY=$(sed -n 's/.*"LocalProxy"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' /data/softcenter/config.json 2>/dev/null | head -n1)
+CURL_OPT=""
+if [ -n "$SC_PROXY" ]; then
+    CURL_OPT="-x $SC_PROXY"
+    echo_date "升级代理（全局更新代理）: $SC_PROXY"
+else
+    echo_date "未配置全局更新代理，直连 GitHub"
+fi
+
+# 1. 自动获取 UDM 架构
+arch=$(uname -m)
+case $arch in
+    aarch64|arm64)
+        ZIP_NAME="Xray-linux-arm64-v8a.zip"
+        ;;
+    x86_64|amd64)
+        ZIP_NAME="Xray-linux-64.zip"
+        ;;
+    *)
+        echo_date "暂不支持的路由器架构: $arch"
+        exit 1
+        ;;
+esac
+
+human_size() {
+    awk -v b="${1:-0}" 'BEGIN{
+        split("B KB MB GB", u, " ")
+        i = 1
+        while (b >= 1024 && i < 4) { b /= 1024; i++ }
+        if (i == 1) printf "%d %s", b, u[i]
+        else printf "%.1f %s", b, u[i]
+    }'
+}
+
+# 后台 curl 下载，按约 10% 进度换行输出（与 SoftCenter install.sh 一致）
+download_with_progress() {
+    local url="$1"
+    local out="$2"
+    local err="/tmp/xwall_curl.err"
+    local pid last=0 p got
+
+    : > "$err"
+    curl $CURL_OPT -fL --connect-timeout 15 --max-time 300 -o "$out" "$url" 2>"$err" &
+    pid=$!
+
+    while kill -0 "$pid" 2>/dev/null; do
+        sleep 1
+        p=$(tr '\r' '\n' < "$err" 2>/dev/null | sed -n 's/.*[[:space:]]\([0-9][0-9]*\)[[:space:]]*%.*/\1/p' | tail -n1)
+        p=${p:-0}
+        if [ "$p" -ge $((last + 10)) ] || [ "$p" -ge 100 ]; then
+            got=$(wc -c < "$out" 2>/dev/null || echo 0)
+            echo_date "▸ 进度 ${p}%  已下载 $(human_size "$got")"
+            last=$p
+        fi
+    done
+
+    wait "$pid"
+}
+
+# 版本号必须是 数字.数字(.数字...) ，否则视为检测失败
+is_valid_version() {
+    echo "$1" | grep -Eq '^[0-9]+(\.[0-9]+)+$'
+}
+
+# 数据文件是否为可用的二进制（非空、非 HTML 错误页）
+dat_ok() {
+    local f="$1"
+    [ -s "$f" ] || return 1
+    [ "$(wc -c < "$f" | tr -d ' ')" -ge 10240 ] || return 1
+    [ "$(head -c 1 "$f" 2>/dev/null)" != "<" ] || return 1
+    return 0
+}
+
+dat_ready() {
+    dat_ok "$ASSET_DIR/geoip.dat" && dat_ok "$ASSET_DIR/geosite.dat"
+}
+
+get_latest_version(){
+    if [ ! -x "${XRAY_BIN}" ]; then
+        echo_date "本地未找到 ${XRAY_BIN}，直接下载最新版..."
+        FORCE_DOWNLOAD=1
+    fi
+
+    echo_date "检测线上 XTLS/Xray-core 最新版本..."
+
+    # -f：HTTP 4xx/5xx 视为失败，避免错误页被当成版本信息继续下载
+    LATEST_INFO=$(curl $CURL_OPT --connect-timeout 10 --max-time 30 -fsSL "$GITHUB_API")
+    CURL_RC=$?
+    if [ "$CURL_RC" != "0" ] || [ -z "$LATEST_INFO" ]; then
+        echo_date "获取 Xray 最新版本信息失败 (curl exit=${CURL_RC})！请检查网络或代理连通性，已中止，不会继续下载。"
+        exit 1
+    fi
+
+    # GitHub API 为单行 JSON，须精确匹配 tag_name，不能用贪婪的 .*"([^"]+)".*
+    XVERSION=$(printf '%s\n' "$LATEST_INFO" | sed -nE 's/.*"tag_name"[[:space:]]*:[[:space:]]*"v?([^"]+)".*/\1/p' | head -n1)
+    XVERSION=$(printf '%s' "$XVERSION" | tr -d '\r\n ')
+
+    if ! is_valid_version "$XVERSION"; then
+        echo_date "解析版本号失败（得到：${XVERSION:-空}）！可能触发了 GitHub API 频率限制，已中止，不会继续下载。"
+        echo "API 返回如下内容："
+        echo "$LATEST_INFO" | head -n 5
+        exit 1
+    fi
+
+    echo_date "检测到线上最新版本：v${XVERSION}"
+}
+
+# 本地内核是否已是最新
+core_is_latest(){
+    [ -x "$XRAY_BIN" ] || return 1
+    [ "$FORCE_DOWNLOAD" = "1" ] && return 1
+    local cur_ver
+    cur_ver=$("$XRAY_BIN" version 2>/dev/null | head -n 1 | awk '{print $2}' | sed 's/v//g; s/\r//g; s/ //g')
+    [ -n "$cur_ver" ] || return 1
+    [ "$cur_ver" = "$XVERSION" ]
+}
+
+update_now(){
+    local ver=$1
+    # 门禁：版本号非法时绝不进入下载
+    local ver_num="${ver#v}"
+    if [ -z "$ver" ] || ! is_valid_version "$ver_num"; then
+        echo_date "版本号无效（${ver:-空}），中止下载。"
+        exit 1
+    fi
+
+    rm -rf /tmp/xray
+    mkdir -p /tmp/xray && cd /tmp/xray
+
+    DL_BASE="https://github.com/XTLS/Xray-core/releases/download/${ver}"
+
+    echo_date "▸ 下载校验文件 ${ZIP_NAME}.dgst"
+    if ! curl $CURL_OPT --connect-timeout 15 --max-time 60 -fsSL -o "/tmp/xray/${ZIP_NAME}.dgst" "${DL_BASE}/${ZIP_NAME}.dgst" || [ ! -s "/tmp/xray/${ZIP_NAME}.dgst" ]; then
+        echo_date "${ZIP_NAME}.dgst 下载失败，已中止"
+        exit 1
+    fi
+    echo_date "  校验文件就绪"
+
+    echo_date "▸ 下载 Xray 主程序"
+    echo_date "  地址: ${DL_BASE}/${ZIP_NAME}"
+    if ! download_with_progress "${DL_BASE}/${ZIP_NAME}" "/tmp/xray/${ZIP_NAME}" || [ ! -s "/tmp/xray/${ZIP_NAME}" ]; then
+        echo_date "Xray 压缩包下载失败，已中止"
+        rm -rf /tmp/xray
+        exit 1
+    fi
+    ZIP_SIZE=$(wc -c < "/tmp/xray/${ZIP_NAME}" | tr -d ' ')
+    echo_date "  下载完成: $(human_size "$ZIP_SIZE")"
+
+    check_hash
+}
+
+# 解析解压命令：优先独立 unzip，很多固件只带 busybox，则回落到 busybox unzip
+# 只用 shell 内建判断，不依赖 grep，避免精简固件里连 grep 都缺
+UNZIP_CMD=""
+detect_unzip(){
+    if command -v unzip >/dev/null 2>&1; then
+        UNZIP_CMD="unzip"
+        return 0
+    fi
+    if command -v busybox >/dev/null 2>&1; then
+        case "$(busybox --list 2>/dev/null)" in
+            *unzip*)
+                UNZIP_CMD="busybox unzip"
+                return 0
+                ;;
+        esac
+        # 老版本 busybox 不支持 --list，用"无参数输出 usage"兜底判断
+        case "$(busybox unzip 2>&1)" in
+            *[Uu]sage*)
+                UNZIP_CMD="busybox unzip"
+                return 0
+                ;;
+        esac
+    fi
+    UNZIP_CMD=""
+    return 1
+}
+
+check_hash(){
+    cd /tmp/xray
+
+    # 解压工具先探测：缺失就立刻报错，不要把下载好的包白装一遍
+    if ! detect_unzip; then
+        echo_date "系统既没有 unzip 也没有 busybox unzip，无法解压 Xray 发布包；请先安装 unzip 后重试"
+        exit 1
+    fi
+    echo_date "解压工具：${UNZIP_CMD}"
+
+    echo_date "▸ 比对 SHA2-256"
+
+    ONLINE_HASH=$(grep "^SHA2-256=" "${ZIP_NAME}.dgst" | awk '{print $2}' | tr -d ' \r')
+    LOCAL_HASH=$(sha256sum "${ZIP_NAME}" | awk '{print $1}')
+
+    if [ -z "${ONLINE_HASH}" ]; then
+        echo_date "校验文件中未找到 SHA2-256，已中止，不会覆盖本地文件"
+        exit 1
+    fi
+    if [ "${LOCAL_HASH}" != "${ONLINE_HASH}" ]; then
+        echo_date "SHA2-256 校验失败，已中止，不会覆盖本地文件"
+        echo_date "  期望: ${ONLINE_HASH}"
+        echo_date "  实际: ${LOCAL_HASH}"
+        exit 1
+    fi
+    echo_date "✅ 校验通过  ${LOCAL_HASH}"
+
+    echo_date "▸ 解压并安装"
+    # 内核必装；geoip.dat / geosite.dat 官方包里有就一起取出来（缺了不报错，后面会兜底下载）
+    $UNZIP_CMD -o "${ZIP_NAME}" xray >/dev/null 2>&1
+    $UNZIP_CMD -o "${ZIP_NAME}" geoip.dat geosite.dat >/dev/null 2>&1
+
+    if [ -f "xray" ]; then
+        install_binary
+    else
+        echo_date "解压失败或未找到 xray 二进制文件！"
+        exit 1
+    fi
+}
+
+# 把解压出来的数据文件复制到内核同目录（内容一致时跳过）
+install_dat(){
+    local f src
+    for f in geoip.dat geosite.dat; do
+        src="/tmp/xray/$f"
+        if dat_ok "$src"; then
+            if dat_ok "$ASSET_DIR/$f" && cmp -s "$src" "$ASSET_DIR/$f"; then
+                echo_date "  $f 无变化，跳过复制"
+            else
+                cp -f "$src" "$ASSET_DIR/$f" || { echo_date "  $f 复制失败"; return 1; }
+                echo_date "  $f 已复制到 $ASSET_DIR（$(human_size "$(wc -c < "$ASSET_DIR/$f" | tr -d ' ')")）"
+            fi
+        else
+            echo_date "  发布包内没有可用的 $f，稍后兜底下载"
+        fi
+    done
+    return 0
+}
+
+download_dat(){
+    local name="$1"
+    local url="$2"
+    local tmp="/tmp/${name}.dl"
+
+    rm -f "$tmp"
+    if download_with_progress "$url" "$tmp" && dat_ok "$tmp"; then
+        mv -f "$tmp" "$ASSET_DIR/$name"
+        echo_date "  $name 下载完成（$(human_size "$(wc -c < "$ASSET_DIR/$name" | tr -d ' ')")）"
+        return 0
+    fi
+    rm -f "$tmp"
+    echo_date "  $name 下载失败"
+    return 1
+}
+
+# 兜底：数据文件缺失时从规则库下载
+ensure_dat(){
+    if dat_ready; then
+        echo_date "geoip.dat / geosite.dat 已就绪"
+        return 0
+    fi
+
+    echo_date "数据文件缺失，从规则库补齐（Loyalsoldier/v2ray-rules-dat）..."
+    mkdir -p "$ASSET_DIR"
+
+    dat_ok "$ASSET_DIR/geoip.dat" || download_dat geoip.dat "$DAT_GEOIP_URL"
+    dat_ok "$ASSET_DIR/geosite.dat" || download_dat geosite.dat "$DAT_GEOSITE_URL"
+
+    if dat_ready; then
+        echo_date "数据文件补齐完成"
+        return 0
+    fi
+    echo_date "数据文件仍不完整，Xray 可能无法启动（geoip/geosite 规则需要它）"
+    return 1
+}
+
+# 安装完成后是否拉起 xwall（SSUP_NO_START=1 时由调用方负责）
+maybe_start(){
+    if [ "$SSUP_NO_START" = "1" ]; then
+        echo_date "SSUP_NO_START=1，跳过拉起 xwall（由调用方继续启动）"
+        return 0
+    fi
+    echo_date "尝试启动代理服务..."
+    "$XWALL_BIN" start
+    sleep 2
+    if pidof "$PROC_NAME" >/dev/null 2>&1; then
+        echo_date "Xray 启动成功！目前运行 PID：$(pidof "$PROC_NAME")"
+    else
+        echo_date "致命错误：Xray 进程启动失败，请检查配置文件格式！"
+    fi
+}
+
+install_binary(){
+    echo_date "开始覆盖最新内核与数据文件..."
+    if pidof "$PROC_NAME" >/dev/null 2>&1; then
+        echo_date "正在关闭运行中的 Xray 主进程... "
+        "$XWALL_BIN" stop
+        sleep 1
+    fi
+
+    mkdir -p "$XWALL_DIR"
+    mv -f /tmp/xray/xray "$XRAY_BIN"
+    chmod +x "$XRAY_BIN"
+    echo_date "Xray 内核更新成功：$XRAY_BIN"
+
+    install_dat
+    ensure_dat || true
+
+    rm -rf /tmp/xray
+    maybe_start
+}
+
+# ================= 脚本主流程 =================
+[ "$SSUP_NO_START" = "1" ] || clear
+echo_date "==================================================================="
+echo_date "          XWall 内核更新脚本 (GitHub 官方源 + 全局更新代理)"
+echo_date "          内核目录: $XWALL_DIR （含 geoip.dat / geosite.dat）"
+echo_date "==================================================================="
+
+mkdir -p "$XWALL_DIR"
+
+get_latest_version
+
+if core_is_latest; then
+    echo_date "本地 Xray 已是最新版本，跳过内核下载。"
+    if ! ensure_dat; then
+        exit 1
+    fi
+    maybe_start
+else
+    update_now "v${XVERSION}"
+fi
+
+if [ -x "$XRAY_BIN" ] && dat_ready; then
+    echo_date "完成：内核与 geoip/geosite 数据文件均已就绪"
+else
+    echo_date "结束：内核或数据文件不完整，请检查上面的日志"
+    exit 1
+fi
+echo_date "==================================================================="

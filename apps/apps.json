@@ -337,6 +337,166 @@
         }
     },
     {
+        "Id": "xwall",
+        "Name": "XWall",
+        "Type": "Binary Core",
+        "Version": "1.0.0",
+        "Description": "全流量交给 Xray，由 Xray 规则集自动分流（国内直连 / 国外代理）。",
+        "Icon": "shield-check",
+        "StartCommand": "/data/softcenter/bin/xwall start",
+        "StopCommand": "/data/softcenter/bin/xwall stop",
+        "StatusCommand": "/data/softcenter/bin/xwall status",
+        "IsAutoStart": 1,
+        "ConfigPath": "/data/softcenter/config/xwall.env",
+        "ConfigKeys": "",
+        "LogPath": "/var/log/xwall.log",
+        "CustomCommands": "[{\"name\":\"升级Xray核心\",\"command\":\"/data/softcenter/bin/xwall-ssup\"},{\"name\":\"强制重下核心\",\"command\":\"FORCE_DOWNLOAD=1 /data/softcenter/bin/xwall-ssup\"}]",
+        "Files": [
+            {
+                "Name": "xwall",
+                "Path": "apps/xwall/xwall",
+                "Sha256": "372203cd25645a25566bf6bee6f37e1956ffd810574ca05c77f5671edfe586d3",
+                "Mode": "0755"
+            },
+            {
+                "Name": "xwall-ssup",
+                "Path": "apps/xwall/xwall-ssup",
+                "Sha256": "7f8ea550b967ee5685c397723aea384a316a2f30b04efd85abf9ee393535a123",
+                "Mode": "0755"
+            }
+        ],
+        "ConfigSchema": {
+            "Sections": [
+                {
+                    "Title": "基本设置",
+                    "Tab": "基本设置",
+                    "Fields": [
+                        {
+                            "Key": "XWALL_CONFIG",
+                            "Label": "配置文件",
+                            "Type": "textarea",
+                            "Default": "",
+                            "Rows": 25,
+                            "Monospace": true,
+                            "Required": true,
+                            "Placeholder": "{\n  \"outbounds\": [\n    { \"tag\": \"proxy\", \"protocol\": \"vless\", \"settings\": { ... } }\n  ]\n}",
+                            "Help": "只填 outbounds 即可，inbounds / dns / routing / fakedns 由插件自动生成；必须有一个 tag 为 proxy 的出站（direct、block、dns-out 会自动补齐）"
+                        }
+                    ]
+                },
+                {
+                    "Title": "DNS",
+                    "Tab": "DNS设置",
+                    "Fields": [
+                        {
+                            "Key": "DNS_CN",
+                            "Label": "国内 DNS",
+                            "Type": "ip",
+                            "Default": "223.5.5.5",
+                            "Help": "解析国内域名（geosite:cn），同时加入直连名单"
+                        },
+                        {
+                            "Key": "DNS_FOREIGN",
+                            "Label": "国外 DNS",
+                            "Type": "ip",
+                            "Default": "8.8.8.8",
+                            "Help": "解析被代理的国外域名，走代理出去；不要填国内 DNS"
+                        },
+                        {
+                            "Key": "DNS_HIJACK",
+                            "Label": "域名劫持",
+                            "Type": "switch",
+                            "Default": "0",
+                            "Help": "开启后下发 PREROUTING 53 端口劫持：局域网所有 DNS 查询都交给 Xray（国内域名走国内 DNS，国外域名走 FakeIP + 国外 DNS）；关闭则只接管本来就要出网的 DNS 查询。本地域名（.local/.localdomain 等）仍交给路由器 dnsmasq 解析"
+                        }
+                    ]
+                },
+                {
+                    "Title": "代理白名单",
+                    "Tab": "白名单",
+                    "Fields": [
+                        {
+                            "Key": "PROXY_WHITE_LIST",
+                            "Label": "局域网 IP",
+                            "Type": "textarea",
+                            "Default": "",
+                            "Rows": 8,
+                            "Monospace": true,
+                            "Placeholder": "192.168.1.100\n192.168.1.0/24",
+                            "Help": "一行一个 IP 或网段：名单内的局域网设备直连（不经过 Xray），其余设备全部走代理；留空表示所有设备都走代理"
+                        }
+                    ]
+                },
+                {
+                    "Title": "SOCKS5",
+                    "Tab": "SOCKS5",
+                    "Fields": [
+                        {
+                            "Key": "XWALL_SOCKS_ENABLE",
+                            "Label": "启用 SOCKS5",
+                            "Type": "switch",
+                            "Default": "0",
+                            "Help": "为设备提供 SOCKS5 代理入口，出站同样按 Xray 规则集分流"
+                        },
+                        {
+                            "Key": "XWALL_SOCKS_PORT",
+                            "Label": "监听端口",
+                            "Type": "port",
+                            "Default": "1283"
+                        },
+                        {
+                            "Key": "XWALL_SOCKS_LISTEN",
+                            "Label": "监听地址",
+                            "Type": "select",
+                            "Default": "0",
+                            "Options": [
+                                {
+                                    "Label": "仅本机 (127.0.0.1)",
+                                    "Value": "0"
+                                },
+                                {
+                                    "Label": "局域网 (0.0.0.0)",
+                                    "Value": "1"
+                                }
+                            ]
+                        },
+                        {
+                            "Key": "XWALL_SOCKS_AUTH",
+                            "Label": "验证方式",
+                            "Type": "select",
+                            "Default": "0",
+                            "Options": [
+                                {
+                                    "Label": "无验证",
+                                    "Value": "0"
+                                },
+                                {
+                                    "Label": "用户名密码",
+                                    "Value": "1"
+                                }
+                            ]
+                        },
+                        {
+                            "Key": "XWALL_SOCKS_USER",
+                            "Label": "用户名",
+                            "Type": "text",
+                            "Default": "",
+                            "VisibleWhen": "XWALL_SOCKS_AUTH=1"
+                        },
+                        {
+                            "Key": "XWALL_SOCKS_PASS",
+                            "Label": "密码",
+                            "Type": "password",
+                            "Default": "",
+                            "Secret": true,
+                            "VisibleWhen": "XWALL_SOCKS_AUTH=1"
+                        }
+                    ]
+                }
+            ]
+        }
+    },
+    {
         "Id": "wechat",
         "Name": "微信通知",
         "Type": "Shell Script",

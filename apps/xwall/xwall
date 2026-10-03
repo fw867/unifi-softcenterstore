@@ -1,0 +1,501 @@
+#!/bin/sh
+
+# UniFi SoftCenter · XWall —— 全流量交给 Xray，由 Xray 规则集分流（国内直连 / 国外代理）
+# 面板配置：/data/softcenter/config/xwall.env
+#   XWALL_CONFIG      配置文件（只需 outbounds，必须有一个 tag=proxy 的出站）
+#   DNS_CN/DNS_FOREIGN 国内 / 国外 DNS
+#   DNS_HIJACK        域名劫持开关（开启后下发 PREROUTING 53 端口劫持）
+#   PROXY_WHITE_LIST  代理白名单（名单内局域网设备直连，其余全部走代理）
+#   XWALL_SOCKS_*     SOCKS5 入站（开关 / 端口 / 监听地址 / 验证方式）
+#
+# 与 koolss 完全隔离，规则互不干扰：
+#   进程 xwall-xray ｜ 自定义链 XWALL ｜ ipset xwall_bypass ｜ 策略路由 fwmark 0x08 / table 320
+#   （koolss 使用 koolss-xray / V2RAY / white_list / 0x07 / table 310）
+# 注意：两个插件都会接管全部流量（且都用 1280/1281 端口），只能二选一运行。
+#
+# 内核与数据文件放在同一目录（bin/xwall-core），便于 Xray 按 XRAY_LOCATION_ASSET
+# 找到 geoip.dat / geosite.dat；注意 /data/softcenter/bin/xwall 是插件脚本本体，不能当目录用。
+
+PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+export PATH
+
+# ================= 名称与路径（改这里即可全局生效） =================
+PROC_NAME="xwall-xray"
+SSUP_BIN="/data/softcenter/bin/xwall-ssup"
+XWALL_DIR="/data/softcenter/bin/xwall-core"   # 内核 + geoip.dat + geosite.dat
+XRAY_BIN="$XWALL_DIR/xwall-xray"
+ASSET_DIR="$XWALL_DIR"
+USER_JSON="/tmp/xwall_user.json"        # 面板粘贴的原始配置
+XRAY_JSON="/tmp/xwall.json"             # 插件生成后的运行配置
+CORE_LOG="/tmp/xwall_core.log"          # 内核 stderr/stdout，启动失败时回看
+LOG_FILE="/var/log/xwall.log"
+LOCK_FILE="/var/lock/xwall.lock"
+CHAIN="XWALL"                           # nat / mangle 自定义链名
+IPSET_BYPASS="xwall_bypass"             # 防回环目标名单
+FWMARK="0x08"                           # TPROXY 标记（koolss 用 0x07，避免冲突）
+ROUTE_TABLE="320"                       # 策略路由表（koolss 用 310）
+TCP_PORT="1280"                         # TCP 透明代理端口
+UDP_PORT="1281"                         # UDP TPROXY 端口
+DNS_PORT="15353"                        # 域名劫持用的 DNS 入站端口（仅本机/LAN 可达）
+DNS_LOCAL_DOMAINS='["domain:local","domain:localdomain","domain:lan","domain:home.arpa","domain:invalid","domain:localhost"]'
+
+# 明确告知 Xray 数据文件目录，不依赖各版本的默认搜索顺序
+XRAY_LOCATION_ASSET="$ASSET_DIR"
+export XRAY_LOCATION_ASSET
+# ===================================================================
+
+# 状态探针：SoftCenter 每 3 秒轮询，必须轻量，不读配置、不写日志
+if [ "$1" = "status" ]; then
+    if pgrep -x "$PROC_NAME" >/dev/null 2>&1; then echo "running"; exit 0; fi
+    echo "stopped"
+    exit 1
+fi
+
+CONFIG="/data/softcenter/config/xwall.env"
+[ -f "$CONFIG" ] && . "$CONFIG"
+
+# ================= 面板设置项 =================
+XWALL_CONFIG="${XWALL_CONFIG:-}"
+DNS_CN="${DNS_CN:-223.5.5.5}"
+DNS_FOREIGN="${DNS_FOREIGN:-8.8.8.8}"
+# 域名劫持：开启后把局域网所有 53 端口查询劫持进 Xray（国内走国内 DNS，国外走 FakeIP + 国外 DNS）
+DNS_HIJACK="${DNS_HIJACK:-0}"
+# 代理白名单：名单内的局域网设备直连（旁路 Xray），其余设备全部走代理
+PROXY_WHITE_LIST="${PROXY_WHITE_LIST:-}"
+
+# SOCKS5 入站
+XWALL_SOCKS_ENABLE="${XWALL_SOCKS_ENABLE:-0}"
+XWALL_SOCKS_PORT="${XWALL_SOCKS_PORT:-1283}"
+XWALL_SOCKS_LISTEN="${XWALL_SOCKS_LISTEN:-0}"   # 0: 仅本机 127.0.0.1, 1: 局域网 0.0.0.0
+XWALL_SOCKS_AUTH="${XWALL_SOCKS_AUTH:-0}"       # 0: 无验证, 1: 用户名密码
+XWALL_SOCKS_USER="${XWALL_SOCKS_USER:-}"
+XWALL_SOCKS_PASS="${XWALL_SOCKS_PASS:-}"
+# =============================================
+
+log_date() {
+    echo "【$(date '+%Y年%m月%d日 %X')】: $1" | tee -a "$LOG_FILE"
+}
+
+trim() {
+    printf '%s' "$1" | tr -d '\r' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//'
+}
+
+decode_b64() {
+    case "$1" in
+        b64:*) echo "${1#b64:}" | base64 -d 2>/dev/null ;;
+        *) [ -n "$1" ] && printf '%s\n' "$1" ;;
+    esac
+}
+
+# 探测局域网地址（dnsmasq 一定监听它）：先看 br0，再从内核直连路由里找
+detect_lan_ip() {
+    local addr=""
+    if [ -d /sys/class/net/br0 ]; then
+        addr=$(ip -4 addr show dev br0 2>/dev/null | awk '/inet /{print $2}' | cut -d/ -f1 | head -n1)
+    fi
+    if [ -z "$addr" ]; then
+        addr=$(ip -4 route show scope link 2>/dev/null | awk '/ proto kernel /{for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}' | head -n1)
+    fi
+    printf '%s' "$addr"
+}
+
+DIRECT_LIST=$(decode_b64 "$PROXY_WHITE_LIST")
+
+# ================= 内核 / 数据文件 =================
+have_core() { [ -x "$XRAY_BIN" ]; }
+have_assets() { [ -s "$ASSET_DIR/geoip.dat" ] && [ -s "$ASSET_DIR/geosite.dat" ]; }
+
+# 启动前检查内核与 geoip/geosite，缺失时调用 xwall-ssup 自动补齐
+ensure_core() {
+    if have_core && have_assets; then
+        return 0
+    fi
+
+    if have_core; then
+        log_date "缺少 geoip.dat / geosite.dat，开始自动获取..."
+    else
+        log_date "未检测到 Xray 内核（$XRAY_BIN），开始自动下载..."
+    fi
+
+    if [ ! -x "$SSUP_BIN" ]; then
+        log_date "未找到 $SSUP_BIN，无法自动下载内核/数据文件"
+        return 1
+    fi
+
+    SSUP_NO_START=1 "$SSUP_BIN" 2>&1 | tee -a "$LOG_FILE"
+
+    if have_core && have_assets; then
+        log_date "Xray 内核与 geoip/geosite 数据文件已就绪"
+        return 0
+    fi
+
+    log_date "内核/数据文件仍缺失：内核=$([ -x "$XRAY_BIN" ] && echo ok || echo 缺失) geoip=$([ -s "$ASSET_DIR/geoip.dat" ] && echo ok || echo 缺失) geosite=$([ -s "$ASSET_DIR/geosite.dat" ] && echo ok || echo 缺失)"
+    return 1
+}
+
+# ================= 运行配置生成 =================
+# 面板只需提供 outbounds（至少一个 tag 为 proxy 的出站），其余由插件生成
+decode_config() {
+    case "$XWALL_CONFIG" in
+        b64:*) echo "${XWALL_CONFIG#b64:}" | base64 -d > "$USER_JSON" 2>/dev/null ;;
+        *) printf '%s\n' "$XWALL_CONFIG" > "$USER_JSON" ;;
+    esac
+    if [ ! -s "$USER_JSON" ]; then
+        log_date "配置内容为空或 base64 解码失败，请重新保存面板配置"
+        exit 1
+    fi
+}
+
+build_xray_config() {
+    log_date "生成 Xray 运行配置（全流量接管 + Xray 规则集分流）..."
+
+    fake_pool="198.18.0.0/15"
+
+    socks_listen_ip="127.0.0.1"
+    [ "$XWALL_SOCKS_LISTEN" = "1" ] && socks_listen_ip="0.0.0.0"
+
+    # 域名劫持入站：只监听局域网地址（拿不到就退化为全网卡，靠 UniFi 的 WAN 入站策略兜底）
+    local lan_ip
+    lan_ip=$(detect_lan_ip)
+    dns_listen="${lan_ip:-0.0.0.0}"
+    # 本地域名的兜底 DNS：交给路由自身的 dnsmasq，保证 .local / .localdomain 这类名字仍可解析
+    local_dns="${lan_ip:-127.0.0.1}"
+
+    # 固定分流：内网与国内直连，其余网络全部交给 proxy 出站
+    routing_rules='[
+        {"type": "field", "outboundTag": "direct", "ip": ["geoip:private"]},
+        {"type": "field", "outboundTag": "direct", "domain": ["geosite:cn"]},
+        {"type": "field", "outboundTag": "direct", "ip": ["geoip:cn"]},
+        {"type": "field", "outboundTag": "proxy", "network": "tcp,udp"}
+    ]'
+
+    jq --argjson baseRules "$routing_rules" \
+       --argjson localDomains "$DNS_LOCAL_DOMAINS" \
+       --arg fakePool "$fake_pool" \
+       --arg dnsCn "$DNS_CN" \
+       --arg dnsForeign "$DNS_FOREIGN" \
+       --arg localDns "$local_dns" \
+       --arg dnsListen "$dns_listen" \
+       --argjson dnsPort "$DNS_PORT" \
+       --arg dnsHijack "$DNS_HIJACK" \
+       --arg socks_en "$XWALL_SOCKS_ENABLE" \
+       --arg socks_port "$XWALL_SOCKS_PORT" \
+       --arg socks_listen "$socks_listen_ip" \
+       --arg socks_auth "$XWALL_SOCKS_AUTH" \
+       --arg socks_user "$XWALL_SOCKS_USER" \
+       --arg socks_pass "$XWALL_SOCKS_PASS" '
+      .fakedns = [ { "ipPool": $fakePool, "poolSize": 65535 } ] |
+      .inbounds = ([
+        {
+          "tag": "tproxy-tcp",
+          "port": 1280,
+          "protocol": "dokodemo-door",
+          "settings": { "network": "tcp", "followRedirect": true },
+          "sniffing": { "enabled": true, "destOverride": ["fakedns", "http", "tls", "quic"], "routeOnly": false }
+        },
+        {
+          "tag": "tproxy-udp",
+          "port": 1281,
+          "protocol": "dokodemo-door",
+          "settings": { "network": "udp", "followRedirect": true },
+          "streamSettings": { "sockopt": { "tproxy": "tproxy" } },
+          "sniffing": { "enabled": true, "destOverride": ["fakedns", "http", "tls", "quic"], "routeOnly": false }
+        }
+      ] + (if $dnsHijack == "1" then [
+        {
+          "tag": "dns-in",
+          "listen": $dnsListen,
+          "port": $dnsPort,
+          "protocol": "dokodemo-door",
+          "settings": { "network": "tcp,udp", "followRedirect": true }
+        }
+      ] else [] end) + (if $socks_en == "1" then [
+        {
+          "tag": "socks-in",
+          "protocol": "socks",
+          "listen": $socks_listen,
+          "port": ($socks_port | tonumber),
+          "settings": (
+            if $socks_auth == "1" and $socks_user != "" then
+              { "auth": "password", "accounts": [ { "user": $socks_user, "pass": $socks_pass } ], "udp": true }
+            else
+              { "auth": "noauth", "udp": true }
+            end
+          )
+        }
+      ] else [] end)) |
+      .dns = {
+        "servers": [
+          { "address": $dnsCn, "domains": ["geosite:cn"] },
+          { "address": $localDns, "domains": $localDomains },
+          "fakedns",
+          $dnsForeign
+        ]
+      } |
+      .routing = {
+        "domainStrategy": "IPIfNonMatch",
+        "rules": (
+          [
+            {"type": "field", "port": 53, "outboundTag": "dns-out"}
+          ] + (if $dnsHijack == "1" then [
+            {"type": "field", "inboundTag": ["dns-in"], "outboundTag": "dns-out"}
+          ] else [] end) + [
+            {"type": "field", "ip": [$fakePool], "outboundTag": "proxy"}
+          ] + $baseRules
+        )
+      } |
+      .outbounds = ([.outbounds[]? | select(.tag != "direct" and .tag != "block" and .tag != "dns-out")] + [
+        {"tag": "direct", "protocol": "freedom"},
+        {"tag": "block", "protocol": "blackhole"},
+        {"tag": "dns-out", "protocol": "dns"}
+      ])
+    ' "$USER_JSON" > "$XRAY_JSON.tmp"
+
+    if [ ! -s "$XRAY_JSON.tmp" ]; then
+        log_date "配置重写失败：请确认已安装 jq，且「配置文件」是合法 JSON"
+        rm -f "$XRAY_JSON.tmp"
+        exit 1
+    fi
+
+    if ! jq -e '[.outbounds[]? | select(.tag == "proxy")] | length > 0' "$XRAY_JSON.tmp" >/dev/null 2>&1; then
+        log_date "配置里没有 tag 为 proxy 的出站，无法分流！请保留一个 \"tag\": \"proxy\" 的出站"
+        rm -f "$XRAY_JSON.tmp"
+        exit 1
+    fi
+
+    mv -f "$XRAY_JSON.tmp" "$XRAY_JSON"
+    log_date "Xray 运行配置生成成功：$XRAY_JSON（国内 DNS=$DNS_CN，国外 DNS=$DNS_FOREIGN，域名劫持=$DNS_HIJACK）"
+}
+
+prepare_config() {
+    if [ -z "$XWALL_CONFIG" ]; then
+        log_date "未配置 Xray JSON，请在软件中心「XWall → 基本设置」粘贴配置"
+        exit 1
+    fi
+    decode_config
+    if ! jq -e . "$USER_JSON" >/dev/null 2>&1; then
+        log_date "「配置文件」不是合法 JSON，请检查（只填 outbounds 即可）"
+        exit 1
+    fi
+    build_xray_config
+}
+
+# ================= 进程锁 =================
+set_lock() {
+    mkdir -p /var/lock 2>/dev/null
+    exec 9>"$LOCK_FILE"
+    flock -x 9 2>/dev/null
+}
+unset_lock() {
+    flock -u 9 2>/dev/null
+    rm -f "$LOCK_FILE"
+}
+
+# ================= ipset：防回环目标名单 =================
+create_ipsetlist() {
+    log_date "初始化防回环 ipset 名单（$IPSET_BYPASS）..."
+    ipset -! create "$IPSET_BYPASS" nethash
+    ipset flush "$IPSET_BYPASS"
+}
+
+add_bypass_ip() {
+    # 代理服务器自身必须直连，否则会回环
+    local proxy_server proxy_ip
+    proxy_server=$(jq -r '.outbounds[]? | select(.tag == "proxy") | (.settings.vnext[0].address // .settings.servers[0].address // .settings.address // empty)' "$XRAY_JSON" 2>/dev/null | head -n1)
+    proxy_ip=""
+    if [ -n "$proxy_server" ]; then
+        case "$proxy_server" in
+            *[!0-9a-fA-F.:]*)
+                # 域名：用国内 DNS 解析（取 Name 之后的第一条 Address，兼容 bind/busybox 两种输出）
+                proxy_ip=$(nslookup "$proxy_server" "$DNS_CN" 2>/dev/null | awk '/^Name:/{f=1;next} f && /^Address/{print $NF; exit}')
+                ;;
+            *) proxy_ip="$proxy_server" ;;
+        esac
+    fi
+    [ -n "$proxy_ip" ] && log_date "代理服务器地址 $proxy_server → $proxy_ip（加入直连名单）"
+
+    {
+        local ip_lan="0.0.0.0/8 10.0.0.0/8 100.64.0.0/10 127.0.0.0/8 169.254.0.0/16 172.16.0.0/12 192.168.0.0/16 224.0.0.0/4 240.0.0.0/4 $DNS_CN ${proxy_ip:-}"
+        for ip in $ip_lan; do [ -n "$ip" ] && echo "add $IPSET_BYPASS $ip"; done
+    } | ipset -! restore
+    # 注意：国外 DNS 不加入直连名单，它需要经 Xray 代理出去，避免被污染
+}
+
+# ================= 直连白名单（局域网设备旁路） =================
+add_direct_rule() {
+    local table="$1" line
+    [ -z "$DIRECT_LIST" ] && return 0
+    printf '%s\n' "$DIRECT_LIST" | while IFS= read -r line || [ -n "$line" ]; do
+        line=$(trim "$line")
+        case "$line" in
+            "" | \#*) continue ;;
+        esac
+        case "$line" in
+            *[!0-9./]*)
+                log_date "跳过非法的局域网白名单条目：$line"
+                continue
+                ;;
+        esac
+        if iptables -t "$table" -A "$CHAIN" -s "$line" -j RETURN; then
+            [ "$table" = "nat" ] && log_date "直连白名单（不走代理）：$line"
+        else
+            log_date "直连白名单条目下发失败：$line"
+        fi
+    done
+}
+
+# ================= 防火墙劫持 =================
+ipts_update() {
+    log_date "下发流量劫持规则（nat/mangle $CHAIN 链）..."
+
+    iptables -t nat -N "$CHAIN" 2>/dev/null
+    iptables -t mangle -N "$CHAIN" 2>/dev/null
+
+    # TPROXY 回包交给本机
+    ip rule add fwmark "$FWMARK" table "$ROUTE_TABLE" pref 789 2>/dev/null
+    ip route add local 0.0.0.0/0 dev lo table "$ROUTE_TABLE" 2>/dev/null
+
+    # 1. 防回环：内网 / DNS / 代理服务器自身直连
+    iptables -t nat -A "$CHAIN" -m set --match-set "$IPSET_BYPASS" dst -j RETURN
+    iptables -t mangle -A "$CHAIN" -m set --match-set "$IPSET_BYPASS" dst -j RETURN
+
+    # 2. 代理白名单：名单内的局域网设备直连（旁路 Xray）
+    if [ -n "$DIRECT_LIST" ]; then
+        add_direct_rule "nat"
+        add_direct_rule "mangle"
+    fi
+
+    # 3. 兜底：其余流量全部交给 Xray（规则集分流由 Xray 负责）
+    iptables -t nat -A "$CHAIN" -p tcp -j REDIRECT --to-ports "$TCP_PORT"
+    iptables -t mangle -A "$CHAIN" -p udp -j TPROXY --on-port "$UDP_PORT" --tproxy-mark "$FWMARK"
+
+    # 4. 挂到 PREROUTING：插在 UniFi 自己的跳转之后，避免被其规则先处理
+    local PR_INDEX MA_INDEX
+    PR_INDEX=$(iptables -t nat -L PREROUTING --line-numbers 2>/dev/null | awk '/UBIOS_PREROUTING_JUMP/{print $1}' | head -n1)
+    [ -n "$PR_INDEX" ] && RULE_INDEX=$((PR_INDEX + 1)) || RULE_INDEX=1
+    iptables -t nat -I PREROUTING "$RULE_INDEX" -p tcp -j "$CHAIN"
+
+    MA_INDEX=$(iptables -t mangle -L PREROUTING --line-numbers 2>/dev/null | awk '/UBIOS_PREROUTING_JUMP/{print $1}' | head -n1)
+    [ -n "$MA_INDEX" ] && RULE1_INDEX=$((MA_INDEX + 1)) || RULE1_INDEX=1
+    iptables -t mangle -I PREROUTING "$RULE1_INDEX" -p udp -j "$CHAIN"
+
+    # 5. 域名劫持：把 53 端口查询改送 Xray 的 dns-in 入站（插在 XWALL 之前，连发往路由器自身的查询也接管）
+    if [ "$DNS_HIJACK" = "1" ]; then
+        iptables -t nat -I PREROUTING "$RULE_INDEX" -p udp --dport 53 -j REDIRECT --to-ports "$DNS_PORT"
+        iptables -t nat -I PREROUTING "$RULE_INDEX" -p tcp --dport 53 -j REDIRECT --to-ports "$DNS_PORT"
+        log_date "域名劫持已开启：LAN 的 53 端口查询 → Xray dns-in(:$DNS_PORT)"
+    fi
+
+    log_date "劫持规则就绪：TCP → $TCP_PORT，UDP → TPROXY $UDP_PORT（mark $FWMARK / table $ROUTE_TABLE）"
+}
+
+ipts_origin() {
+    log_date "清除已存在的 iptables 规则..."
+    while iptables -t nat -D PREROUTING -p udp --dport 53 -j REDIRECT --to-ports "$DNS_PORT" 2>/dev/null; do :; done
+    while iptables -t nat -D PREROUTING -p tcp --dport 53 -j REDIRECT --to-ports "$DNS_PORT" 2>/dev/null; do :; done
+    while iptables -t nat -D PREROUTING -p tcp -j "$CHAIN" 2>/dev/null; do :; done
+    while iptables -t mangle -D PREROUTING -p udp -j "$CHAIN" 2>/dev/null; do :; done
+    for table in nat mangle; do
+        iptables -t "$table" -F "$CHAIN" 2>/dev/null
+        iptables -t "$table" -X "$CHAIN" 2>/dev/null
+    done
+
+    if ip rule show 2>/dev/null | grep -q "lookup $ROUTE_TABLE"; then
+        log_date "清理策略路由（table $ROUTE_TABLE）..."
+        while ip rule show 2>/dev/null | grep -q "lookup $ROUTE_TABLE"; do
+            ip rule del fwmark "$FWMARK" table "$ROUTE_TABLE" 2>/dev/null || break
+        done
+    fi
+    ip route del local 0.0.0.0/0 dev lo table "$ROUTE_TABLE" >/dev/null 2>&1
+    ipset destroy "$IPSET_BYPASS" 2>/dev/null
+}
+
+ipfwd_on() {
+    if [ "$(cat /proc/sys/net/ipv4/ip_forward 2>/dev/null)" != "1" ]; then
+        echo 1 > /proc/sys/net/ipv4/ip_forward 2>/dev/null
+        log_date "已开启 IPv4 转发"
+    fi
+}
+
+# ================= 进程 =================
+start_v2ray() {
+    log_date "启动 Xray 主进程（$XRAY_BIN）..."
+    "$XRAY_BIN" run -c "$XRAY_JSON" >"$CORE_LOG" 2>&1 &
+
+    local i=10
+    while [ "$i" -gt 0 ]; do
+        if pidof "$PROC_NAME" >/dev/null 2>&1; then return 0; fi
+        sleep 1
+        i=$((i - 1))
+    done
+
+    log_date "Xray 启动失败，内核输出（末尾 5 行）："
+    tail -n 5 "$CORE_LOG" 2>/dev/null | tee -a "$LOG_FILE"
+    return 1
+}
+
+kill_process() {
+    if pidof "$PROC_NAME" >/dev/null 2>&1; then
+        log_date "正在关闭 Xray 进程..."
+        killall "$PROC_NAME" 2>/dev/null
+        sleep 1
+        killall -9 "$PROC_NAME" 2>/dev/null
+    fi
+}
+
+# ================= 主流程 =================
+start() {
+    set_lock
+
+    if ! ensure_core; then
+        log_date "内核/数据文件未就绪，启动中止"
+        unset_lock
+        exit 1
+    fi
+
+    prepare_config
+    kill_process
+    ipts_origin
+    ipfwd_on
+
+    if ! start_v2ray; then
+        log_date "Xray 进程启动失败，已放弃下发劫持规则"
+        unset_lock
+        exit 1
+    fi
+
+    create_ipsetlist
+    add_bypass_ip
+    ipts_update
+
+    if pgrep -x "$PROC_NAME" >/dev/null 2>&1; then
+        log_date "XWall 已成功运行（PID：$(pidof "$PROC_NAME")）"
+    else
+        log_date "XWall 启动异常：模块已执行但进程未在运行"
+        unset_lock
+        exit 1
+    fi
+    unset_lock
+}
+
+stop() {
+    set_lock
+    kill_process
+    ipts_origin
+    rm -f "$XRAY_JSON" "$XRAY_JSON.tmp" "$USER_JSON" "$CORE_LOG"
+    log_date "XWall 已停止，规则与运行配置已清理"
+    unset_lock
+}
+
+case ${1} in
+    start) start ;;
+    stop) stop ;;
+    restart) stop; sleep 1; start ;;
+    status)
+        if pgrep -x "$PROC_NAME" >/dev/null 2>&1; then echo "running"; else echo "stopped"; exit 1; fi
+        ;;
+    *)
+        echo "Usage: $0 {start|stop|restart|status}"
+        exit 1
+        ;;
+esac
