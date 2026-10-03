@@ -340,7 +340,7 @@
         "Id": "xwall",
         "Name": "XWall",
         "Type": "Binary Core",
-        "Version": "1.0.2",
+        "Version": "1.0.3",
         "Description": "全流量交给 Xray，由 Xray 规则集自动分流（国内直连 / 国外代理）。",
         "Icon": "shield-check",
         "StartCommand": "/data/softcenter/bin/xwall start",
@@ -350,12 +350,12 @@
         "ConfigPath": "/data/softcenter/config/xwall.env",
         "ConfigKeys": "",
         "LogPath": "/var/log/xwall.log",
-        "CustomCommands": "[{\"name\":\"升级Xray核心\",\"command\":\"/data/softcenter/bin/xwall-ssup\"},{\"name\":\"强制重下核心\",\"command\":\"FORCE_DOWNLOAD=1 /data/softcenter/bin/xwall-ssup\"},{\"name\":\"查看Xray运行日志\",\"command\":\"echo '===== Xray 运行日志 ====='; sed -n 's/^XRAY_LOG_LEVEL=/错误日志级别: /p' /data/softcenter/config/xwall.env 2>/dev/null | head -n1; echo; if [ -s /var/log/xwall-xray.log ]; then tail -n 150 /var/log/xwall-xray.log; else echo '(暂无日志：进程未运行，或日志级别为 none)'; fi\"},{\"name\":\"清空Xray日志\",\"command\":\": > /var/log/xwall-xray.log; echo 'Xray 运行日志已清空'\"},{\"name\":\"立即自检并修复\",\"command\":\"/data/softcenter/bin/xwall check; echo; echo '===== 最近日志 ====='; tail -n 15 /var/log/xwall.log\"}]",
+        "CustomCommands": "[{\"name\":\"升级Xray核心\",\"command\":\"/data/softcenter/bin/xwall-ssup\"},{\"name\":\"强制重下核心\",\"command\":\"FORCE_DOWNLOAD=1 /data/softcenter/bin/xwall-ssup\"},{\"name\":\"查看Xray运行日志\",\"command\":\"echo '===== Xray 运行日志 ====='; sed -n 's/^XRAY_LOG_LEVEL=/错误日志级别: /p' /data/softcenter/config/xwall.env 2>/dev/null | head -n1; echo; if [ -s /var/log/xwall-xray.log ]; then tail -n 150 /var/log/xwall-xray.log; else echo '(暂无日志：进程未运行，或日志级别为 none)'; fi\"},{\"name\":\"清空Xray日志\",\"command\":\": > /var/log/xwall-xray.log; echo 'Xray 运行日志已清空'\"}]",
         "Files": [
             {
                 "Name": "xwall",
                 "Path": "apps/xwall/xwall",
-                "Sha256": "832edabe16bce080a4bd4c5c02a0d0e28d45de21a1f2cf58428562d98a0259d7",
+                "Sha256": "e95d8b51fcc3a12779d39aaf3e77b4ab8a555e2293a6c20916b04cb633c798a1",
                 "Mode": "0755"
             },
             {

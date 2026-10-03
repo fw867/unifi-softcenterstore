@@ -41,12 +41,6 @@ TCP_PORT="1280"                         # TCP 透明代理端口
 UDP_PORT="1281"                         # UDP TPROXY 端口
 DNS_PORT="15353"                        # 域名劫持用的 DNS 入站端口（仅本机/LAN 可达）
 DNS_LOCAL_DOMAINS='["domain:local","domain:localdomain","domain:lan","domain:home.arpa","domain:invalid","domain:localhost"]'
-# 定时自检：UniFi/UBIOS 重建 nat/mangle 表时会清掉自定义链与 PREROUTING 跳转，
-# 所以需要像 tomodem 一样定期确认并补齐（健康时完全静默，不进日志）
-CRON_TAG="softcenter:xwall"
-CHECK_INTERVAL="2"                      # 自检周期（分钟）
-STATE_FILE="/tmp/xwall.state"           # 自检状态（ok/bad），用于只在状态变化时记日志
-CACHE_IPS="/tmp/xwall_bypass.list"      # 直连白名单缓存（自检时免去再次 DNS 解析）
 
 # 明确告知 Xray 数据文件目录，不依赖各版本的默认搜索顺序
 XRAY_LOCATION_ASSET="$ASSET_DIR"
@@ -555,9 +549,16 @@ create_ipsetlist() {
 
 add_bypass_ip() {
     # 代理服务器自身必须直连，否则会回环；地址已在 collect_proxy_servers 里解析好
-    local msg
-    bypass_ip_list > "$CACHE_IPS" 2>/dev/null
-    bypass_from_cache || log_date "警告：直连白名单写入失败（$CACHE_IPS 或 ipset 不可用）"
+    local msg ip_lan ip
+    ip_lan="0.0.0.0/8 10.0.0.0/8 100.64.0.0/10 127.0.0.0/8 169.254.0.0/16 172.16.0.0/12 192.168.0.0/16 224.0.0.0/4 240.0.0.0/4 $DNS_CN"
+
+    if ! {
+        for ip in $ip_lan ${PROXY_IPS:-}; do
+            [ -n "$ip" ] && echo "add $IPSET_BYPASS $ip"
+        done
+    } | ipset -! restore; then
+        log_date "警告：直连白名单写入失败（ipset 不可用？），回环保护可能失效"
+    fi
 
     msg="直连白名单已下发：内网网段 + 国内 DNS"
     # 注意：这里只能用 POSIX 写法。脚本是 #!/bin/sh，UniFi 的 /bin/sh 是 busybox ash，
@@ -569,28 +570,6 @@ add_bypass_ip() {
     fi
     log_date "$msg"
     # 注意：国外 DNS 不加入直连名单，它需要经 Xray 代理出去，避免被污染
-}
-
-# 直连白名单的完整 IP 列表（内网网段 + 国内 DNS + 代理服务器）
-bypass_ip_list() {
-    local ip_lan ip
-    ip_lan="0.0.0.0/8 10.0.0.0/8 100.64.0.0/10 127.0.0.0/8 169.254.0.0/16 172.16.0.0/12 192.168.0.0/16 224.0.0.0/4 240.0.0.0/4 $DNS_CN"
-    for ip in $ip_lan ${PROXY_IPS:-}; do
-        [ -n "$ip" ] && printf '%s\n' "$ip"
-    done
-    return 0
-}
-
-# 从缓存恢复白名单（定时自检用，免去每次重新做 DNS 解析）
-bypass_from_cache() {
-    [ -s "$CACHE_IPS" ] || return 1
-    local ip
-    {
-        while IFS= read -r ip; do
-            [ -n "$ip" ] && echo "add $IPSET_BYPASS $ip"
-        done < "$CACHE_IPS"
-    } | ipset -! restore
-    return 0
 }
 
 # ================= 代理服务器地址：从用户配置的出站里提取 =================
@@ -830,84 +809,18 @@ kill_process() {
 }
 
 # ================= 主流程 =================
-# ================= 定时自检（UniFi 重建规则表后自动补齐） =================
-# 健康判据：内核进程 + nat/mangle 两张链 + PREROUTING 跳转 + 兜底规则 + 策略路由 + ipset
-xwall_healthy() {
-    pidof "$PROC_NAME" >/dev/null 2>&1 || return 1
-    iptables -t nat -S "$CHAIN" >/dev/null 2>&1 || return 1
-    iptables -t mangle -S "$CHAIN" >/dev/null 2>&1 || return 1
-    iptables -t nat -S PREROUTING 2>/dev/null | grep -q -- "-j $CHAIN" || return 1
-    iptables -t mangle -S PREROUTING 2>/dev/null | grep -q -- "-j $CHAIN" || return 1
-    iptables -t nat -S "$CHAIN" 2>/dev/null | grep -q -- "REDIRECT --to-ports $TCP_PORT" || return 1
-    iptables -t mangle -S "$CHAIN" 2>/dev/null | grep -q -- "TPROXY" || return 1
-    ip rule show 2>/dev/null | grep -q "lookup $ROUTE_TABLE" || return 1
-    ipset list "$IPSET_BYPASS" >/dev/null 2>&1 || return 1
-    return 0
-}
-
-install_cron() {
-    remove_cron
-    if (crontab -l 2>/dev/null; echo "*/$CHECK_INTERVAL * * * * /data/softcenter/bin/xwall check >/dev/null 2>&1 # $CRON_TAG") | crontab - 2>/dev/null; then
-        log_date "已注册定时自检：每 $CHECK_INTERVAL 分钟核对一次劫持规则（正常时静默）"
-    else
-        log_date "提示：crontab 注册失败，规则被 UniFi 清掉后需手动执行 check 或 start"
+# 清理历史遗留的定时任务条目（早期版本装过每 2 分钟的 check，现已移除该功能）
+cleanup_legacy_cron() {
+    if crontab -l 2>/dev/null | grep -q "softcenter:xwall"; then
+        crontab -l 2>/dev/null | grep -v "softcenter:xwall" | crontab - 2>/dev/null
+        log_date "已移除历史遗留的定时自检条目（softcenter:xwall）"
     fi
-}
-
-remove_cron() {
-    crontab -l 2>/dev/null | grep -v "$CRON_TAG" | crontab - 2>/dev/null || true
-}
-
-check() {
-    local prev
-    set_lock || exit 1
-    prev=$(cat "$STATE_FILE" 2>/dev/null)
-
-    if xwall_healthy; then
-        if [ "$prev" != "ok" ]; then
-            echo ok > "$STATE_FILE" 2>/dev/null
-            log_date "自检正常：劫持规则、策略路由与直连白名单均就绪"
-        fi
-        unset_lock
-        return 0
-    fi
-
-    if ! pidof "$PROC_NAME" >/dev/null 2>&1; then
-        if [ "$prev" != "bad-noproc" ]; then
-            log_date "自检：Xray 未运行，未做规则修复（请执行 start）"
-        fi
-        echo bad-noproc > "$STATE_FILE" 2>/dev/null
-        unset_lock
-        return 1
-    fi
-
-    log_date "自检：劫持规则缺失（UniFi/UBIOS 重建规则表会清掉自定义链与跳转），正在重新下发..."
-    ipts_origin
-    create_ipsetlist
-    if ! bypass_from_cache; then
-        # 缓存丢失（例如路由器重启过）：重新解析代理服务器地址后再下发
-        decode_config 2>/dev/null
-        collect_proxy_servers >/dev/null 2>&1
-        add_bypass_ip
-    fi
-    ipfwd_on
-    ipts_update
-
-    if xwall_healthy; then
-        echo ok > "$STATE_FILE" 2>/dev/null
-        log_date "自检修复完成：劫持规则已恢复"
-        unset_lock
-        return 0
-    fi
-    echo bad > "$STATE_FILE" 2>/dev/null
-    log_date "自检修复失败：请检查 iptables / ipset / ip 命令是否可用"
-    unset_lock
-    return 1
 }
 
 start() {
     log_sep "XWall 启动"
     set_lock || exit 1
+    cleanup_legacy_cron
 
     if ! ensure_core; then
         log_date "内核/数据文件未就绪，启动中止"
@@ -937,18 +850,16 @@ start() {
         unset_lock
         exit 1
     fi
-    echo ok > "$STATE_FILE" 2>/dev/null
-    install_cron
     unset_lock
 }
 
 stop() {
     log_sep "XWall 停止"
     set_lock || exit 1
-    remove_cron
+    cleanup_legacy_cron
     kill_process
     ipts_origin
-    rm -f "$XRAY_JSON" "$XRAY_JSON.tmp" "$USER_JSON" /tmp/xwall_core.log "$STATE_FILE"
+    rm -f "$XRAY_JSON" "$XRAY_JSON.tmp" "$USER_JSON" /tmp/xwall_core.log
     log_date "XWall 已停止，规则与运行配置已清理（内核日志保留在 $XRAY_LOG）"
     unset_lock
 }
@@ -960,12 +871,11 @@ case ${1} in
     start) start ;;
     stop) stop ;;
     restart) stop; sleep 1; start ;;
-    check) check ;;
     status)
         if pgrep -x "$PROC_NAME" >/dev/null 2>&1; then echo "running"; else echo "stopped"; exit 1; fi
         ;;
     *)
-        echo "Usage: $0 {start|stop|restart|check|status}"
+        echo "Usage: $0 {start|stop|restart|status}"
         exit 1
         ;;
 esac
