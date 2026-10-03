@@ -3,6 +3,8 @@
 # UniFi SoftCenter · XWall —— 全流量交给 Xray，由 Xray 规则集分流（国内直连 / 国外代理）
 # 面板配置：/data/softcenter/config/xwall.env
 #   XWALL_CONFIG      配置文件（只需 outbounds，必须有一个 tag=proxy 的出站）
+#   PROXY_MODE        默认代理模式（1 GFWList / 2 国内白名单 / 3 游戏模式 / 4 全局代理）
+#   XRAY_LOG_LEVEL    Xray 运行日志级别（debug / info / warning / error / none）
 #   DNS_CN/DNS_FOREIGN 国内 / 国外 DNS
 #   DNS_HIJACK        域名劫持开关（开启后下发 PREROUTING 53 端口劫持）
 #   PROXY_WHITE_LIST  代理白名单（名单内局域网设备直连，其余全部走代理）
@@ -27,7 +29,8 @@ XRAY_BIN="$XWALL_DIR/xwall-xray"
 ASSET_DIR="$XWALL_DIR"
 USER_JSON="/tmp/xwall_user.json"        # 面板粘贴的原始配置
 XRAY_JSON="/tmp/xwall.json"             # 插件生成后的运行配置
-CORE_LOG="/tmp/xwall_core.log"          # 内核 stderr/stdout，启动失败时回看
+CORE_LOG="/tmp/xwall_core.log"          # 内核 stdout/stderr（启动期报错也在这里）
+XRAY_LOG="/var/log/xwall-xray.log"      # 内核自身运行日志（级别由面板设置决定）
 LOG_FILE="/var/log/xwall.log"
 LOCK_FILE="/var/lock/xwall.lock"
 CHAIN="XWALL"                           # nat / mangle 自定义链名
@@ -56,12 +59,21 @@ CONFIG="/data/softcenter/config/xwall.env"
 
 # ================= 面板设置项 =================
 XWALL_CONFIG="${XWALL_CONFIG:-}"
+# 默认代理模式：1 GFWList / 2 国内白名单 / 3 游戏模式 / 4 全局代理（不代理＝直接关插件，不再提供）
+PROXY_MODE="${PROXY_MODE:-2}"
+# Xray 运行日志级别：debug / info / warning / error / none
+XRAY_LOG_LEVEL="${XRAY_LOG_LEVEL:-warning}"
 DNS_CN="${DNS_CN:-223.5.5.5}"
 DNS_FOREIGN="${DNS_FOREIGN:-8.8.8.8}"
 # 域名劫持：开启后把局域网所有 53 端口查询劫持进 Xray（国内走国内 DNS，国外走 FakeIP + 国外 DNS）
 DNS_HIJACK="${DNS_HIJACK:-0}"
 # 代理白名单：名单内的局域网设备直连（旁路 Xray），其余设备全部走代理
 PROXY_WHITE_LIST="${PROXY_WHITE_LIST:-}"
+# 目标黑白名单：白名单直连、黑名单强制走代理（白名单优先）
+WHITE_DOMAIN_LIST="${WHITE_DOMAIN_LIST:-}"
+WHITE_IP_LIST="${WHITE_IP_LIST:-}"
+BLACK_DOMAIN_LIST="${BLACK_DOMAIN_LIST:-}"
+BLACK_IP_LIST="${BLACK_IP_LIST:-}"
 
 # SOCKS5 入站
 XWALL_SOCKS_ENABLE="${XWALL_SOCKS_ENABLE:-0}"
@@ -97,6 +109,11 @@ detect_lan_ip() {
         addr=$(ip -4 route show scope link 2>/dev/null | awk '/ proto kernel /{for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}' | head -n1)
     fi
     printf '%s' "$addr"
+}
+
+# 统计名单有效行数（忽略空行与 # 注释），仅用于日志
+count_entries() {
+    printf '%s\n' "$1" | grep -v '^[[:space:]]*$' | grep -v '^[[:space:]]*#' | wc -l | tr -d ' '
 }
 
 DIRECT_LIST=$(decode_b64 "$PROXY_WHITE_LIST")
@@ -161,17 +178,90 @@ build_xray_config() {
     # 本地域名的兜底 DNS：交给路由自身的 dnsmasq，保证 .local / .localdomain 这类名字仍可解析
     local_dns="${lan_ip:-127.0.0.1}"
 
-    # 固定分流：内网与国内直连，其余网络全部交给 proxy 出站
-    routing_rules='[
-        {"type": "field", "outboundTag": "direct", "ip": ["geoip:private"]},
-        {"type": "field", "outboundTag": "direct", "domain": ["geosite:cn"]},
-        {"type": "field", "outboundTag": "direct", "ip": ["geoip:cn"]},
-        {"type": "field", "outboundTag": "proxy", "network": "tcp,udp"}
-    ]'
+    # 日志级别白名单校验（面板已限制，这里再兜一层）
+    case "$XRAY_LOG_LEVEL" in
+        debug|info|warning|error|none) ;;
+        *) XRAY_LOG_LEVEL="warning" ;;
+    esac
 
-    jq --argjson baseRules "$routing_rules" \
+    # ===== 默认代理模式 → Xray 规则集（iptables 只负责把流量交给 Xray） =====
+    #   1 GFWList   ：只代理 geosite:gfw / telegram，其余直连
+    #   2 国内白名单 ：国内域名/IP 直连，其余走代理（默认）
+    #   3 游戏模式   ：TCP 全部走代理，UDP 仅非国内走代理
+    #   4 全局代理   ：除内网外全部走代理
+    #   不提供"不代理"：需要不代理直接停用插件即可
+    default_target="proxy"
+    case "$PROXY_MODE" in
+        1)
+            routing_rules='[
+                {"type": "field", "outboundTag": "direct", "ip": ["geoip:private"]},
+                {"type": "field", "outboundTag": "proxy", "domain": ["geosite:gfw", "geosite:telegram"]},
+                {"type": "field", "outboundTag": "proxy", "ip": ["geoip:telegram"]},
+                {"type": "field", "outboundTag": "direct", "network": "tcp,udp"}
+            ]'
+            default_target="direct"
+            mode_name="GFWList"
+            ;;
+        3)
+            routing_rules='[
+                {"type": "field", "outboundTag": "direct", "ip": ["geoip:private"]},
+                {"type": "field", "outboundTag": "direct", "network": "udp", "domain": ["geosite:cn"]},
+                {"type": "field", "outboundTag": "direct", "network": "udp", "ip": ["geoip:cn"]},
+                {"type": "field", "outboundTag": "proxy", "network": "tcp,udp"}
+            ]'
+            mode_name="游戏模式"
+            ;;
+        4)
+            routing_rules='[
+                {"type": "field", "outboundTag": "direct", "ip": ["geoip:private"]},
+                {"type": "field", "outboundTag": "proxy", "network": "tcp,udp"}
+            ]'
+            mode_name="全局代理"
+            ;;
+        *)
+            # 非法值，以及旧版本遗留的 0（不代理）→ 回落到国内白名单
+            PROXY_MODE="2"
+            routing_rules='[
+                {"type": "field", "outboundTag": "direct", "ip": ["geoip:private"]},
+                {"type": "field", "outboundTag": "direct", "domain": ["geosite:cn"]},
+                {"type": "field", "outboundTag": "direct", "ip": ["geoip:cn"]},
+                {"type": "field", "outboundTag": "proxy", "network": "tcp,udp"}
+            ]'
+            mode_name="国内白名单"
+            ;;
+    esac
+
+    # 黑白名单（按目的地）：白名单直连、黑名单强制走代理
+    white_domains=$(decode_b64 "$WHITE_DOMAIN_LIST")
+    white_ips=$(decode_b64 "$WHITE_IP_LIST")
+    black_domains=$(decode_b64 "$BLACK_DOMAIN_LIST")
+    black_ips=$(decode_b64 "$BLACK_IP_LIST")
+
+    # 只取用户配置的 outbounds，其余项（inbounds/dns/routing/fakedns/log…）全部由脚本生成
+    if ! jq -e '(.outbounds | type) == "array" and (.outbounds | length) > 0' "$USER_JSON" >/dev/null 2>&1; then
+        log_date "「配置文件」缺少 outbounds 数组（至少需要一个出站，如 tag=proxy 的节点）"
+        exit 1
+    fi
+    if ! jq -e '[.outbounds[]? | select(.tag == "proxy")] | length > 0' "$USER_JSON" >/dev/null 2>&1; then
+        log_date "「配置文件」里没有 tag 为 proxy 的出站，无法分流！请保留一个 \"tag\": \"proxy\" 的出站"
+        exit 1
+    fi
+    extra_keys=$(jq -r '[keys[] | select(. != "outbounds")] | join("、")' "$USER_JSON" 2>/dev/null)
+    [ -n "$extra_keys" ] && log_date "提示：配置文件里的 $extra_keys 不生效（inbounds/dns/routing/fakedns/log 等由插件生成）"
+    dropped_tags=$(jq -r '[.outbounds[]? | select(.tag == "direct" or .tag == "block" or .tag == "dns-out") | .tag] | join("、")' "$USER_JSON" 2>/dev/null)
+    [ -n "$dropped_tags" ] && log_date "提示：已忽略配置文件里 tag 为 $dropped_tags 的出站（这些由插件生成）"
+
+    jq -n --slurpfile user "$USER_JSON" \
+       --argjson baseRules "$routing_rules" \
+       --arg whiteDomains "$white_domains" \
+       --arg whiteIps "$white_ips" \
+       --arg blackDomains "$black_domains" \
+       --arg blackIps "$black_ips" \
        --argjson localDomains "$DNS_LOCAL_DOMAINS" \
        --arg fakePool "$fake_pool" \
+       --arg defaultTarget "$default_target" \
+       --arg logLevel "$XRAY_LOG_LEVEL" \
+       --arg logFile "$XRAY_LOG" \
        --arg dnsCn "$DNS_CN" \
        --arg dnsForeign "$DNS_FOREIGN" \
        --arg localDns "$local_dns" \
@@ -184,8 +274,33 @@ build_xray_config() {
        --arg socks_auth "$XWALL_SOCKS_AUTH" \
        --arg socks_user "$XWALL_SOCKS_USER" \
        --arg socks_pass "$XWALL_SOCKS_PASS" '
-      .fakedns = [ { "ipPool": $fakePool, "poolSize": 65535 } ] |
-      .inbounds = ([
+      # ---- 名单解析：去空行/注释，纯 IP 或网段自动归到 IP 规则，其余按域名规则 ----
+      def cleanList:
+        split("\n")
+        | map(gsub("\\r"; "") | gsub("^[[:space:]]+"; "") | gsub("[[:space:]]+$"; ""))
+        | map(select(length > 0 and (startswith("#") | not)));
+      def isIpEntry:
+        test("^[0-9]{1,3}(\\.[0-9]{1,3}){3}(/[0-9]{1,2})?$")
+        or (test("^[0-9a-fA-F:]+(/[0-9]{1,3})?$") and test(":"));
+      def asDomain:
+        if test("^(domain|full|keyword|regexp|geosite|ext):") then .
+        elif startswith("*.") then "domain:" + .[2:]
+        else "domain:" + . end;
+
+      ($user[0].outbounds | map(select(.tag != "direct" and .tag != "block" and .tag != "dns-out"))) as $userOutbounds |
+      ($whiteDomains | cleanList) as $wdAll |
+      ($whiteIps | cleanList) as $wiAll |
+      ($blackDomains | cleanList) as $bdAll |
+      ($blackIps | cleanList) as $biAll |
+      (($wdAll | map(select(isIpEntry | not) | asDomain)) + ($wiAll | map(select(isIpEntry | not) | asDomain))) as $whiteDomRule |
+      (($wdAll | map(select(isIpEntry))) + ($wiAll | map(select(isIpEntry)))) as $whiteIpRule |
+      (($bdAll | map(select(isIpEntry | not) | asDomain)) + ($biAll | map(select(isIpEntry | not) | asDomain))) as $blackDomRule |
+      (($bdAll | map(select(isIpEntry))) + ($biAll | map(select(isIpEntry)))) as $blackIpRule |
+
+      {
+      "log": { "loglevel": $logLevel, "error": $logFile },
+      "fakedns": [ { "ipPool": $fakePool, "poolSize": 65535 } ],
+      "inbounds": ([
         {
           "tag": "tproxy-tcp",
           "port": 1280,
@@ -223,48 +338,96 @@ build_xray_config() {
             end
           )
         }
-      ] else [] end)) |
-      .dns = {
+      ] else [] end)),
+      "dns": {
         "servers": [
-          { "address": $dnsCn, "domains": ["geosite:cn"] },
+          { "address": $dnsCn, "domains": (["geosite:cn"] + $whiteDomRule) },
           { "address": $localDns, "domains": $localDomains },
           "fakedns",
           $dnsForeign
         ]
-      } |
-      .routing = {
+      },
+      "routing": {
         "domainStrategy": "IPIfNonMatch",
         "rules": (
           [
             {"type": "field", "port": 53, "outboundTag": "dns-out"}
           ] + (if $dnsHijack == "1" then [
             {"type": "field", "inboundTag": ["dns-in"], "outboundTag": "dns-out"}
+          ] else [] end) + (if ($whiteDomRule | length) > 0 then [
+            {"type": "field", "domain": $whiteDomRule, "outboundTag": "direct"}
+          ] else [] end) + (if ($whiteIpRule | length) > 0 then [
+            {"type": "field", "ip": $whiteIpRule, "outboundTag": "direct"}
+          ] else [] end) + (if ($blackDomRule | length) > 0 then [
+            {"type": "field", "domain": $blackDomRule, "outboundTag": "proxy"}
+          ] else [] end) + (if ($blackIpRule | length) > 0 then [
+            {"type": "field", "ip": $blackIpRule, "outboundTag": "proxy"}
           ] else [] end) + [
-            {"type": "field", "ip": [$fakePool], "outboundTag": "proxy"}
+            {"type": "field", "ip": [$fakePool], "outboundTag": $defaultTarget}
           ] + $baseRules
         )
-      } |
-      .outbounds = ([.outbounds[]? | select(.tag != "direct" and .tag != "block" and .tag != "dns-out")] + [
+      },
+      "outbounds": ($userOutbounds + [
         {"tag": "direct", "protocol": "freedom"},
         {"tag": "block", "protocol": "blackhole"},
         {"tag": "dns-out", "protocol": "dns"}
       ])
-    ' "$USER_JSON" > "$XRAY_JSON.tmp"
+      }
+    ' > "$XRAY_JSON.tmp"
 
     if [ ! -s "$XRAY_JSON.tmp" ]; then
-        log_date "配置重写失败：请确认已安装 jq，且「配置文件」是合法 JSON"
-        rm -f "$XRAY_JSON.tmp"
-        exit 1
-    fi
-
-    if ! jq -e '[.outbounds[]? | select(.tag == "proxy")] | length > 0' "$XRAY_JSON.tmp" >/dev/null 2>&1; then
-        log_date "配置里没有 tag 为 proxy 的出站，无法分流！请保留一个 \"tag\": \"proxy\" 的出站"
+        log_date "配置生成失败：请确认已安装 jq，且「配置文件」是合法 JSON"
         rm -f "$XRAY_JSON.tmp"
         exit 1
     fi
 
     mv -f "$XRAY_JSON.tmp" "$XRAY_JSON"
-    log_date "Xray 运行配置生成成功：$XRAY_JSON（国内 DNS=$DNS_CN，国外 DNS=$DNS_FOREIGN，域名劫持=$DNS_HIJACK）"
+    log_date "Xray 运行配置生成成功：$XRAY_JSON（代理模式=$PROXY_MODE $mode_name，国内 DNS=$DNS_CN，国外 DNS=$DNS_FOREIGN，域名劫持=$DNS_HIJACK，日志级别=$XRAY_LOG_LEVEL）"
+    log_date "名单：域名白名单 $(count_entries "$white_domains") 条 / IP 白名单 $(count_entries "$white_ips") 条 / 域名黑名单 $(count_entries "$black_domains") 条 / IP 黑名单 $(count_entries "$black_ips") 条（白名单优先）"
+}
+
+# 带超时地调用内核（个别环境可能卡住，避免拖死启动流程）
+run_config_test() {
+    if command -v timeout >/dev/null 2>&1; then
+        timeout 20 "$XRAY_BIN" "$@" 2>&1
+    else
+        "$XRAY_BIN" "$@" 2>&1
+    fi
+}
+
+# 生成后校验：结构自检 + 交给内核自己做一次配置检查（-test）
+validate_config() {    if ! jq -e '
+        (.outbounds | type == "array") and ((.outbounds | length) >= 4) and
+        ([.outbounds[].tag] | length == (unique | length)) and
+        ([.outbounds[].tag] | index("proxy") != null) and
+        ([.outbounds[].tag] | index("direct") != null) and
+        ([.outbounds[].tag] | index("block") != null) and
+        ([.outbounds[].tag] | index("dns-out") != null) and
+        (.inbounds | length >= 2) and
+        (.routing.rules | length >= 2) and
+        (.fakedns | length >= 1) and
+        (.dns.servers | length >= 3)
+      ' "$XRAY_JSON" >/dev/null 2>&1; then
+        log_date "配置结构自检失败：入站/出站/路由/DNS 不完整，或出站 tag 重复、缺少 proxy 出站"
+        return 1
+    fi
+
+    local out
+    out=$(run_config_test run -test -c "$XRAY_JSON")
+    case "$out" in
+        *"Configuration OK"*|*"Configuration ok"*) log_date "内核配置自检通过"; return 0 ;;
+    esac
+    # 老版本内核没有 run -test 子命令，退回 -test
+    out=$(run_config_test -test -c "$XRAY_JSON")
+    case "$out" in
+        *"Configuration OK"*|*"Configuration ok"*) log_date "内核配置自检通过"; return 0 ;;
+        *"ailed to"*|*"ailed:"*)
+            log_date "内核配置自检失败：$(printf '%s' "$out" | tail -n 3 | tr '\n' ' ')"
+            return 1
+            ;;
+    esac
+    log_date "内核不支持配置自检（-test），跳过（启动阶段仍会验证进程是否存活）"
+    return 0
 }
 
 prepare_config() {
@@ -278,6 +441,7 @@ prepare_config() {
         exit 1
     fi
     build_xray_config
+    validate_config || exit 1
 }
 
 # ================= 进程锁 =================
@@ -419,7 +583,12 @@ ipfwd_on() {
 
 # ================= 进程 =================
 start_v2ray() {
-    log_date "启动 Xray 主进程（$XRAY_BIN）..."
+    log_date "启动 Xray 主进程（$XRAY_BIN，日志级别 $XRAY_LOG_LEVEL）..."
+
+    # 每次启动清空上一轮内核日志，避免 debug 级别长期累积
+    mkdir -p "$(dirname "$XRAY_LOG")" 2>/dev/null
+    : > "$XRAY_LOG" 2>/dev/null
+
     "$XRAY_BIN" run -c "$XRAY_JSON" >"$CORE_LOG" 2>&1 &
 
     local i=10
@@ -482,8 +651,8 @@ stop() {
     set_lock
     kill_process
     ipts_origin
-    rm -f "$XRAY_JSON" "$XRAY_JSON.tmp" "$USER_JSON" "$CORE_LOG"
-    log_date "XWall 已停止，规则与运行配置已清理"
+    rm -f "$XRAY_JSON" "$XRAY_JSON.tmp" "$USER_JSON"
+    log_date "XWall 已停止，规则与运行配置已清理（内核日志保留在 $XRAY_LOG）"
     unset_lock
 }
 

@@ -350,12 +350,12 @@
         "ConfigPath": "/data/softcenter/config/xwall.env",
         "ConfigKeys": "",
         "LogPath": "/var/log/xwall.log",
-        "CustomCommands": "[{\"name\":\"升级Xray核心\",\"command\":\"/data/softcenter/bin/xwall-ssup\"},{\"name\":\"强制重下核心\",\"command\":\"FORCE_DOWNLOAD=1 /data/softcenter/bin/xwall-ssup\"}]",
+        "CustomCommands": "[{\"name\":\"升级Xray核心\",\"command\":\"/data/softcenter/bin/xwall-ssup\"},{\"name\":\"强制重下核心\",\"command\":\"FORCE_DOWNLOAD=1 /data/softcenter/bin/xwall-ssup\"},{\"name\":\"查看Xray运行日志\",\"command\":\"echo '===== Xray 运行日志 ====='; echo \\\"级别: $(sed -n 's/^XRAY_LOG_LEVEL=//p' /data/softcenter/config/xwall.env 2>/dev/null | head -n1)\\\"; echo; if [ -s /var/log/xwall-xray.log ]; then tail -n 150 /var/log/xwall-xray.log; else echo '(暂无日志：进程未运行，或日志级别为 none)'; fi; echo; if [ -s /tmp/xwall_core.log ]; then echo '===== 内核 stdout/stderr（末尾 20 行）====='; tail -n 20 /tmp/xwall_core.log; fi\"},{\"name\":\"清空Xray日志\",\"command\":\": > /var/log/xwall-xray.log; echo 'Xray 运行日志已清空'\"}]",
         "Files": [
             {
                 "Name": "xwall",
                 "Path": "apps/xwall/xwall",
-                "Sha256": "372203cd25645a25566bf6bee6f37e1956ffd810574ca05c77f5671edfe586d3",
+                "Sha256": "3310c3fd321deeee84fb0378f089b6eeb19a24a8694a62bb89d17298d15f458d",
                 "Mode": "0755"
             },
             {
@@ -380,7 +380,61 @@
                             "Monospace": true,
                             "Required": true,
                             "Placeholder": "{\n  \"outbounds\": [\n    { \"tag\": \"proxy\", \"protocol\": \"vless\", \"settings\": { ... } }\n  ]\n}",
-                            "Help": "只填 outbounds 即可，inbounds / dns / routing / fakedns 由插件自动生成；必须有一个 tag 为 proxy 的出站（direct、block、dns-out 会自动补齐）"
+                            "Help": "只取本项里的 outbounds：inbounds / dns / routing / fakedns / log 全部由插件自动生成，其它顶层项（api、stats、policy、observatory、geodata 等）即使写了也会被忽略。outbounds 里必须有一个 tag 为 proxy 的出站；direct / block / dns-out 由插件补齐，同 tag 的重复出站会被丢弃"
+                        },
+                        {
+                            "Key": "PROXY_MODE",
+                            "Label": "默认代理模式",
+                            "Type": "select",
+                            "Default": "2",
+                            "Options": [
+                                {
+                                    "Label": "GFWList",
+                                    "Value": "1"
+                                },
+                                {
+                                    "Label": "国内白名单（推荐）",
+                                    "Value": "2"
+                                },
+                                {
+                                    "Label": "游戏模式",
+                                    "Value": "3"
+                                },
+                                {
+                                    "Label": "全局代理",
+                                    "Value": "4"
+                                }
+                            ],
+                            "Help": "决定 Xray 规则集的默认走向（iptables 始终把流量交给 Xray，再由规则集分流）：GFWList=只代理 geosite:gfw 与 telegram，其余直连；国内白名单=国内域名/IP 直连、其余走代理；游戏模式=TCP 全走代理、UDP 仅非国内走代理；全局代理=除内网外全部走代理。需要完全不代理时直接停用插件即可，故不再提供该模式"
+                        },
+                        {
+                            "Key": "XRAY_LOG_LEVEL",
+                            "Label": "Xray 运行日志级别",
+                            "Type": "select",
+                            "Default": "warning",
+                            "Options": [
+                                {
+                                    "Label": "debug（排查问题用，日志增长快）",
+                                    "Value": "debug"
+                                },
+                                {
+                                    "Label": "info",
+                                    "Value": "info"
+                                },
+                                {
+                                    "Label": "warning（推荐）",
+                                    "Value": "warning"
+                                },
+                                {
+                                    "Label": "error",
+                                    "Value": "error"
+                                },
+                                {
+                                    "Label": "none（不记录）",
+                                    "Value": "none"
+                                }
+                            ],
+                            "Help": "写入 /var/log/xwall-xray.log，随时可用「扩展 → 查看Xray运行日志」查看；每次启动会清空上一轮日志，避免 debug 级别长期累积"
                         }
                     ]
                 },
@@ -413,7 +467,7 @@
                 },
                 {
                     "Title": "代理白名单",
-                    "Tab": "白名单",
+                    "Tab": "代理白名单",
                     "Fields": [
                         {
                             "Key": "PROXY_WHITE_LIST",
@@ -424,6 +478,58 @@
                             "Monospace": true,
                             "Placeholder": "192.168.1.100\n192.168.1.0/24",
                             "Help": "一行一个 IP 或网段：名单内的局域网设备直连（不经过 Xray），其余设备全部走代理；留空表示所有设备都走代理"
+                        }
+                    ]
+                },
+                {
+                    "Title": "域名 / IP 白名单",
+                    "Tab": "黑白名单",
+                    "Fields": [
+                        {
+                            "Key": "WHITE_DOMAIN_LIST",
+                            "Label": "域名白名单",
+                            "Type": "textarea",
+                            "Default": "",
+                            "Rows": 8,
+                            "Monospace": true,
+                            "Placeholder": "example.com\n*.wild.com\nfull:exact.com\ngeosite:netflix",
+                            "Help": "名单内的域名直连（不经过代理），优先级高于黑名单。一行一个：支持 domain: / full: / keyword: / regexp: / geosite: 前缀，纯域名按 domain: 处理（含子域名），*.abc.com 会自动转成 domain:abc.com；误填的 IP 或网段会自动按 IP 规则处理；# 开头为注释"
+                        },
+                        {
+                            "Key": "WHITE_IP_LIST",
+                            "Label": "IP 白名单",
+                            "Type": "textarea",
+                            "Default": "",
+                            "Rows": 6,
+                            "Monospace": true,
+                            "Placeholder": "10.0.0.0/8\n2.2.2.2",
+                            "Help": "名单内的 IP / 网段直连；一行一个，支持 IPv4、IPv6 与 CIDR；# 开头为注释"
+                        }
+                    ]
+                },
+                {
+                    "Title": "域名 / IP 黑名单",
+                    "Tab": "黑白名单",
+                    "Fields": [
+                        {
+                            "Key": "BLACK_DOMAIN_LIST",
+                            "Label": "域名黑名单",
+                            "Type": "textarea",
+                            "Default": "",
+                            "Rows": 8,
+                            "Monospace": true,
+                            "Placeholder": "blocked.com\nkeyword:tracker",
+                            "Help": "名单内的域名强制走代理，写法与域名白名单相同；白名单优先，同一条同时出现在两个名单里时按直连处理"
+                        },
+                        {
+                            "Key": "BLACK_IP_LIST",
+                            "Label": "IP 黑名单",
+                            "Type": "textarea",
+                            "Default": "",
+                            "Rows": 6,
+                            "Monospace": true,
+                            "Placeholder": "3.3.3.3/32\n2001:db8::/32",
+                            "Help": "名单内的 IP / 网段强制走代理；支持 IPv4、IPv6 与 CIDR"
                         }
                     ]
                 },
