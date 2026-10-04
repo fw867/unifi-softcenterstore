@@ -120,6 +120,9 @@ using (var conn = new SqliteConnection(DbPath))
 
 string bootLock = "/tmp/softcenter_booted.lock";
 string? DeviceModelCache = null;
+// 检查更新的缓存（服务端查一次，30 分钟内复用）
+string UpdateCheckJson = "";
+long UpdateCheckAt = 0;
 if (!File.Exists(bootLock))
 {
     try
@@ -247,7 +250,7 @@ bool IsAppRunning(string cmdStr)
     catch { return false; }
 }
 
-string GetBashOutput(string cmd)
+string GetBashOutput(string cmd, int timeoutMs = 2000)
 {
     try
     {
@@ -257,9 +260,24 @@ string GetBashOutput(string cmd)
         startInfo.ArgumentList.Add("-c");
         startInfo.ArgumentList.Add(cmd);
         using var p = Process.Start(startInfo);
-        p?.WaitForExit(2000); return p?.StandardOutput.ReadToEnd().Trim() ?? "";
+        p?.WaitForExit(timeoutMs); return p?.StandardOutput.ReadToEnd().Trim() ?? "";
     }
     catch { return ""; }
+}
+
+// 代理规范化（与 install.sh / 各插件下载脚本同一套规则）：
+//   socks5:// → socks5h://、socks4:// → socks4a://（域名交给代理侧解析），
+//   没写协议头按 http:// 处理。
+static string NormalizeProxy(string raw)
+{
+    var value = (raw ?? "").Trim();
+    if (value.Length == 0) return "";
+    if (value.StartsWith("socks5://", StringComparison.OrdinalIgnoreCase))
+        return "socks5h://" + value.Substring("socks5://".Length);
+    if (value.StartsWith("socks4://", StringComparison.OrdinalIgnoreCase))
+        return "socks4a://" + value.Substring("socks4://".Length);
+    if (value.Contains("://")) return value;
+    return "http://" + value;
 }
 
 static string AppEnvDir() => $"{BaseDir}/config";
@@ -1133,11 +1151,44 @@ app.MapPost("/api/system/config", async (AppConfig newConfig) => {
 });
 
 app.MapPost("/api/system/upgrade", () => {
-    var proxy = sysConfig.LocalProxy;
+    // 代理要按 672e244 的规则规范化：socks5:// 由 curl 在本地解析域名，
+    // 被污染的域名（GitHub 等）照样连不上，必须升成 socks5h://（socks4:// → socks4a://）
+    var proxy = NormalizeProxy(sysConfig.LocalProxy);
     var scriptUrl = "https://raw.githubusercontent.com/fw867/unifi-softcenterstore/master/install.sh";
     if (File.Exists("/tmp/sc_update.log")) File.Delete("/tmp/sc_update.log");
-    string curlCmd = !string.IsNullOrEmpty(proxy) ? $"curl -x {proxy} -sSL {scriptUrl} | bash -s '{proxy}' > /tmp/sc_update.log 2>&1" : $"curl -sSL {scriptUrl} | bash > /tmp/sc_update.log 2>&1";
+    var curlArgs = "-sSL --connect-timeout 15 --retry 3 --retry-delay 2";
+    string curlCmd = !string.IsNullOrEmpty(proxy)
+        ? $"curl -x {proxy} {curlArgs} {scriptUrl} | bash -s '{proxy}' > /tmp/sc_update.log 2>&1"
+        : $"curl {curlArgs} {scriptUrl} | bash > /tmp/sc_update.log 2>&1";
     Process.Start("systemd-run", $"--unit=sc_updater --collect bash -c \"sleep 1 && {curlCmd}\""); return Results.Ok(new SimpleSuccess(true));
+});
+
+// 检查更新放到服务端做：浏览器/客户端那侧不一定能连上 GitHub，而路由器这里配了全局更新代理。
+// 结果缓存 30 分钟，避免每次打开页面都去打一次 GitHub（这也是"检查更新偶尔卡"的一个来源）。
+app.MapGet("/api/system/update-check", () =>
+{
+    var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+    if (UpdateCheckJson.Length > 0 && now - UpdateCheckAt < 1800)
+        return Results.Text(UpdateCheckJson, "application/json");
+
+    var proxy = NormalizeProxy(sysConfig.LocalProxy);
+    var proxyArg = string.IsNullOrEmpty(proxy) ? "" : $"-x {proxy} ";
+    var raw = GetBashOutput($"curl {proxyArg}-sS --connect-timeout 12 --max-time 25 --retry 2 --retry-delay 1 -H 'Accept: application/vnd.github+json' https://api.github.com/repos/fw867/unifi-softcenterstore/releases/latest", 30000);
+
+    var tag = "";
+    var error = "";
+    if (string.IsNullOrEmpty(raw)) error = "检查更新失败：无法访问 GitHub（可在系统设置里配置全局更新代理）";
+    else
+    {
+        var match = Regex.Match(raw, "\"tag_name\"\\s*:\\s*\"([^\"]+)\"");
+        if (match.Success) tag = match.Groups[1].Value;
+        else error = "检查更新失败：GitHub 返回异常";
+    }
+    // 手工拼 JSON：这个项目是裁剪发布，新增 record 需要注册序列化上下文，这里避开
+    static string Esc(string value) => value.Replace("\\", "").Replace("\"", "'");
+    UpdateCheckJson = $"{{\"tag_name\":\"{Esc(tag)}\",\"error\":\"{Esc(error)}\",\"checkedAt\":{now}}}";
+    UpdateCheckAt = now;
+    return Results.Text(UpdateCheckJson, "application/json");
 });
 
 app.MapGet("/api/system/upgrade/log", () => {

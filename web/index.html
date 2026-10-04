@@ -1505,6 +1505,18 @@
                 };
 
                 const checkUpdate = async () => {
+                    // 检查更新优先走服务端：路由器上配了全局更新代理，客户端网络不一定能连 GitHub；
+                    // 服务端接口不可用（更老的版本）时再退回浏览器直连。
+                    try {
+                        const server = await callApi('/api/system/update-check');
+                        if (server && server.tag_name) {
+                            latestVersion.value = String(server.tag_name).replace('v', '');
+                            if (sysInfo.value.Version !== '0.0.0' && isNewerVersion(sysInfo.value.Version, latestVersion.value)) hasUpdate.value = true;
+                            return;
+                        }
+                        if (server && server.error) console.warn(server.error);
+                        return;
+                    } catch (e) { /* 接口不可用，走下面的兜底 */ }
                     try {
                         const res = await fetch('https://api.github.com/repos/fw867/unifi-softcenterstore/releases/latest');
                         const data = await res.json();
