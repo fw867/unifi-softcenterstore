@@ -340,7 +340,7 @@
         "Id": "xwall",
         "Name": "XWall",
         "Type": "Binary Core",
-        "Version": "1.0.8",
+        "Version": "1.0.9",
         "Description": "全流量交给 Xray，由 Xray 规则集自动分流（国内直连 / 国外代理）。",
         "Icon": "shield-check",
         "StartCommand": "/data/softcenter/bin/xwall start",

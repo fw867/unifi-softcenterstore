@@ -390,6 +390,11 @@
                                     <i :data-lucide="app.icon" class="w-6 h-6"></i>
                                 </div>
                                 <div class="flex items-center space-x-5 pr-8">
+                                    <button v-if="hasStatusScript(app)" @click="openStatusPanel(app)"
+                                        class="p-2 rounded-xl text-blue-500 hover:bg-blue-50 transition-colors"
+                                        title="运行状态">
+                                        <i data-lucide="activity" class="w-5 h-5 pointer-events-none"></i>
+                                    </button>
                                     <button @click="restartApp(app)"
                                         :disabled="restartingAppId === app.id"
                                         :class="restartingAppId === app.id ? 'text-blue-500 animate-spin' : 'text-gray-400 hover:text-blue-500'"
@@ -434,14 +439,6 @@
                                 <div class="truncate">日志文件：{{ app.logPath || '—' }}</div>
                             </div>
                             <div class="mt-auto pt-3">
-                                <button v-if="hasStatusScript(app)" @click="openStatusPanel(app)"
-                                    class="mb-2.5 w-full flex items-center justify-between text-xs text-blue-600 hover:text-blue-700">
-                                    <span class="inline-flex items-center space-x-1.5">
-                                        <i data-lucide="activity" class="w-3.5 h-3.5"></i>
-                                        <span>查看运行状态</span>
-                                    </span>
-                                    <i data-lucide="chevron-right" class="w-3.5 h-3.5"></i>
-                                </button>
                                 <div class="flex items-center space-x-2">
                                     <button @click="openConfig(app)"
                                         class="btn-apple flex-1 bg-white border border-gray-200 py-2.5 rounded-xl text-sm font-medium hover:bg-gray-50">配置</button>
