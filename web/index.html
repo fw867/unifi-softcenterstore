@@ -407,15 +407,15 @@
                                     </button>
                                 </div>
                             </div>
-                            <div class="flex items-center space-x-2 mb-1">
+                            <div class="flex flex-wrap items-center gap-x-2 gap-y-1 mb-1">
                                 <h3 class="text-lg font-semibold">{{ app.name }}</h3>
                                 <span
                                     class="text-[10px] bg-gray-200 text-gray-600 px-1.5 py-0.5 rounded-md font-mono">v{{
                                     app.version }}</span>
                                 <button v-if="appHasUpdate(app.id)" @click="installApp(appUpdates.find(u => u.id === app.id).pkg)"
-                                    class="text-[10px] bg-blue-600 text-white px-1.5 py-0.5 rounded-md font-bold"
-                                    :title="'点击升级到 ' + cloudVersionOf(app.id)">
-                                    新版本
+                                    class="btn-apple text-[10px] leading-none bg-blue-600 text-white px-2 py-1 rounded-md font-bold whitespace-nowrap hover:bg-blue-700 shadow-sm"
+                                    :title="'检测到新版本 v' + cloudVersionOf(app.id) + '，点击更新'">
+                                    检测到新版本 点击更新
                                 </button>
                             </div>
                             <div class="flex items-center space-x-2 mb-2">
@@ -451,11 +451,6 @@
                                         title="应用日志">
                                         <i data-lucide="file-text" class="w-4 h-4 text-gray-600"></i>
                                         <span class="ml-1 md:hidden">日志</span>
-                                    </button>
-                                    <button v-if="appHasUpdate(app.id)" @click="installApp(appUpdates.find(u => u.id === app.id).pkg)"
-                                        class="btn-apple hidden md:inline-flex md:px-3 bg-blue-600 border border-blue-600 py-2.5 rounded-xl hover:bg-blue-700 text-white items-center justify-center"
-                                        :title="'升级到 ' + cloudVersionOf(app.id)">
-                                        <i data-lucide="arrow-up" class="w-4 h-4"></i>
                                     </button>
                                     <button @click="openActionSheet(app)"
                                         class="btn-apple flex-1 md:flex-none md:px-4 bg-gray-900 border border-gray-900 py-2.5 rounded-xl text-sm font-medium text-white hover:bg-black inline-flex items-center justify-center space-x-1"
@@ -1182,10 +1177,6 @@
                         <button @click="sheetSyncConfig()" class="sheet-tile">
                             <i data-lucide="cloud-download" class="w-5 h-5 text-slate-500"></i>
                             <span class="text-[11px] leading-tight text-gray-700 text-center">同步云端配置</span>
-                        </button>
-                        <button v-if="appHasUpdate(actionSheetApp.id)" @click="sheetUpgrade()" class="sheet-tile">
-                            <i data-lucide="arrow-up-circle" class="w-5 h-5" style="color:#2563eb"></i>
-                            <span class="text-[11px] leading-tight text-center break-all" style="color:#2563eb">升级到 v{{ cloudVersionOf(actionSheetApp.id) }}</span>
                         </button>
                         <button @click="sheetDelete()" class="sheet-tile">
                             <i data-lucide="trash-2" class="w-5 h-5" style="color:#ef4444"></i>
@@ -2715,13 +2706,6 @@
                 const closeActionSheet = () => { actionSheetApp.value = null; };
                 const sheetRunCommand = (cmd) => { const app = actionSheetApp.value; closeActionSheet(); if (app) runCustomCommand(app, cmd); };
                 const sheetSyncConfig = () => { const app = actionSheetApp.value; closeActionSheet(); if (app) updateAppConfigFromCloud(app); };
-                const sheetUpgrade = () => {
-                    const app = actionSheetApp.value;
-                    closeActionSheet();
-                    if (!app) return;
-                    const pkg = (appUpdates.value || []).find(u => u.id === app.id);
-                    if (pkg) installApp(pkg.pkg);
-                };
                 const sheetDelete = () => { const app = actionSheetApp.value; closeActionSheet(); if (app) deleteApp(app); };
 
                 const showCronModal = (app) => {
@@ -2784,7 +2768,7 @@
                     installApp, updateAppConfigFromCloud, updateAllApps, isUpdatingAll, updateAllProgress, installUi, installPercent, installPhaseLabel, formatBytes, showSystemLogs, showLogModal, refreshLogs, runCustomCommand, loadCronJobs, openConfig, saveAppConfig, showCronModal, submitCron, deleteCron,
                     sysConfigForm, isSavingSettings, openSettings, saveSettings, activeCmdMenu, showCronModalVisible, goToRouterAdmin,
                     statusApp, statusData, statusError, isLoadingStatus, isCheckingUpdate, checkMsg, hasStatusScript, openStatusPanel, closeStatusPanel, refreshStatusPanel, barStyle, pctColor, stateColor,
-                    actionSheetApp, openActionSheet, closeActionSheet, sheetRunCommand, sheetSyncConfig, sheetUpgrade, sheetDelete
+                    actionSheetApp, openActionSheet, closeActionSheet, sheetRunCommand, sheetSyncConfig, sheetDelete
                 };
             }
         }).mount('#app');
