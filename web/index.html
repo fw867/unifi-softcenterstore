@@ -212,23 +212,19 @@
                             sysInfo.Uptime }}</div>
                     </div>
                 </div>
-                <!-- 负载与内存（与移动端状态页同一份数据） -->
-                <div class="grid grid-cols-2 gap-1.5">
-                    <div class="bg-white/60 border border-gray-200 rounded-xl px-2.5 py-2" title="系统负载（1 / 5 / 15 分钟）">
+                <!-- 负载与内存（与移动端状态页同一份数据；负载只显示 1 分钟） -->
+                <div class="flex gap-1.5">
+                    <div class="w-[38%] bg-white/60 border border-gray-200 rounded-xl px-2.5 py-2" title="系统负载（1 分钟）">
                         <div class="flex items-center gap-1.5 text-[10px] text-gray-500">
                             <i data-lucide="gauge" class="w-3.5 h-3.5 text-purple-500"></i> 负载
                         </div>
-                        <div class="text-[10px] font-mono text-gray-700 mt-1 whitespace-nowrap">
-                            {{ loadParts.one }} / {{ loadParts.five }} / {{ loadParts.fifteen }}
-                        </div>
+                        <div class="text-[11px] font-mono text-gray-700 mt-1 whitespace-nowrap">{{ loadOne }}</div>
                     </div>
-                    <div class="bg-white/60 border border-gray-200 rounded-xl px-2.5 py-2" title="内存占用">
+                    <div class="flex-1 min-w-0 bg-white/60 border border-gray-200 rounded-xl px-2.5 py-2" title="内存占用">
                         <div class="flex items-center gap-1.5 text-[10px] text-gray-500">
                             <i data-lucide="memory-stick" class="w-3.5 h-3.5 text-teal-600"></i> 内存
                         </div>
-                        <div class="text-[10px] font-mono text-gray-700 mt-1 whitespace-nowrap leading-tight">{{
-                            memoryParts.value }}</div>
-                        <div class="text-[9px] font-mono text-gray-400 leading-tight">{{ memoryParts.percent }}</div>
+                        <div class="text-[10px] font-mono text-gray-700 mt-1 whitespace-nowrap">{{ sysInfo.Memory || '--' }}</div>
                     </div>
                 </div>
                 <button @click="goToRouterAdmin"
@@ -786,10 +782,9 @@
                                 <i data-lucide="activity" class="w-4 h-4"></i> 系统负载
                             </div>
                             <div class="flex items-baseline gap-1.5">
-                                <span class="text-xl md:text-2xl font-semibold font-mono tracking-tight">{{ loadParts.one }}</span>
+                                <span class="text-xl md:text-2xl font-semibold font-mono tracking-tight">{{ loadOne }}</span>
                                 <span class="text-[10px] text-gray-400">1 分钟</span>
                             </div>
-                            <div class="text-[11px] text-gray-500 font-mono mt-1 whitespace-nowrap">5 分钟 {{ loadParts.five }} · 15 分钟 {{ loadParts.fifteen }}</div>
                         </div>
                     </div>
 
@@ -1166,25 +1161,11 @@
                 // 移动端把「系统设置」换成「运行状态」：手机上主要看温度/内存/运行时间，
                 // 改端口换令牌这类动配置的操作留给电脑端（同一个页面，只是导航不同）
                 const statusNavItem = { id: 'status', label: '运行状态', short: '状态', icon: 'activity' };
-                // 内存："612/2048 MB (30%)" 在侧边栏窄卡片里会折行，拆成数值 + 百分比两行
-                const memoryParts = computed(() => {
-                    const raw = String(sysInfo.value.Memory || '').trim();
-                    const match = raw.match(/^([\d.]+)\/([\d.]+)\s*(\S+)\s*(?:\((\d+)%\))?$/);
-                    if (!match) return { value: raw || '--', percent: '' };
-                    return {
-                        value: match[1] + '/' + match[2] + ' ' + match[3],
-                        percent: match[4] ? '(' + match[4] + '%)' : ''
-                    };
-                });
-                // 负载：/proc/loadavg 给的是 "1 分钟 5 分钟 15 分钟"，整串放卡片里会折行，
-                // 所以拆开显示——大字给 1 分钟，另两个放小字
-                const loadParts = computed(() => {
+                // 负载：/proc/loadavg 给的是 "1 分钟 5 分钟 15 分钟"，只取 1 分钟那个值显示
+                // （整串放卡片里数字一大就折行，所以两端都只显示 1 分钟）
+                const loadOne = computed(() => {
                     const parts = String(sysInfo.value.Load || '').trim().split(/\s+/).filter(Boolean);
-                    return {
-                        one: parts[0] || '--',
-                        five: parts[1] || '--',
-                        fifteen: parts[2] || '--'
-                    };
+                    return parts[0] || '--';
                 });
                 const mobileNavItems = computed(() => navItems.map(item =>
                     item.id === 'settings' ? statusNavItem : item));
@@ -2376,7 +2357,7 @@
                 });
 
                 return {
-                    token, handleTokenSubmit, loadParts, memoryParts, gateVisible, gateToken, gateError, gateBusy, gateInputType, checkToken, sysInfo, apps, cronJobs, activeApp, appConfig,
+                    token, handleTokenSubmit, loadOne, gateVisible, gateToken, gateError, gateBusy, gateInputType, checkToken, sysInfo, apps, cronJobs, activeApp, appConfig,
                     activePage, navItems, mobileNavItems, currentNavLabel, goPage, sysLogContent, loadSystemLogsInline,
                     configMode, configSchema, configValues, configErrors, collapsedSections, isSavingConfig,
                     activeConfigTab, schemaTabNames, visibleSchemaSections, allSchemaFields,
