@@ -340,7 +340,7 @@
         "Id": "xwall",
         "Name": "XWall",
         "Type": "Binary Core",
-        "Version": "1.0.4",
+        "Version": "1.0.5",
         "Description": "全流量交给 Xray，由 Xray 规则集自动分流（国内直连 / 国外代理）。",
         "Icon": "shield-check",
         "StartCommand": "/data/softcenter/bin/xwall start",
@@ -355,7 +355,7 @@
             {
                 "Name": "xwall",
                 "Path": "apps/xwall/xwall",
-                "Sha256": "5d7fb366b8ebdda9fc36587b4f4a9c27f258930cd63e9e5eaef6601304d2b4fe",
+                "Sha256": "671ed32f00b0624547786ab052d5d63103ac4247561452efb97d590d603f0645",
                 "Mode": "0755"
             },
             {
@@ -601,6 +601,13 @@
                             "Default": "07:00",
                             "VisibleWhen": "XWALL_RULES_AUTO_UPDATE=1",
                             "Help": "每天在该时刻（路由器本地时间）执行上面的路由规则更新，格式 HH:MM，例如 07:00、23:30；留空或格式非法时插件自动按 07:00 执行。仅在「自动更新路由规则」开启时显示"
+                        },
+                        {
+                            "Key": "XWALL_WATCHDOG_ENABLE",
+                            "Label": "规则守护（Watchdog）",
+                            "Type": "switch",
+                            "Default": "0",
+                            "Help": "开启并保存后写入每分钟执行一次的 crontab 任务（xwall watchdog）：体检 nat/mangle 的 PREROUTING 跳转和链内关键规则（开启 IPv6 双栈时连 ip6tables 一起体检），只有连续两轮都确认缺失才会拆除并重新下发全套劫持规则，日志会写明具体缺了哪一条，便于区分「真被 UniFi OS 重置」和「只是体检失败」。体检用 iptables -w -C 精确判断并等待 xtables 锁：命令本身异常的那一轮不会判定为丢失，也不会触发重下发。关闭（默认）不写入该定时任务，规则被重置后需要手动重启插件或重新保存配置才会恢复"
                         },
                         {
                             "Key": "XRAY_LOG_LEVEL",

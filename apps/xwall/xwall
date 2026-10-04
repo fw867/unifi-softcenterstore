@@ -37,6 +37,16 @@ if [ "$1" = "status" ]; then
     exit 1
 fi
 
+# UniFi OS 自身的防火墙进程也在争抢 xtables 锁：命令失败会被误判成「规则丢失」并触发反复重下发，
+# 因此所有防火墙命令统一走 ipt / ipt6，带 -w 等待锁；老版本 iptables 不支持 -w 时自动退化为直接调用
+if iptables -w -t nat -S PREROUTING >/dev/null 2>&1; then
+    ipt()  { command iptables -w "$@"; }
+    ipt6() { command ip6tables -w "$@"; }
+else
+    ipt()  { command iptables "$@"; }
+    ipt6() { command ip6tables "$@"; }
+fi
+
 CONFIG="/data/softcenter/config/xwall.env"
 [ -f "$CONFIG" ] && . "$CONFIG"
 
@@ -62,6 +72,8 @@ LOCK_WAIT="${LOCK_WAIT:-20}"
 XWALL_IPV6_ENABLE="${XWALL_IPV6_ENABLE:-0}"
 XWALL_RULES_AUTO_UPDATE="${XWALL_RULES_AUTO_UPDATE:-0}"
 XWALL_RULES_UPDATE_TIME="${XWALL_RULES_UPDATE_TIME:-07:00}"
+XWALL_WATCHDOG_ENABLE="${XWALL_WATCHDOG_ENABLE:-0}"
+WATCHDOG_STATE="/tmp/xwall_watchdog.miss"
 
 log_date() {
     echo "【$(date '+%Y年%m月%d日 %X')】: $1" | tee -a "$LOG_FILE"
@@ -513,9 +525,9 @@ add_direct_rule() {
         case "$line" in "" | \#* | *[!0-9a-fA-F.:/]*) continue ;; esac
         
         if echo "$line" | grep -q ":"; then
-            [ "$XWALL_IPV6_ENABLE" = "1" ] && ip6tables -t "$table" -A "$CHAIN" -s "$line" -j RETURN
+            [ "$XWALL_IPV6_ENABLE" = "1" ] && ipt6 -t "$table" -A "$CHAIN" -s "$line" -j RETURN
         else
-            iptables -t "$table" -A "$CHAIN" -s "$line" -j RETURN
+            ipt -t "$table" -A "$CHAIN" -s "$line" -j RETURN
         fi
     done
 }
@@ -524,93 +536,93 @@ ipts_update() {
     log_date "下发流量劫持规则（包含动态防火墙守护钩子）..."
 
     # ==================== IPv4 链路 ====================
-    iptables -t nat -N "$CHAIN" 2>/dev/null
-    iptables -t mangle -N "$CHAIN" 2>/dev/null
+    ipt -t nat -N "$CHAIN" 2>/dev/null
+    ipt -t mangle -N "$CHAIN" 2>/dev/null
 
     ip rule add fwmark "$FWMARK" table "$ROUTE_TABLE" pref 789 2>/dev/null
     ip route add local 0.0.0.0/0 dev lo table "$ROUTE_TABLE" 2>/dev/null
 
-    iptables -t nat -A "$CHAIN" -m set ! --match-set xwall_src src -j RETURN
-    iptables -t mangle -A "$CHAIN" -m set ! --match-set xwall_src src -j RETURN
+    ipt -t nat -A "$CHAIN" -m set ! --match-set xwall_src src -j RETURN
+    ipt -t mangle -A "$CHAIN" -m set ! --match-set xwall_src src -j RETURN
 
-    iptables -t nat -A "$CHAIN" -m addrtype --dst-type LOCAL -j RETURN
-    iptables -t mangle -A "$CHAIN" -m addrtype --dst-type LOCAL -j RETURN
+    ipt -t nat -A "$CHAIN" -m addrtype --dst-type LOCAL -j RETURN
+    ipt -t mangle -A "$CHAIN" -m addrtype --dst-type LOCAL -j RETURN
 
-    iptables -t nat -A "$CHAIN" -m set --match-set "$IPSET_BYPASS" dst -j RETURN
-    iptables -t mangle -A "$CHAIN" -m set --match-set "$IPSET_BYPASS" dst -j RETURN
+    ipt -t nat -A "$CHAIN" -m set --match-set "$IPSET_BYPASS" dst -j RETURN
+    ipt -t mangle -A "$CHAIN" -m set --match-set "$IPSET_BYPASS" dst -j RETURN
 
     # ==================== IPv6 链路 ====================
     if [ "$XWALL_IPV6_ENABLE" = "1" ]; then
-        ip6tables -t nat -N "$CHAIN" 2>/dev/null
-        ip6tables -t mangle -N "$CHAIN" 2>/dev/null
+        ipt6 -t nat -N "$CHAIN" 2>/dev/null
+        ipt6 -t mangle -N "$CHAIN" 2>/dev/null
 
         ip -6 rule add fwmark "$FWMARK" table "$ROUTE_TABLE" pref 789 2>/dev/null
         ip -6 route add local ::/0 dev lo table "$ROUTE_TABLE" 2>/dev/null
 
-        ip6tables -t nat -A "$CHAIN" -m set ! --match-set xwall_src6 src -j RETURN
-        ip6tables -t mangle -A "$CHAIN" -m set ! --match-set xwall_src6 src -j RETURN
+        ipt6 -t nat -A "$CHAIN" -m set ! --match-set xwall_src6 src -j RETURN
+        ipt6 -t mangle -A "$CHAIN" -m set ! --match-set xwall_src6 src -j RETURN
 
-        ip6tables -t nat -A "$CHAIN" -m addrtype --dst-type LOCAL -j RETURN
-        ip6tables -t mangle -A "$CHAIN" -m addrtype --dst-type LOCAL -j RETURN
+        ipt6 -t nat -A "$CHAIN" -m addrtype --dst-type LOCAL -j RETURN
+        ipt6 -t mangle -A "$CHAIN" -m addrtype --dst-type LOCAL -j RETURN
 
-        ip6tables -t nat -A "$CHAIN" -m set --match-set "${IPSET_BYPASS}6" dst -j RETURN
-        ip6tables -t mangle -A "$CHAIN" -m set --match-set "${IPSET_BYPASS}6" dst -j RETURN
+        ipt6 -t nat -A "$CHAIN" -m set --match-set "${IPSET_BYPASS}6" dst -j RETURN
+        ipt6 -t mangle -A "$CHAIN" -m set --match-set "${IPSET_BYPASS}6" dst -j RETURN
     fi
 
     # 局域网设备的混合旁路过滤
     if [ -n "$DIRECT_LIST" ]; then add_direct_rule "nat"; add_direct_rule "mangle"; fi
 
     # 透明底包重置
-    iptables -t nat -A "$CHAIN" -p tcp -j REDIRECT --to-ports "$TCP_PORT"
-    iptables -t mangle -A "$CHAIN" -p udp -j TPROXY --on-port "$UDP_PORT" --tproxy-mark "$FWMARK"
+    ipt -t nat -A "$CHAIN" -p tcp -j REDIRECT --to-ports "$TCP_PORT"
+    ipt -t mangle -A "$CHAIN" -p udp -j TPROXY --on-port "$UDP_PORT" --tproxy-mark "$FWMARK"
     if [ "$XWALL_IPV6_ENABLE" = "1" ]; then
-        ip6tables -t nat -A "$CHAIN" -p tcp -j REDIRECT --to-ports "$TCP_PORT"
-        ip6tables -t mangle -A "$CHAIN" -p udp -j TPROXY --on-port "$UDP_PORT" --tproxy-mark "$FWMARK"
+        ipt6 -t nat -A "$CHAIN" -p tcp -j REDIRECT --to-ports "$TCP_PORT"
+        ipt6 -t mangle -A "$CHAIN" -p udp -j TPROXY --on-port "$UDP_PORT" --tproxy-mark "$FWMARK"
     fi
 
     local PR_INDEX MA_INDEX
-    PR_INDEX=$(iptables -t nat -L PREROUTING --line-numbers 2>/dev/null | awk '/UBIOS_PREROUTING_JUMP/{print $1}' | head -n1)
+    PR_INDEX=$(ipt -t nat -L PREROUTING --line-numbers 2>/dev/null | awk '/UBIOS_PREROUTING_JUMP/{print $1}' | head -n1)
     [ -n "$PR_INDEX" ] && RULE_INDEX=$((PR_INDEX + 1)) || RULE_INDEX=1
-    iptables -t nat -I PREROUTING "$RULE_INDEX" -p tcp -j "$CHAIN"
+    ipt -t nat -I PREROUTING "$RULE_INDEX" -p tcp -j "$CHAIN"
 
-    MA_INDEX=$(iptables -t mangle -L PREROUTING --line-numbers 2>/dev/null | awk '/UBIOS_PREROUTING_JUMP/{print $1}' | head -n1)
+    MA_INDEX=$(ipt -t mangle -L PREROUTING --line-numbers 2>/dev/null | awk '/UBIOS_PREROUTING_JUMP/{print $1}' | head -n1)
     [ -n "$MA_INDEX" ] && RULE1_INDEX=$((MA_INDEX + 1)) || RULE1_INDEX=1
-    iptables -t mangle -I PREROUTING "$RULE1_INDEX" -p udp -j "$CHAIN"
+    ipt -t mangle -I PREROUTING "$RULE1_INDEX" -p udp -j "$CHAIN"
 
     if [ "$XWALL_IPV6_ENABLE" = "1" ]; then
         local PR6_INDEX MA6_INDEX
-        PR6_INDEX=$(ip6tables -t nat -L PREROUTING --line-numbers 2>/dev/null | awk '/UBIOS_PREROUTING_JUMP/{print $1}' | head -n1)
+        PR6_INDEX=$(ipt6 -t nat -L PREROUTING --line-numbers 2>/dev/null | awk '/UBIOS_PREROUTING_JUMP/{print $1}' | head -n1)
         [ -n "$PR6_INDEX" ] && RULE6_INDEX=$((PR6_INDEX + 1)) || RULE6_INDEX=1
-        ip6tables -t nat -I PREROUTING "$RULE6_INDEX" -p tcp -j "$CHAIN"
+        ipt6 -t nat -I PREROUTING "$RULE6_INDEX" -p tcp -j "$CHAIN"
 
-        MA6_INDEX=$(ip6tables -t mangle -L PREROUTING --line-numbers 2>/dev/null | awk '/UBIOS_PREROUTING_JUMP/{print $1}' | head -n1)
+        MA6_INDEX=$(ipt6 -t mangle -L PREROUTING --line-numbers 2>/dev/null | awk '/UBIOS_PREROUTING_JUMP/{print $1}' | head -n1)
         [ -n "$MA6_INDEX" ] && RULE16_INDEX=$((MA6_INDEX + 1)) || RULE16_INDEX=1
-        ip6tables -t mangle -I PREROUTING "$RULE16_INDEX" -p udp -j "$CHAIN"
+        ipt6 -t mangle -I PREROUTING "$RULE16_INDEX" -p udp -j "$CHAIN"
     fi
 
     if [ "$DNS_HIJACK" = "1" ]; then
-        iptables -t nat -I PREROUTING "$RULE_INDEX" -p udp --dport 53 -j REDIRECT --to-ports "$DNS_PORT"
-        iptables -t nat -I PREROUTING "$RULE_INDEX" -p tcp --dport 53 -j REDIRECT --to-ports "$DNS_PORT"
+        ipt -t nat -I PREROUTING "$RULE_INDEX" -p udp --dport 53 -j REDIRECT --to-ports "$DNS_PORT"
+        ipt -t nat -I PREROUTING "$RULE_INDEX" -p tcp --dport 53 -j REDIRECT --to-ports "$DNS_PORT"
         if [ "$XWALL_IPV6_ENABLE" = "1" ]; then
-            ip6tables -t nat -I PREROUTING "$RULE6_INDEX" -p udp --dport 53 -j REDIRECT --to-ports "$DNS_PORT"
-            ip6tables -t nat -I PREROUTING "$RULE6_INDEX" -p tcp --dport 53 -j REDIRECT --to-ports "$DNS_PORT"
+            ipt6 -t nat -I PREROUTING "$RULE6_INDEX" -p udp --dport 53 -j REDIRECT --to-ports "$DNS_PORT"
+            ipt6 -t nat -I PREROUTING "$RULE6_INDEX" -p tcp --dport 53 -j REDIRECT --to-ports "$DNS_PORT"
         fi
         log_date "DNS劫持已开启：全面接管内部 53 端口查询"
     fi
 }
 
 ipts_origin() {
-    while iptables -t nat -D PREROUTING -p udp --dport 53 -j REDIRECT --to-ports "$DNS_PORT" 2>/dev/null; do :; done
-    while iptables -t nat -D PREROUTING -p tcp --dport 53 -j REDIRECT --to-ports "$DNS_PORT" 2>/dev/null; do :; done
-    while iptables -t nat -D PREROUTING -p tcp -j "$CHAIN" 2>/dev/null; do :; done
-    while iptables -t mangle -D PREROUTING -p udp -j "$CHAIN" 2>/dev/null; do :; done
-    for table in nat mangle; do iptables -t "$table" -F "$CHAIN" 2>/dev/null; iptables -t "$table" -X "$CHAIN" 2>/dev/null; done
+    while ipt -t nat -D PREROUTING -p udp --dport 53 -j REDIRECT --to-ports "$DNS_PORT" 2>/dev/null; do :; done
+    while ipt -t nat -D PREROUTING -p tcp --dport 53 -j REDIRECT --to-ports "$DNS_PORT" 2>/dev/null; do :; done
+    while ipt -t nat -D PREROUTING -p tcp -j "$CHAIN" 2>/dev/null; do :; done
+    while ipt -t mangle -D PREROUTING -p udp -j "$CHAIN" 2>/dev/null; do :; done
+    for table in nat mangle; do ipt -t "$table" -F "$CHAIN" 2>/dev/null; ipt -t "$table" -X "$CHAIN" 2>/dev/null; done
 
-    while ip6tables -t nat -D PREROUTING -p udp --dport 53 -j REDIRECT --to-ports "$DNS_PORT" 2>/dev/null; do :; done
-    while ip6tables -t nat -D PREROUTING -p tcp --dport 53 -j REDIRECT --to-ports "$DNS_PORT" 2>/dev/null; do :; done
-    while ip6tables -t nat -D PREROUTING -p tcp -j "$CHAIN" 2>/dev/null; do :; done
-    while ip6tables -t mangle -D PREROUTING -p udp -j "$CHAIN" 2>/dev/null; do :; done
-    for table in nat mangle; do ip6tables -t "$table" -F "$CHAIN" 2>/dev/null; ip6tables -t "$table" -X "$CHAIN" 2>/dev/null; done
+    while ipt6 -t nat -D PREROUTING -p udp --dport 53 -j REDIRECT --to-ports "$DNS_PORT" 2>/dev/null; do :; done
+    while ipt6 -t nat -D PREROUTING -p tcp --dport 53 -j REDIRECT --to-ports "$DNS_PORT" 2>/dev/null; do :; done
+    while ipt6 -t nat -D PREROUTING -p tcp -j "$CHAIN" 2>/dev/null; do :; done
+    while ipt6 -t mangle -D PREROUTING -p udp -j "$CHAIN" 2>/dev/null; do :; done
+    for table in nat mangle; do ipt6 -t "$table" -F "$CHAIN" 2>/dev/null; ipt6 -t "$table" -X "$CHAIN" 2>/dev/null; done
 
     if ip rule show 2>/dev/null | grep -q "lookup $ROUTE_TABLE"; then
         while ip rule show 2>/dev/null | grep -q "lookup $ROUTE_TABLE"; do ip rule del fwmark "$FWMARK" table "$ROUTE_TABLE" 2>/dev/null || break; done
@@ -673,7 +685,11 @@ cleanup_legacy_cron() {
 setup_cron() {
     cleanup_legacy_cron
     crontab -l 2>/dev/null > /tmp/cron_tmp
-    echo "* * * * * /data/softcenter/bin/xwall watchdog #softcenter:xwall" >> /tmp/cron_tmp
+    if [ "$XWALL_WATCHDOG_ENABLE" = "1" ]; then
+        echo "* * * * * /data/softcenter/bin/xwall watchdog #softcenter:xwall" >> /tmp/cron_tmp
+    else
+        log_date "规则守护（watchdog）已关闭：不写入守护定时任务，劫持规则被重置后需手动重启插件恢复"
+    fi
     if [ "$XWALL_RULES_AUTO_UPDATE" = "1" ]; then
         # 执行时刻取自面板（HH:MM）。该值最终会写进 crontab，必须严格校验：
         # 只接受 00:00-23:59，其它任何内容（含注入字符）一律回落到 07:00
@@ -695,7 +711,66 @@ setup_cron() {
     rm -f /tmp/cron_tmp
 }
 
+# 自定义链状态：0=在，1=确实不存在，2=无法判断（命令本身异常）
+# 关键点：表能列出、链列不出 → 链确实被删了；连表都列不出 → 命令异常，不做判断。
+# 这样既不把「xtables 锁被占」误判成规则丢失，也不会把「链被删」误判成命令异常。
+chain_state() {
+    "$1" -t "$2" -S "$CHAIN" >/dev/null 2>&1 && return 0
+    "$1" -t "$2" -S PREROUTING >/dev/null 2>&1 && return 1
+    return 2
+}
+
+# 关键劫持规则体检：输出缺失项（一行，、分隔）。
+# 返回 0=体检完成（输出为空即规则齐全）；2=无法判断（输出为具体原因）
+check_rules() {
+    local cmd tb ver st rc err miss=""
+
+    for cmd in ipt ipt6; do
+        if [ "$cmd" = "ipt6" ]; then
+            [ "$XWALL_IPV6_ENABLE" = "1" ] || continue
+            ver="IPv6"
+        else
+            ver="IPv4"
+        fi
+
+        for tb in nat mangle; do
+            chain_state "$cmd" "$tb"
+            st=$?
+            if [ "$st" = "2" ]; then
+                err=$("$cmd" -t "$tb" -S PREROUTING 2>&1 >/dev/null)
+                printf '%s\n' "${ver} 的 iptables -t ${tb} 体检命令失败：${err:-返回码 $st}"
+                return 2
+            fi
+            if [ "$st" = "1" ]; then
+                miss="$miss、${ver} ${tb} 自定义链"
+                continue
+            fi
+
+            # 跳转规则：链在的情况下 0=在，1=不在，其它=命令本身出错
+            local proto
+            [ "$tb" = "nat" ] && proto="-p tcp" || proto="-p udp"
+            "$cmd" -t "$tb" -C PREROUTING $proto -j "$CHAIN" 2>/dev/null
+            rc=$?
+            [ "$rc" -ge 2 ] && return 2
+            [ "$rc" = 1 ] && miss="$miss、${ver} ${tb} 跳转"
+
+            # 链内关键规则（跳转还在、链被清空时同样致命，旧逻辑查不出来）
+            if [ "$tb" = "nat" ]; then
+                "$cmd" -t nat -C "$CHAIN" -p tcp -j REDIRECT --to-ports "$TCP_PORT" 2>/dev/null || miss="$miss、${ver} nat 链内规则"
+            else
+                "$cmd" -t mangle -C "$CHAIN" -p udp -j TPROXY --on-port "$UDP_PORT" --tproxy-mark "$FWMARK" 2>/dev/null || miss="$miss、${ver} mangle 链内规则"
+            fi
+        done
+    done
+
+    [ -n "$miss" ] && printf '%s\n' "${miss#、}"
+    return 0
+}
+
 watchdog() {
+    # 开关关闭时即使定时任务被残留/手工调用也不接管规则（看守功能完全由面板开关决定）
+    [ "$XWALL_WATCHDOG_ENABLE" = "1" ] || return 0
+
     # 尝试非阻塞获取锁。如果获取失败，说明正在执行 start/stop/restart，直接静默退出防干扰
     mkdir -p /var/lock 2>/dev/null
     exec 9>"$LOCK_FILE" 2>/dev/null
@@ -704,16 +779,32 @@ watchdog() {
     fi
 
     if pgrep -x "$PROC_NAME" >/dev/null 2>&1; then
-        local rule_lost=0
-        if ! iptables -t nat -S PREROUTING 2>/dev/null | grep -q "$CHAIN"; then rule_lost=1; fi
-        if [ "$XWALL_IPV6_ENABLE" = "1" ] && ! ip6tables -t nat -S PREROUTING 2>/dev/null | grep -q "$CHAIN"; then rule_lost=1; fi
-        
-        if [ "$rule_lost" = "1" ]; then
-            log_date "守护机制：检测到劫持规则丢失 (已被 UniFi OS 重置)，正在无感恢复..."
-            ipts_origin
-            create_ipsetlist
-            add_bypass_ip
-            ipts_update
+        local missing prev fails rc
+        missing=$(check_rules)
+        rc=$?
+        prev=$(cat "$WATCHDOG_STATE" 2>/dev/null)
+
+        if [ "$rc" = "2" ]; then
+            # 体检命令本身失败（例如 xtables 锁被长占）：无法判断，本轮绝不重下发，并把原因写进日志
+            [ "$prev" != "err" ] && log_date "守护机制：体检无法判断，本轮跳过、不重下发规则（$missing）"
+            echo "err" > "$WATCHDOG_STATE" 2>/dev/null
+        elif [ -n "$missing" ]; then
+            # 连续两轮都确认缺失才恢复，避免瞬时抖动导致反复重下发
+            case "$prev" in '' | *[!0-9]*) prev=0 ;; esac
+            fails=$((prev + 1))
+            echo "$fails" > "$WATCHDOG_STATE" 2>/dev/null
+            if [ "$fails" -ge 2 ]; then
+                log_date "守护机制：连续 $fails 轮确认劫持规则丢失（$missing），正在无感恢复..."
+                ipts_origin
+                create_ipsetlist
+                add_bypass_ip
+                ipts_update
+                rm -f "$WATCHDOG_STATE" 2>/dev/null
+            else
+                log_date "守护机制：疑似劫持规则丢失（$missing），再确认一轮后恢复..."
+            fi
+        else
+            rm -f "$WATCHDOG_STATE" 2>/dev/null
         fi
     fi
 
@@ -735,6 +826,7 @@ start() {
     create_ipsetlist
     add_bypass_ip
     ipts_update
+    rm -f "$WATCHDOG_STATE" 2>/dev/null   # 刚下发完全套规则，清掉守护机制的缺失计数
     if pgrep -x "$PROC_NAME" >/dev/null 2>&1; then
         log_date "XWall 已成功运行（PID：$(pidof "$PROC_NAME")）"
     else
