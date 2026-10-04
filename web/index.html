@@ -398,6 +398,11 @@
                             <div class="flex space-x-2 mt-auto">
                                 <button @click="openConfig(app)"
                                     class="btn-apple flex-1 bg-white border border-gray-200 py-2.5 rounded-xl text-sm font-medium hover:bg-gray-50">配置</button>
+                                <button v-if="hasStatusScript(app)" @click="openStatusPanel(app)"
+                                    class="btn-apple px-3 bg-white border border-gray-200 py-2.5 rounded-xl hover:bg-gray-50"
+                                    title="运行状态">
+                                    <i data-lucide="activity" class="w-4 h-4 text-gray-600"></i>
+                                </button>
                                 <button @click="showLogModal(app)" :disabled="!app.logPath"
                                     :class="!app.logPath ? 'opacity-50 cursor-not-allowed' : 'hover:bg-gray-50'"
                                     class="btn-apple px-3 bg-white border border-gray-200 py-2.5 rounded-xl"
@@ -877,6 +882,232 @@
                 <div id="logContainer"
                     class="flex-1 overflow-y-auto p-4 terminal-scroll bg-[#1e1e1e] rounded-b-[1.5rem]">
                     <pre class="text-[#00ff00] font-mono text-xs whitespace-pre-wrap break-all">{{ logContent }}</pre>
+                </div>
+            </div>
+        </div>
+
+        <!-- ===== 运行状态面板：图表化展示 xwall-status --json 的结果 ===== -->
+        <div v-if="statusApp" class="fixed inset-0 z-[120] flex items-center justify-center p-3 md:p-6 bg-black/40 backdrop-blur-sm">
+            <div class="w-full max-w-5xl max-h-[92vh] overflow-y-auto bg-gray-50 rounded-[1.5rem] shadow-2xl">
+                <div class="sticky top-0 z-10 flex items-center justify-between px-5 py-4 bg-white/95 backdrop-blur border-b border-gray-100 rounded-t-[1.5rem]">
+                    <div class="flex items-center space-x-3 min-w-0">
+                        <div class="w-10 h-10 rounded-2xl bg-blue-600 text-white flex items-center justify-center shrink-0">
+                            <i data-lucide="activity" class="w-5 h-5"></i>
+                        </div>
+                        <div class="min-w-0">
+                            <h3 class="font-semibold text-gray-800 truncate">{{ statusApp.name }} · 运行状态</h3>
+                            <p class="text-xs text-gray-400 truncate">
+                                <span v-if="statusData">{{ statusData.time }} · PID {{ statusData.pid }} · 运行 {{ statusData.uptime }} · 内存 {{ statusData.mem }}</span>
+                                <span v-else>正在读取…</span>
+                            </p>
+                        </div>
+                    </div>
+                    <div class="flex items-center space-x-1">
+                        <span class="hidden md:inline text-[10px] text-gray-400 mr-1">每 5 秒自动刷新</span>
+                        <button @click="refreshStatusPanel" class="p-2 rounded-xl hover:bg-gray-100" title="立即刷新">
+                            <i data-lucide="refresh-cw" :class="{'animate-spin': isLoadingStatus}" class="w-4 h-4 text-gray-600"></i>
+                        </button>
+                        <button @click="closeStatusPanel" class="p-2 rounded-xl hover:bg-gray-100" title="关闭">
+                            <i data-lucide="x" class="w-4 h-4 text-gray-600"></i>
+                        </button>
+                    </div>
+                </div>
+
+                <div class="p-5 space-y-4">
+                    <div v-if="statusError" class="rounded-2xl bg-amber-50 border border-amber-200 px-4 py-3">
+                        <div class="text-sm font-medium text-amber-700 mb-1">读取失败</div>
+                        <div class="text-xs text-amber-600 break-all font-mono">{{ statusError }}</div>
+                    </div>
+
+                    <div v-else-if="!statusData" class="py-16 text-center text-gray-400 text-sm">
+                        <i data-lucide="loader" class="w-5 h-5 animate-spin mx-auto mb-2"></i>正在读取运行状态…
+                    </div>
+
+                    <div v-else-if="statusData.running === false"
+                        class="rounded-2xl bg-white border border-gray-200 px-4 py-4 text-sm text-gray-600">
+                        内核未运行。启动命令：<code class="font-mono text-xs bg-gray-50 border border-gray-200 rounded px-2 py-0.5">/data/softcenter/bin/xwall start</code>
+                    </div>
+
+                    <template v-else>
+                        <!-- 概览卡片 -->
+                        <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
+                            <div class="bg-white rounded-2xl border border-gray-100 p-4">
+                                <div class="text-[11px] text-gray-400 mb-1">总连接数</div>
+                                <div class="text-2xl font-semibold text-gray-800">{{ statusData.total }}</div>
+                                <div class="text-[11px] text-gray-400 mt-1">模式 {{ statusData.mode }}</div>
+                            </div>
+                            <div class="bg-white rounded-2xl border border-gray-100 p-4">
+                                <div class="text-[11px] text-gray-400 mb-1">TCP</div>
+                                <div class="text-2xl font-semibold text-emerald-600">{{ statusData.tcp }}</div>
+                                <div class="text-[11px] text-gray-400 mt-1">UDP {{ statusData.udp }}</div>
+                            </div>
+                            <div class="bg-white rounded-2xl border border-gray-100 p-4">
+                                <div class="text-[11px] text-gray-400 mb-1">文件描述符</div>
+                                <div class="text-2xl font-semibold" :style="'color:' + pctColor(statusData.fd.pct)">{{ statusData.fd.count }}</div>
+                                <div class="text-[11px] text-gray-400 mt-1">上限 {{ statusData.fd.max }}（{{ statusData.fd.pct }}%）</div>
+                            </div>
+                            <div class="bg-white rounded-2xl border border-gray-100 p-4">
+                                <div class="text-[11px] text-gray-400 mb-1">conntrack 表</div>
+                                <div class="text-2xl font-semibold" :style="'color:' + pctColor(statusData.conntrack.pct, 80, 90)">{{ statusData.conntrack.count }}</div>
+                                <div class="text-[11px] text-gray-400 mt-1">上限 {{ statusData.conntrack.max }}（{{ statusData.conntrack.pct }}%）</div>
+                            </div>
+                        </div>
+
+                        <!-- 资源占用条 -->
+                        <div class="bg-white rounded-2xl border border-gray-100 p-4 space-y-3">
+                            <div>
+                                <div class="flex items-center justify-between text-xs text-gray-500 mb-1">
+                                    <span>文件描述符占用</span><span>{{ statusData.fd.count }} / {{ statusData.fd.max }}</span>
+                                </div>
+                                <div class="h-2 rounded-full bg-gray-100 overflow-hidden">
+                                    <div class="h-full rounded-full transition-all" :style="barStyle(statusData.fd.pct, pctColor(statusData.fd.pct))"></div>
+                                </div>
+                            </div>
+                            <div>
+                                <div class="flex items-center justify-between text-xs text-gray-500 mb-1">
+                                    <span>conntrack 表占用</span><span>{{ statusData.conntrack.count }} / {{ statusData.conntrack.max }}</span>
+                                </div>
+                                <div class="h-2 rounded-full bg-gray-100 overflow-hidden">
+                                    <div class="h-full rounded-full transition-all" :style="barStyle(statusData.conntrack.pct, pctColor(statusData.conntrack.pct, 80, 90))"></div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                            <!-- 协议占比 -->
+                            <div class="bg-white rounded-2xl border border-gray-100 p-4">
+                                <div class="text-sm font-medium text-gray-700 mb-3">协议占比</div>
+                                <div class="space-y-3">
+                                    <div v-for="p in statusData.proto" :key="p.name">
+                                        <div class="flex items-center justify-between text-xs text-gray-500 mb-1">
+                                            <span class="font-mono">{{ p.name }}</span><span>{{ p.count }} · {{ p.pct }}%</span>
+                                        </div>
+                                        <div class="h-2.5 rounded-full bg-gray-100 overflow-hidden">
+                                            <div class="h-full rounded-full" :style="barStyle(p.pct, p.name === 'udp' ? '#8b5cf6' : '#3b82f6')"></div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- TCP 状态分布 -->
+                            <div class="bg-white rounded-2xl border border-gray-100 p-4">
+                                <div class="text-sm font-medium text-gray-700 mb-3">TCP 状态分布</div>
+                                <div class="space-y-3">
+                                    <div v-for="s in statusData.states" :key="s.short">
+                                        <div class="flex items-center justify-between text-xs text-gray-500 mb-1">
+                                            <span class="font-mono">{{ s.name }}</span><span>{{ s.count }} · {{ s.pct }}%</span>
+                                        </div>
+                                        <div class="h-2.5 rounded-full bg-gray-100 overflow-hidden">
+                                            <div class="h-full rounded-full" :style="barStyle(s.pct, stateColor(s.name))"></div>
+                                        </div>
+                                    </div>
+                                    <div v-if="!statusData.states.length" class="text-xs text-gray-400">无 TCP 连接</div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- 局域网设备（含名称与 MAC） -->
+                        <div class="bg-white rounded-2xl border border-gray-100 p-4">
+                            <div class="text-sm font-medium text-gray-700 mb-1">局域网设备占用 Top10</div>
+                            <div class="text-[11px] text-gray-400 mb-3">来源：conntrack UDP 会话；名称取自 DHCP 租约 / 反向 DNS，MAC 取自 ARP 表</div>
+                            <div v-if="statusData.lan.length" class="overflow-x-auto">
+                                <table class="w-full text-xs">
+                                    <thead>
+                                        <tr class="text-gray-400 text-left">
+                                            <th class="py-2 pr-3 font-medium">IP</th>
+                                            <th class="py-2 pr-3 font-medium">客户端名称</th>
+                                            <th class="py-2 pr-3 font-medium">MAC</th>
+                                            <th class="py-2 pr-3 font-medium text-right">会话</th>
+                                            <th class="py-2 font-medium w-1/3">占比</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr v-for="d in statusData.lan" :key="d.ip" class="border-t border-gray-50">
+                                            <td class="py-2 pr-3 font-mono text-gray-700">{{ d.ip }}</td>
+                                            <td class="py-2 pr-3 text-gray-800">
+                                                {{ d.name }}
+                                                <span v-if="d.name === '-'" class="text-gray-300">（未知）</span>
+                                            </td>
+                                            <td class="py-2 pr-3 font-mono text-gray-500">{{ d.mac }}</td>
+                                            <td class="py-2 pr-3 text-right text-gray-700">{{ d.count }}</td>
+                                            <td class="py-2">
+                                                <div class="flex items-center space-x-2">
+                                                    <div class="flex-1 h-2 rounded-full bg-gray-100 overflow-hidden">
+                                                        <div class="h-full rounded-full" :style="barStyle(d.pct, '#06b6d4')"></div>
+                                                    </div>
+                                                    <span class="text-[10px] text-gray-400 w-10 text-right">{{ d.pct }}%</span>
+                                                </div>
+                                            </td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                            <div v-else class="text-xs text-gray-400">无 UDP 会话记录</div>
+                        </div>
+
+                        <!-- 端口分布 -->
+                        <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                            <div class="bg-white rounded-2xl border border-gray-100 p-4">
+                                <div class="text-sm font-medium text-gray-700 mb-3">远端目标端口 Top10</div>
+                                <div class="space-y-2.5">
+                                    <div v-for="p in statusData.remote_ports" :key="'r' + p.port">
+                                        <div class="flex items-center justify-between text-xs text-gray-500 mb-1">
+                                            <span class="font-mono">{{ p.port }} <span class="text-gray-300">{{ p.service === '-' ? '' : p.service }}</span></span>
+                                            <span>{{ p.count }} · {{ p.pct }}%</span>
+                                        </div>
+                                        <div class="h-2 rounded-full bg-gray-100 overflow-hidden">
+                                            <div class="h-full rounded-full" :style="barStyle(p.pct, '#f59e0b')"></div>
+                                        </div>
+                                    </div>
+                                    <div v-if="!statusData.remote_ports.length" class="text-xs text-gray-400">无连接</div>
+                                </div>
+                            </div>
+                            <div class="bg-white rounded-2xl border border-gray-100 p-4">
+                                <div class="text-sm font-medium text-gray-700 mb-3">本地端口 Top5</div>
+                                <div class="space-y-2.5">
+                                    <div v-for="p in statusData.local_ports" :key="'l' + p.port">
+                                        <div class="flex items-center justify-between text-xs text-gray-500 mb-1">
+                                            <span class="font-mono">{{ p.port }} <span class="text-gray-300">{{ p.service === '-' ? '' : p.service }}</span></span>
+                                            <span>{{ p.count }} · {{ p.pct }}%</span>
+                                        </div>
+                                        <div class="h-2 rounded-full bg-gray-100 overflow-hidden">
+                                            <div class="h-full rounded-full" :style="barStyle(p.pct, '#3b82f6')"></div>
+                                        </div>
+                                    </div>
+                                    <div v-if="!statusData.local_ports.length" class="text-xs text-gray-400">无连接</div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- 规则与结论 -->
+                        <div class="bg-white rounded-2xl border border-gray-100 p-4">
+                            <div class="text-sm font-medium text-gray-700 mb-3">劫持规则与白名单（只读）</div>
+                            <div class="flex flex-wrap gap-2 text-xs">
+                                <span v-for="(v, k) in { 'nat 链': statusData.rules.nat, 'mangle 链': statusData.rules.mangle, 'PREROUTING 跳转': statusData.rules.jump, '策略路由': statusData.rules.route, '直连白名单': statusData.rules.ipset }"
+                                    :key="k"
+                                    class="px-3 py-1.5 rounded-xl border"
+                                    :class="v === '就位' ? 'bg-emerald-50 border-emerald-200 text-emerald-700' : 'bg-red-50 border-red-200 text-red-600'">
+                                    {{ k }}：{{ v }}
+                                </span>
+                                <span v-if="statusData.rules.ipset_n"
+                                    class="px-3 py-1.5 rounded-xl border bg-gray-50 border-gray-200 text-gray-600">
+                                    白名单条目：{{ statusData.rules.ipset_n }}
+                                </span>
+                            </div>
+                        </div>
+
+                        <div class="bg-white rounded-2xl border border-gray-100 p-4">
+                            <div class="text-sm font-medium text-gray-700 mb-3">结论</div>
+                            <div class="space-y-2">
+                                <div v-for="(v, i) in statusData.verdicts" :key="i"
+                                    class="flex items-start space-x-2 text-xs px-3 py-2 rounded-xl"
+                                    :class="v.level === 'warn' ? 'bg-red-50 text-red-700' : (v.level === 'info' ? 'bg-blue-50 text-blue-700' : 'bg-emerald-50 text-emerald-700')">
+                                    <i :data-lucide="v.level === 'warn' ? 'alert-triangle' : (v.level === 'info' ? 'info' : 'check-circle-2')" class="w-3.5 h-3.5 mt-0.5 shrink-0"></i>
+                                    <span>{{ v.text }}</span>
+                                </div>
+                            </div>
+                        </div>
+                    </template>
                 </div>
             </div>
         </div>
@@ -2310,6 +2541,68 @@
                     nextTick(() => { const c = document.getElementById('logContainer'); if (c) c.scrollTop = c.scrollHeight; });
                 };
 
+                // ===== 运行状态面板（插件自带 <id>-status 脚本时可用）=====
+                const statusApp = ref(null);
+                const statusData = ref(null);
+                const statusError = ref('');
+                const isLoadingStatus = ref(false);
+                let statusTimer = null;
+
+                const hasStatusScript = (app) => Array.isArray(app && app.files)
+                    && app.files.some(f => String((f && (f.Name || f.name)) || '') === `${app.id}-status`);
+
+                const refreshStatusPanel = async () => {
+                    if (!statusApp.value) return;
+                    isLoadingStatus.value = true;
+                    try {
+                        const res = await fetch(apiUrl(`/api/apps/${statusApp.value.id}/status_json`),
+                            { headers: { 'Authorization': token.value || '' } });
+                        const text = await res.text();
+                        if (!res.ok) {
+                            statusError.value = String(text || '').slice(0, 300) || ('HTTP ' + res.status);
+                            statusData.value = null;
+                        } else {
+                            statusData.value = JSON.parse(text);
+                            statusError.value = '';
+                        }
+                    } catch (e) {
+                        statusError.value = String(e && e.message ? e.message : e);
+                        statusData.value = null;
+                    }
+                    isLoadingStatus.value = false;
+                    nextTick(() => { if (window.lucide) lucide.createIcons(); });
+                };
+
+                const openStatusPanel = async (app) => {
+                    statusApp.value = app;
+                    statusData.value = null;
+                    statusError.value = '';
+                    await refreshStatusPanel();
+                    if (statusTimer) clearInterval(statusTimer);
+                    statusTimer = setInterval(() => { refreshStatusPanel(); }, 5000);
+                };
+
+                const closeStatusPanel = () => {
+                    statusApp.value = null;
+                    statusData.value = null;
+                    statusError.value = '';
+                    if (statusTimer) { clearInterval(statusTimer); statusTimer = null; }
+                };
+
+                const barStyle = (pct, color) =>
+                    'width:' + Math.max(0, Math.min(100, Number(pct) || 0)) + '%;background:' + color;
+                const pctColor = (pct, warn, danger) => {
+                    const v = Number(pct) || 0;
+                    const w = (warn === undefined) ? 70 : warn;
+                    const d = (danger === undefined) ? 90 : danger;
+                    return v >= d ? '#ef4444' : (v >= w ? '#f59e0b' : '#10b981');
+                };
+                const stateColor = (s) => ({
+                    'ESTABLISHED': '#10b981', 'TIME-WAIT': '#94a3b8', 'SYN-SENT': '#f59e0b', 'SYN-RECV': '#f59e0b',
+                    'CLOSE-WAIT': '#ef4444', 'LAST-ACK': '#f59e0b', 'FIN-WAIT-1': '#94a3b8', 'FIN-WAIT-2': '#94a3b8',
+                    'LISTEN': '#3b82f6', 'UNCONN': '#94a3b8'
+                }[s] || '#64748b');
+
                 const showCronModal = (app) => {
                     cronModalApp.value = app;
                     newCronReq.value = { schedule: '0 4 * * *', command: app ? (app.startCommand || app.StartCommand) : '' };
@@ -2368,7 +2661,8 @@
                     newApp, logModalApp, logContent, isLoadingLogs, cronModalApp, newCronReq, hasUpdate, latestVersion, isUpgrading, upgradeLog, doUpgrade,
                     searchQuery, filteredApps, isDragging, dragFromIndex, dragOverIndex, ghostX, ghostY, dragGhostApp, onHandlePointerDown, getLocalApp, isNewerVersion, appUpdates, appHasUpdate, cloudVersionOf, deleteApp, toggleApp, restartApp, restartingAppId, saveAutoStart,
                     installApp, updateAppConfigFromCloud, updateAllApps, isUpdatingAll, updateAllProgress, installUi, installPercent, installPhaseLabel, formatBytes, showSystemLogs, showLogModal, refreshLogs, runCustomCommand, loadCronJobs, openConfig, saveAppConfig, showCronModal, submitCron, deleteCron,
-                    sysConfigForm, isSavingSettings, openSettings, saveSettings, activeCmdMenu, showCronModalVisible, goToRouterAdmin
+                    sysConfigForm, isSavingSettings, openSettings, saveSettings, activeCmdMenu, showCronModalVisible, goToRouterAdmin,
+                    statusApp, statusData, statusError, isLoadingStatus, hasStatusScript, openStatusPanel, closeStatusPanel, refreshStatusPanel, barStyle, pctColor, stateColor
                 };
             }
         }).mount('#app');

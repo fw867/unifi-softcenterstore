@@ -873,6 +873,71 @@ app.MapPost("/api/apps/{id}/custom_command", async (string id, CustomCommandReq 
     var output = (await stdoutTask) + (await stderrTask);
     return Results.Ok(new LogResponse(output));
 });
+
+// 运行状态面板数据：仅当插件自带 <id>-status 脚本（在 Files 清单里声明过）时才允许调用，
+// 脚本以 --json 输出结构化数据，前端渲染成图表。这里不做通用命令执行，避免扩大攻击面。
+app.MapGet("/api/apps/{id}/status_json", async (string id) => {
+    if (string.IsNullOrWhiteSpace(id) || id.Any(c => !(char.IsLetterOrDigit(c) || c == '-' || c == '_')))
+        return Results.BadRequest(new { error = "非法的插件 ID" });
+
+    string filesJson;
+    using (var conn = new SqliteConnection(DbPath)) {
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT Files FROM apps_registry WHERE Id = @id";
+        cmd.Parameters.AddWithValue("@id", id);
+        var value = cmd.ExecuteScalar();
+        if (value is null || value is DBNull) return Results.NotFound(new { error = "插件不存在" });
+        filesJson = value.ToString() ?? "[]";
+    }
+
+    var expected = id + "-status";
+    var declared = false;
+    try {
+        using var doc = JsonDocument.Parse(string.IsNullOrWhiteSpace(filesJson) ? "[]" : filesJson);
+        foreach (var item in doc.RootElement.EnumerateArray()) {
+            string? name = null;
+            if (item.ValueKind == JsonValueKind.Object) {
+                if (item.TryGetProperty("Name", out var n1)) name = n1.GetString();
+                else if (item.TryGetProperty("name", out var n2)) name = n2.GetString();
+            }
+            if (string.Equals(name, expected, StringComparison.Ordinal)) { declared = true; break; }
+        }
+    } catch { }
+
+    if (!declared) return Results.NotFound(new { error = $"该插件未提供 {expected} 状态脚本" });
+
+    var stderr = "";
+    string output;
+    try {
+        using var p = new Process {
+            StartInfo = new ProcessStartInfo {
+                FileName = $"/data/softcenter/bin/{expected}",
+                Arguments = "--json",
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false
+            }
+        };
+        if (!p.Start()) return Results.Problem("状态脚本启动失败");
+        var stdoutTask = p.StandardOutput.ReadToEndAsync();
+        var stderrTask = p.StandardError.ReadToEndAsync();
+        var finished = await Task.WhenAny(p.WaitForExitAsync(), Task.Delay(20000));
+        if (!p.HasExited) {
+            try { p.Kill(true); } catch { }
+            return Results.Problem("状态脚本执行超时（20 秒）");
+        }
+        output = (await stdoutTask).Trim();
+        stderr = (await stderrTask).Trim();
+    } catch (Exception ex) {
+        return Results.Problem($"状态脚本执行失败：{ex.Message}");
+    }
+
+    if (output.Length == 0 || output[0] != '{')
+        return Results.Problem("状态脚本没有返回 JSON" + (stderr.Length > 0 ? "：" + stderr : ""));
+
+    return Results.Text(output, "application/json");
+});
 app.MapPut("/api/apps/{id}/autostart/{state:int}", (string id, int state) => {
     using var conn = new SqliteConnection(DbPath); conn.Open();
 

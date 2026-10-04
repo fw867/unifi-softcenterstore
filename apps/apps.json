@@ -350,7 +350,7 @@
         "ConfigPath": "/data/softcenter/config/xwall.env",
         "ConfigKeys": "",
         "LogPath": "/var/log/xwall.log",
-        "CustomCommands": "[{\"name\":\"升级Xray核心\",\"command\":\"/data/softcenter/bin/xwall-ssup\"},{\"name\":\"强制重下核心\",\"command\":\"FORCE_DOWNLOAD=1 /data/softcenter/bin/xwall-ssup\"},{\"name\":\"更新路由规则\",\"command\":\"/data/softcenter/bin/xwall-rules 2>&1 | tee -a /var/log/xwall-rules.log\"},{\"name\":\"查看Xray运行日志\",\"command\":\"echo '===== Xray 运行日志 ====='; sed -n 's/^XRAY_LOG_LEVEL=/错误日志级别: /p' /data/softcenter/config/xwall.env 2>/dev/null | head -n1; echo; if [ -s /var/log/xwall-xray.log ]; then tail -n 150 /var/log/xwall-xray.log; else echo '(暂无日志：进程未运行，或日志级别为 none)'; fi\"},{\"name\":\"清空Xray日志\",\"command\":\": > /var/log/xwall-xray.log; echo 'Xray 运行日志已清空'\"}]",
+        "CustomCommands": "[{\"name\":\"运行状态排查\",\"command\":\"/data/softcenter/bin/xwall-status\"},{\"name\":\"升级Xray核心\",\"command\":\"/data/softcenter/bin/xwall-ssup\"},{\"name\":\"强制重下核心\",\"command\":\"FORCE_DOWNLOAD=1 /data/softcenter/bin/xwall-ssup\"},{\"name\":\"更新路由规则\",\"command\":\"/data/softcenter/bin/xwall-rules 2>&1 | tee -a /var/log/xwall-rules.log\"},{\"name\":\"查看Xray运行日志\",\"command\":\"echo '===== Xray 运行日志 ====='; sed -n 's/^XRAY_LOG_LEVEL=/错误日志级别: /p' /data/softcenter/config/xwall.env 2>/dev/null | head -n1; echo; if [ -s /var/log/xwall-xray.log ]; then tail -n 150 /var/log/xwall-xray.log; else echo '(暂无日志：进程未运行，或日志级别为 none)'; fi\"},{\"name\":\"清空Xray日志\",\"command\":\": > /var/log/xwall-xray.log; echo 'Xray 运行日志已清空'\"}]",
         "Files": [
             {
                 "Name": "xwall",
@@ -368,6 +368,12 @@
                 "Name": "xwall-rules",
                 "Path": "apps/xwall/xwall-rules",
                 "Sha256": "eb4a4814bcddb8316d7ca5b3d4ea7f80734df944c67617c5941988742e225f9b",
+                "Mode": "0755"
+            },
+            {
+                "Name": "xwall-status",
+                "Path": "apps/xwall/xwall-status",
+                "Sha256": "a6a70a83d4fffd24292ae44fd91f73c57969ddd2a59e1d899f9fcc7419647957",
                 "Mode": "0755"
             }
         ],
