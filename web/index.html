@@ -772,7 +772,11 @@
                             <div class="flex items-center gap-2 text-gray-500 text-xs font-medium mb-2">
                                 <i data-lucide="activity" class="w-4 h-4"></i> 系统负载
                             </div>
-                            <div class="text-xl md:text-2xl font-semibold font-mono tracking-tight">{{ sysInfo.Load }}</div>
+                            <div class="flex items-baseline gap-1.5">
+                                <span class="text-xl md:text-2xl font-semibold font-mono tracking-tight">{{ loadParts.one }}</span>
+                                <span class="text-[10px] text-gray-400">1 分钟</span>
+                            </div>
+                            <div class="text-[11px] text-gray-500 font-mono mt-1 whitespace-nowrap">5 分钟 {{ loadParts.five }} · 15 分钟 {{ loadParts.fifteen }}</div>
                         </div>
                     </div>
 
@@ -1150,6 +1154,16 @@
                 // 移动端把「系统设置」换成「运行状态」：手机上主要看温度/内存/运行时间，
                 // 改端口换令牌这类动配置的操作留给电脑端（同一个页面，只是导航不同）
                 const statusNavItem = { id: 'status', label: '运行状态', short: '状态', icon: 'activity' };
+                // 负载：/proc/loadavg 给的是 "1 分钟 5 分钟 15 分钟"，整串放卡片里会折行，
+                // 所以拆开显示——大字给 1 分钟，另两个放小字
+                const loadParts = computed(() => {
+                    const parts = String(sysInfo.value.Load || '').trim().split(/\s+/).filter(Boolean);
+                    return {
+                        one: parts[0] || '--',
+                        five: parts[1] || '--',
+                        fifteen: parts[2] || '--'
+                    };
+                });
                 const mobileNavItems = computed(() => navItems.map(item =>
                     item.id === 'settings' ? statusNavItem : item));
                 const currentNavLabel = computed(() => {
@@ -2329,7 +2343,7 @@
                 });
 
                 return {
-                    token, tokenInputType, handleTokenSubmit, gateVisible, gateToken, gateError, gateBusy, gateInputType, checkToken, sysInfo, apps, cronJobs, activeApp, appConfig,
+                    token, tokenInputType, handleTokenSubmit, loadParts, gateVisible, gateToken, gateError, gateBusy, gateInputType, checkToken, sysInfo, apps, cronJobs, activeApp, appConfig,
                     activePage, navItems, mobileNavItems, currentNavLabel, goPage, sysLogContent, loadSystemLogsInline,
                     configMode, configSchema, configValues, configErrors, collapsedSections, isSavingConfig,
                     activeConfigTab, schemaTabNames, visibleSchemaSections, allSchemaFields,

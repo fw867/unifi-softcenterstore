@@ -251,7 +251,12 @@ string GetBashOutput(string cmd)
 {
     try
     {
-        using var p = Process.Start(new ProcessStartInfo { FileName = "/bin/bash", Arguments = $"-c \"{cmd}\"", RedirectStandardOutput = true, UseShellExecute = false, CreateNoWindow = true });
+        // 用 ArgumentList 传参，别再手工拼 -c "…"：命令里带双引号（awk/sed 的字符串）
+        // 会被外层引号吃掉，之前内存那条命令就是这么变成空值的。
+        var startInfo = new ProcessStartInfo { FileName = "/bin/bash", RedirectStandardOutput = true, UseShellExecute = false, CreateNoWindow = true };
+        startInfo.ArgumentList.Add("-c");
+        startInfo.ArgumentList.Add(cmd);
+        using var p = Process.Start(startInfo);
         p?.WaitForExit(2000); return p?.StandardOutput.ReadToEnd().Trim() ?? "";
     }
     catch { return ""; }
@@ -1065,7 +1070,8 @@ app.MapGet("/api/system/info", () => {
     var cpuTemp = string.IsNullOrEmpty(cpuTempRaw) ? "--" : cpuTempRaw + "°C";
 
     var sfpTempRaw = GetBashOutput("sensors 2>/dev/null | grep temp1 | awk '{print $2}'");
-    var sfpTemp = string.IsNullOrEmpty(sfpTempRaw) ? "--" : sfpTempRaw.Replace("+", "");
+    var sfpTemp = string.IsNullOrEmpty(sfpTempRaw) ? "--" : sfpTempRaw.Replace("+", "").Trim();
+    if (sfpTemp != "--" && !sfpTemp.EndsWith("°C")) sfpTemp += "°C";   // sensors 给的是裸数字，补个单位
 
     var uptimeRaw = GetBashOutput("uptime 2>/dev/null");
     var uptime = "--";
@@ -1108,8 +1114,9 @@ app.MapGet("/api/system/info", () => {
         DeviceModelCache = model;
     }
 
-    // 内存与负载：状态页要用（都是只读命令，开销很小）
-    var memory = GetBashOutput("free -m 2>/dev/null | awk '/^Mem:/{printf \"%d/%d MB (%.0f%%)\", $3, $2, $3*100/$2}'");
+    // 内存与负载：状态页要用（都只读 /proc，不依赖 free 之类的工具——
+    // 这台机器上的 free 无视 -m，返回的是 KB，容易算错）
+    var memory = GetBashOutput("awk '/^MemTotal:/{t=$2} /^MemAvailable:/{a=$2} END{if(t>0){printf \"%d/%d MB (%.0f%%)\", (t-a)/1024, t/1024, (t-a)*100/t} else {printf \"--\"}}' /proc/meminfo");
     if (string.IsNullOrEmpty(memory)) memory = "--";
     var load = GetBashOutput("cut -d' ' -f1-3 /proc/loadavg 2>/dev/null");
     if (string.IsNullOrEmpty(load)) load = "--";
