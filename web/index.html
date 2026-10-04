@@ -238,14 +238,15 @@
                 </div>
                 <!-- 负载与内存（与移动端状态页同一份数据；负载只显示 1 分钟） -->
                 <div class="flex gap-1.5">
-                    <div class="w-[38%] bg-white/60 border border-gray-200 rounded-xl px-2.5 py-2" title="系统负载（1 分钟）">
-                        <div class="flex items-center gap-1.5 text-[10px] text-gray-500">
+                    <div class="w-[38%] bg-white/60 border border-gray-200 rounded-xl px-2 py-2 text-center" title="系统负载（1 分钟）">
+                        <div class="flex items-center justify-center gap-1 text-[10px] text-gray-500">
                             <i data-lucide="gauge" class="w-3.5 h-3.5 text-purple-500"></i> 负载
                         </div>
                         <div class="text-[11px] font-mono text-gray-700 mt-1 whitespace-nowrap">{{ loadOne }}</div>
+                        <div class="text-[9px] text-gray-400 leading-none mt-0.5">1 分钟</div>
                     </div>
-                    <div class="flex-1 min-w-0 bg-white/60 border border-gray-200 rounded-xl px-2.5 py-2" title="内存占用">
-                        <div class="flex items-center gap-1.5 text-[10px] text-gray-500">
+                    <div class="flex-1 min-w-0 bg-white/60 border border-gray-200 rounded-xl px-2 py-2 text-center" title="内存占用">
+                        <div class="flex items-center justify-center gap-1 text-[10px] text-gray-500">
                             <i data-lucide="memory-stick" class="w-3.5 h-3.5 text-teal-600"></i> 内存
                         </div>
                         <div class="text-[10px] font-mono text-gray-700 mt-1 whitespace-nowrap">{{ sysInfo.Memory || '--' }}</div>
