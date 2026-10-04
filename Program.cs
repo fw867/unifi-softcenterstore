@@ -564,13 +564,30 @@ app.MapGet("/api/apps", () => {
 
 app.MapPost("/api/apps", (AppEntity a) => {
     using var conn = new SqliteConnection(DbPath); conn.Open();
+    // 排序只由"拖动排序"接口（PUT /api/apps/order）修改。
+    // 升级插件、同步云端配置也会走这个接口，若照搬请求里的 SortOrder，
+    // 已有应用会被挪到列表最后（就踩过这个坑），所以这里做保护：
+    //   已存在的应用 → 保持原排序；新装的应用 → 有正整数就沿用，否则排到末尾。
+    var sortOrder = a.SortOrder;
+    using (var probe = conn.CreateCommand()) {
+        probe.CommandText = "SELECT SortOrder FROM apps_registry WHERE Id=@id";
+        probe.Parameters.AddWithValue("@id", a.Id ?? "");
+        var current = probe.ExecuteScalar();
+        if (current is not null && current is not DBNull) {
+            sortOrder = Convert.ToInt32(current);
+        } else if (sortOrder <= 0) {
+            using var maxCmd = conn.CreateCommand();
+            maxCmd.CommandText = "SELECT IFNULL(MAX(SortOrder), -1) + 1 FROM apps_registry";
+            sortOrder = Convert.ToInt32(maxCmd.ExecuteScalar() ?? 0);
+        }
+    }
     using var cmd = conn.CreateCommand();
     cmd.CommandText = "INSERT OR REPLACE INTO apps_registry VALUES (@Id,@Name,@Type,@Icon,@Start,@Stop,@Status,@Auto,@CPath,@CKeys,@LPath,@SortOrder,@Ver,@Desc,@Custom,@Schema,@Files)";
     cmd.Parameters.AddWithValue("@Id", a.Id); cmd.Parameters.AddWithValue("@Name", a.Name); cmd.Parameters.AddWithValue("@Type", a.Type);
     cmd.Parameters.AddWithValue("@Icon", a.Icon ?? "box"); cmd.Parameters.AddWithValue("@Start", a.StartCommand); cmd.Parameters.AddWithValue("@Stop", a.StopCommand);
     cmd.Parameters.AddWithValue("@Status", a.StatusCommand); cmd.Parameters.AddWithValue("@Auto", a.IsAutoStart);
     cmd.Parameters.AddWithValue("@CPath", a.ConfigPath ?? ""); cmd.Parameters.AddWithValue("@CKeys", a.ConfigKeys ?? ""); cmd.Parameters.AddWithValue("@LPath", a.LogPath ?? "");
-    cmd.Parameters.AddWithValue("@SortOrder", a.SortOrder); cmd.Parameters.AddWithValue("@Ver", a.Version ?? "0.0.1"); cmd.Parameters.AddWithValue("@Desc", a.Description ?? "");
+    cmd.Parameters.AddWithValue("@SortOrder", sortOrder); cmd.Parameters.AddWithValue("@Ver", a.Version ?? "0.0.1"); cmd.Parameters.AddWithValue("@Desc", a.Description ?? "");
     cmd.Parameters.AddWithValue("@Custom", a.CustomCommands ?? "[]"); cmd.Parameters.AddWithValue("@Schema", a.ConfigSchema ?? ""); cmd.Parameters.AddWithValue("@Files", a.Files ?? "[]");
     cmd.ExecuteNonQuery(); return Results.Ok(new SimpleSuccess(true));
 });

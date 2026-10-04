@@ -2168,12 +2168,19 @@
                     if (!p) return false;
                     const filesRaw = p.Files ?? p.files ?? [];
                     const appName = p.Name || p.name || p.Id || p.id || '插件';
+                    // 升级已有应用时保持它原来的排序（云端包通常没有 SortOrder，
+                    // 不能回落到"应用总数"，否则升级后会被挪到列表最后）
+                    const appId = p.Id || p.id;
+                    const localApp = (apps.value || []).find(a => a.id === appId);
+                    const sortOrder = (localApp && localApp.sortOrder !== undefined && localApp.sortOrder !== null)
+                        ? localApp.sortOrder
+                        : (apps.value ? apps.value.length : 0);
                     const appData = {
-                        Id: p.Id || p.id, Name: p.Name || p.name, Type: p.Type || p.type || 'Local', Icon: p.Icon || p.icon || 'box',
+                        Id: appId, Name: p.Name || p.name, Type: p.Type || p.type || 'Local', Icon: p.Icon || p.icon || 'box',
                         StartCommand: p.StartCommand || p.startCommand, StopCommand: p.StopCommand || p.stopCommand,
                         StatusCommand: p.StatusCommand || p.statusCommand, IsAutoStart: p.IsAutoStart || p.isAutoStart || 0,
                         ConfigPath: p.ConfigPath || p.configPath || '', ConfigKeys: p.ConfigKeys || p.configKeys || '',
-                        LogPath: p.LogPath || p.logPath || '', SortOrder: p.SortOrder || apps.value.length,
+                        LogPath: p.LogPath || p.logPath || '', SortOrder: sortOrder,
                         Version: p.Version || p.version || '0.0.1', Description: p.Description || p.description || '',
                         CustomCommands: typeof p.CustomCommands === 'string' ? p.CustomCommands : (typeof p.customCommands === 'string' ? p.customCommands : JSON.stringify(p.CustomCommands || p.customCommands || [])),
                         ConfigSchema: serializeSchema(p.ConfigSchema ?? p.configSchema),
