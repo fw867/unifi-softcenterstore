@@ -1108,7 +1108,13 @@ app.MapGet("/api/system/info", () => {
         DeviceModelCache = model;
     }
 
-    return Results.Ok(new SystemInfo(rawVersion.Split('+')[0], "NativeAOT-.NET10", model, cpuTemp, sfpTemp, uptime));
+    // 内存与负载：状态页要用（都是只读命令，开销很小）
+    var memory = GetBashOutput("free -m 2>/dev/null | awk '/^Mem:/{printf \"%d/%d MB (%.0f%%)\", $3, $2, $3*100/$2}'");
+    if (string.IsNullOrEmpty(memory)) memory = "--";
+    var load = GetBashOutput("cut -d' ' -f1-3 /proc/loadavg 2>/dev/null");
+    if (string.IsNullOrEmpty(load)) load = "--";
+
+    return Results.Ok(new SystemInfo(rawVersion.Split('+')[0], "NativeAOT-.NET10", model, cpuTemp, sfpTemp, uptime, memory, load));
 });
 
 app.MapGet("/api/system/config", () => Results.Ok(sysConfig));
@@ -1145,7 +1151,7 @@ public record CronEntity(string Id, string Name, string Schedule, string Command
 public record CronRequest(string Schedule, string Command);
 public record CustomCommandReq(string Command);
 public record LogResponse(string Content);
-public record SystemInfo(string Version, string Runtime, string Device, string CpuTemp, string SfpTemp, string Uptime);
+public record SystemInfo(string Version, string Runtime, string Device, string CpuTemp, string SfpTemp, string Uptime, string Memory, string Load);
 
 public record ConfigItem(string Value, string Comment);
 public record ConfigResponse(string Mode, JsonNode? Schema, Dictionary<string, string> Values, Dictionary<string, ConfigItem>? Legacy);

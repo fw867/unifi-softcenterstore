@@ -247,13 +247,53 @@
                     <div class="flex items-center space-x-2">
                         <button v-if="hasUpdate" @click="doUpgrade"
                             class="text-[10px] bg-blue-50 text-blue-600 px-2 py-1 rounded-full font-bold border border-blue-200">新版</button>
-                        <button @click="goToRouterAdmin"
+                        <!-- 移动端不再跳路由器后台（手机上没意义），改成打开设置页：令牌 / 端口 / 全局更新代理 / 在线升级 -->
+                        <button @click="goPage('settings')" title="设置（连接令牌 / 端口 / 全局更新代理）"
                             class="w-8 h-8 rounded-lg bg-white border border-gray-200 flex items-center justify-center">
-                            <i data-lucide="router" class="w-4 h-4 text-gray-600"></i>
+                            <i data-lucide="settings" class="w-4 h-4 text-gray-600"></i>
                         </button>
                     </div>
                 </div>
             </header>
+
+            <!-- 配置门：没有有效令牌时盖住整页（电脑端与移动端同一套）；令牌校验通过才显示页面 -->
+            <div v-if="gateVisible"
+                class="fixed inset-0 z-[300] flex items-center justify-center p-5 bg-black/45 backdrop-blur-md">
+                <div class="w-full max-w-sm bg-white rounded-[1.5rem] shadow-2xl p-6 space-y-4">
+                    <div class="flex items-center gap-3">
+                        <div class="w-10 h-10 rounded-2xl bg-blue-50 text-blue-600 flex items-center justify-center">
+                            <i data-lucide="shield-check" class="w-5 h-5"></i>
+                        </div>
+                        <div>
+                            <h2 class="text-lg font-semibold leading-tight">需要访问令牌</h2>
+                            <p class="text-xs text-gray-500 mt-0.5">校验通过后才显示软件中心</p>
+                        </div>
+                    </div>
+                    <div>
+                        <label class="block text-gray-600 mb-1.5 text-xs font-medium">AdminToken</label>
+                        <div class="flex gap-2">
+                            <input :type="gateInputType" v-model="gateToken" @keyup.enter="checkToken(gateToken)"
+                                autocomplete="off" spellcheck="false" placeholder="粘贴路由器上的令牌"
+                                class="flex-1 bg-white/70 border border-gray-200 rounded-xl px-4 py-3 focus:ring-2 focus:ring-blue-500 outline-none font-mono text-sm">
+                            <button @click="gateInputType = gateInputType === 'password' ? 'text' : 'password'"
+                                class="px-3 rounded-xl border border-gray-200 text-xs text-gray-600 bg-white">
+                                {{ gateInputType === 'password' ? '显示' : '隐藏' }}
+                            </button>
+                        </div>
+                    </div>
+                    <p class="text-xs text-red-500 min-h-[16px]">{{ gateError }}</p>
+                    <button @click="checkToken(gateToken)" :disabled="gateBusy"
+                        class="btn-apple w-full bg-black text-white py-3 rounded-2xl font-medium hover:bg-gray-800 disabled:opacity-60">
+                        {{ gateBusy ? '正在校验…' : '连接' }}
+                    </button>
+                    <p class="text-[11px] text-gray-400 leading-relaxed">
+                        令牌就在路由器上：<code class="font-mono">/data/softcenter/config.json</code> 的
+                        <code class="font-mono">AdminToken</code> 字段（首次安装默认
+                        <code class="font-mono">Your_Secret_Token_Here</code>），可用 SSH 查看。
+                        校验通过后只记录在本浏览器，下次自动进入。
+                    </p>
+                </div>
+            </div>
 
             <main class="flex-1 px-4 md:px-8 lg:px-10 py-5 md:py-8 max-w-[1400px] w-full">
                 <!-- 软件中心 -->
@@ -696,6 +736,69 @@
                     </div>
                 </section>
 
+                <section v-else-if="activePage === 'status'">
+                    <div class="flex flex-col sm:flex-row sm:items-end justify-between gap-4 mb-6 md:mb-8">
+                        <div>
+                            <p class="text-xs font-semibold text-blue-600 tracking-widest uppercase mb-1.5">Status</p>
+                            <h1 class="text-2xl md:text-3xl font-semibold tracking-tight">运行状态</h1>
+                            <p class="text-sm text-gray-500 mt-2">{{ sysInfo.Device || '路由器' }} 的实时状态。</p>
+                        </div>
+                        <button @click="loadSystemInfo()"
+                            class="btn-apple bg-white border border-gray-200 px-5 py-2.5 rounded-2xl font-medium hover:bg-gray-50 flex items-center gap-2 self-start sm:self-auto">
+                            <i data-lucide="refresh-cw" class="w-4 h-4"></i> 刷新
+                        </button>
+                    </div>
+
+                    <div class="grid grid-cols-2 lg:grid-cols-4 gap-3 md:gap-4 mb-4">
+                        <div class="glass rounded-3xl p-4 md:p-5">
+                            <div class="flex items-center gap-2 text-gray-500 text-xs font-medium mb-2">
+                                <i data-lucide="thermometer" class="w-4 h-4"></i> CPU 温度
+                            </div>
+                            <div class="text-xl md:text-2xl font-semibold font-mono tracking-tight">{{ sysInfo.CpuTemp }}</div>
+                        </div>
+                        <div class="glass rounded-3xl p-4 md:p-5">
+                            <div class="flex items-center gap-2 text-gray-500 text-xs font-medium mb-2">
+                                <i data-lucide="thermometer-sun" class="w-4 h-4"></i> SFP 温度
+                            </div>
+                            <div class="text-xl md:text-2xl font-semibold font-mono tracking-tight">{{ sysInfo.SfpTemp }}</div>
+                        </div>
+                        <div class="glass rounded-3xl p-4 md:p-5">
+                            <div class="flex items-center gap-2 text-gray-500 text-xs font-medium mb-2">
+                                <i data-lucide="clock" class="w-4 h-4"></i> 运行时间
+                            </div>
+                            <div class="text-xl md:text-2xl font-semibold font-mono tracking-tight">{{ sysInfo.Uptime }}</div>
+                        </div>
+                        <div class="glass rounded-3xl p-4 md:p-5">
+                            <div class="flex items-center gap-2 text-gray-500 text-xs font-medium mb-2">
+                                <i data-lucide="activity" class="w-4 h-4"></i> 系统负载
+                            </div>
+                            <div class="text-xl md:text-2xl font-semibold font-mono tracking-tight">{{ sysInfo.Load }}</div>
+                        </div>
+                    </div>
+
+                    <div class="glass rounded-3xl p-5 md:p-6 max-w-2xl">
+                        <dl class="divide-y divide-gray-100">
+                            <div class="flex items-center justify-between gap-4 py-3">
+                                <dt class="text-sm text-gray-500 flex items-center gap-2"><i data-lucide="router" class="w-4 h-4"></i> 路由器名称</dt>
+                                <dd class="text-sm font-medium text-right break-all">{{ sysInfo.Device || '—' }}</dd>
+                            </div>
+                            <div class="flex items-center justify-between gap-4 py-3">
+                                <dt class="text-sm text-gray-500 flex items-center gap-2"><i data-lucide="cpu" class="w-4 h-4"></i> 运行环境</dt>
+                                <dd class="text-sm font-medium text-right break-all">{{ sysInfo.Runtime || '—' }}</dd>
+                            </div>
+                            <div class="flex items-center justify-between gap-4 py-3">
+                                <dt class="text-sm text-gray-500 flex items-center gap-2"><i data-lucide="memory-stick" class="w-4 h-4"></i> 内存占用</dt>
+                                <dd class="text-sm font-medium text-right font-mono">{{ sysInfo.Memory || '—' }}</dd>
+                            </div>
+                            <div class="flex items-center justify-between gap-4 py-3">
+                                <dt class="text-sm text-gray-500 flex items-center gap-2"><i data-lucide="package" class="w-4 h-4"></i> SoftCenter 版本</dt>
+                                <dd class="text-sm font-medium text-right font-mono">{{ sysInfo.Version || '—' }}</dd>
+                            </div>
+                        </dl>
+                        <p class="text-xs text-gray-400 mt-4">手机上只保留最常用的「状态」；改端口、换令牌、全局更新代理这些设置请在电脑浏览器里打开同一地址操作。</p>
+                    </div>
+                </section>
+
                 <!-- 系统日志 -->
                 <section v-else-if="activePage === 'logs'">
                     <div class="flex flex-col sm:flex-row sm:items-end justify-between gap-4 mb-6 md:mb-8">
@@ -739,7 +842,7 @@
         <!-- 移动端底部导航 -->
         <nav class="md:hidden fixed bottom-0 inset-x-0 z-40 glass border-t border-gray-200 px-2 py-1.5">
             <div class="flex items-center justify-around">
-                <button v-for="item in navItems" :key="'m-' + item.id" @click="goPage(item.id)"
+                <button v-for="item in mobileNavItems" :key="'m-' + item.id" @click="goPage(item.id)"
                     :class="activePage === item.id ? 'text-blue-600' : 'text-gray-500'"
                     class="flex flex-col items-center justify-center px-2 py-1.5 min-w-[56px]">
                     <i :data-lucide="item.icon" class="w-5 h-5"></i>
@@ -1032,7 +1135,7 @@
                 const token = ref(localStorage.getItem('sc_token') || '');
                 const tokenInputType = ref('password');
 
-                const sysInfo = ref({ Version: '0.0.0', Device: '', CpuTemp: '--', SfpTemp: '--', Uptime: '--' });
+                const sysInfo = ref({ Version: '0.0.0', Runtime: '', Device: '', CpuTemp: '--', SfpTemp: '--', Uptime: '--', Memory: '--', Load: '--' });
                 const apps = ref([]);
                 const cronJobs = ref([]);
 
@@ -1044,9 +1147,14 @@
                     { id: 'settings', label: '系统设置', short: '设置', icon: 'settings' },
                     { id: 'logs', label: '系统日志', short: '日志', icon: 'terminal' }
                 ];
+                // 移动端把「系统设置」换成「运行状态」：手机上主要看温度/内存/运行时间，
+                // 改端口换令牌这类动配置的操作留给电脑端（同一个页面，只是导航不同）
+                const statusNavItem = { id: 'status', label: '运行状态', short: '状态', icon: 'activity' };
+                const mobileNavItems = computed(() => navItems.map(item =>
+                    item.id === 'settings' ? statusNavItem : item));
                 const currentNavLabel = computed(() => {
-                    const item = navItems.find(n => n.id === activePage.value);
-                    return item ? item.label : '';
+                    const item = navItems.find(n => n.id === activePage.value) || statusNavItem;
+                    return item && item.id === activePage.value ? item.label : '';
                 });
                 const goPage = async (id) => {
                     activePage.value = id;
@@ -1061,6 +1169,8 @@
                         await loadCronJobs();
                     } else if (id === 'settings') {
                         await openSettings();
+                    } else if (id === 'status') {
+                        await loadSystemInfo();
                     } else if (id === 'logs') {
                         await loadSystemLogsInline();
                     }
@@ -1253,6 +1363,51 @@
                     startPolling();
                 };
 
+                // ── 配置门 ──────────────────────────────────────────────
+                // 没令牌、或历史令牌已失效时，先盖一层蒙版；校验通过才显示页面。
+                // 电脑端和移动端共用这一套（同一个页面）。
+                const gateVisible = ref(false);
+                const gateToken = ref('');
+                const gateError = ref('');
+                const gateBusy = ref(false);
+                const gateInputType = ref('password');
+
+                const checkToken = async (candidate) => {
+                    const value = String(candidate || '').trim();
+                    if (!value) {
+                        gateError.value = '请填写 AdminToken';
+                        return false;
+                    }
+                    gateBusy.value = true;
+                    gateError.value = '';
+                    try {
+                        const response = await fetch(apiUrl('/api/system/info'), {
+                            headers: { 'Authorization': value }, cache: 'no-store'
+                        });
+                        if (response.status === 401) {
+                            gateError.value = '令牌不正确，请检查后重试';
+                            return false;
+                        }
+                        if (!response.ok) {
+                            gateError.value = `无法访问软件中心（HTTP ${response.status}）`;
+                            return false;
+                        }
+                        token.value = value;
+                        localStorage.setItem('sc_token', value);
+                        gateVisible.value = false;
+                        gateToken.value = '';
+                        gateInputType.value = 'password';
+                        handleTokenSubmit();
+                        nextTick(() => { try { lucide.createIcons(); } catch (e) { } });
+                        return true;
+                    } catch (error) {
+                        gateError.value = `网络异常：${error.message}`;
+                        return false;
+                    } finally {
+                        gateBusy.value = false;
+                    }
+                };
+
                 const openSettings = async () => {
                     const data = await callApi('/api/system/config');
                     if (data) {
@@ -1394,10 +1549,13 @@
                         const rawVersion = data.version || data.Version || '0.0.0';
                         sysInfo.value = {
                             Version: rawVersion.split('+')[0],
+                            Runtime: data.runtime || data.Runtime || '',
                             Device: data.device || data.Device || '',
                             CpuTemp: data.cpuTemp || data.CpuTemp || '--',
                             SfpTemp: data.sfpTemp || data.SfpTemp || '--',
-                            Uptime: data.uptime || data.Uptime || '--'
+                            Uptime: data.uptime || data.Uptime || '--',
+                            Memory: data.memory || data.Memory || '--',
+                            Load: data.load || data.Load || '--'
                         };
 
                         if (!hasCheckedUpdateOnce) {
@@ -2152,7 +2310,14 @@
                 };
 
                 onMounted(() => {
-                    if (token.value) handleTokenSubmit();
+                    // 有历史令牌就先验证：失效或为空都要走配置门
+                    if (token.value) {
+                        checkToken(token.value).then((ok) => {
+                            if (!ok) { token.value = ''; gateVisible.value = true; }
+                        });
+                    } else {
+                        gateVisible.value = true;
+                    }
                     lucide.createIcons();
                     // 安全兜底：意外中断时复位拖拽状态
                     window.addEventListener('blur', () => {
@@ -2164,8 +2329,8 @@
                 });
 
                 return {
-                    token, tokenInputType, handleTokenSubmit, sysInfo, apps, cronJobs, activeApp, appConfig,
-                    activePage, navItems, currentNavLabel, goPage, sysLogContent, loadSystemLogsInline,
+                    token, tokenInputType, handleTokenSubmit, gateVisible, gateToken, gateError, gateBusy, gateInputType, checkToken, sysInfo, apps, cronJobs, activeApp, appConfig,
+                    activePage, navItems, mobileNavItems, currentNavLabel, goPage, sysLogContent, loadSystemLogsInline,
                     configMode, configSchema, configValues, configErrors, collapsedSections, isSavingConfig,
                     activeConfigTab, schemaTabNames, visibleSchemaSections, allSchemaFields,
                     schemaSections, fieldKey, fieldLabel, fieldType, fieldHelp, fieldPlaceholder, fieldRequired,
