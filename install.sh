@@ -5,12 +5,37 @@ echo "════════════════════════�
 echo "  SoftCenter 一键安装升级"
 echo "════════════════════════════════════════"
 
-PROXY=$1
+# 代理：位置参数优先，其次环境变量 PROXY / UPDATE_PROXY
+PROXY="${1:-${PROXY:-${UPDATE_PROXY:-}}}"
+
+# 代理规范化：与 apps/ 下各下载脚本保持一致（见提交 672e244）
+#   socks5:// → socks5h://、socks4:// → socks4a://：让域名交给代理侧解析，
+#   否则被污染的域名（GitHub 等）在本地解析就会失败；
+#   没写协议头时按 HTTP 处理并提示（若那其实是 SOCKS5 端口，会被当成 HTTP 代理而连不上）。
+normalize_proxy() {
+    case "$1" in
+        socks5://*) printf 'socks5h://%s' "${1#socks5://}" ;;
+        socks4://*) printf 'socks4a://%s' "${1#socks4://}" ;;
+        *://*)      printf '%s' "$1" ;;
+        *)
+            printf '⚠ 代理没写协议头，按 HTTP 代理处理：%s（若这是 SOCKS5 端口，请写成 socks5h://%s）\n' "$1" "$1" >&2
+            printf 'http://%s' "$1"
+            ;;
+    esac
+}
+
 if [ -n "$PROXY" ]; then
+    PROXY="$(normalize_proxy "$PROXY")"
     echo "🌐 使用代理: $PROXY"
-    export http_proxy=$PROXY
-    export https_proxy=$PROXY
-    export all_proxy=$PROXY
+    # 大小写都导出：curl/wget 读小写，Go 写的程序（如 gh）只读大写
+    export http_proxy="$PROXY"   HTTP_PROXY="$PROXY"
+    export https_proxy="$PROXY"  HTTPS_PROXY="$PROXY"
+    export all_proxy="$PROXY"    ALL_PROXY="$PROXY"
+    # 本机与局域网地址不走代理，否则本地接口/局域网请求可能被送去代理而失败
+    export no_proxy="localhost,127.0.0.1,::1,192.168.0.0/16,10.0.0.0/8,172.16.0.0/12"
+    export NO_PROXY="$no_proxy"
+    echo "    提示：这是本次安装使用的代理。要让软件中心自己下载/升级插件时也走代理，"
+    echo "          请在网页端「系统设置 → 全局更新代理」里填同一个地址（推荐 socks5h://）。"
 fi
 
 REPO="fw867/unifi-softcenterstore"
