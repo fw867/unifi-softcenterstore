@@ -1324,7 +1324,7 @@
             {
                 "Name": "fakehttp-dl",
                 "Path": "apps/fakehttp/fakehttp-dl",
-                "Sha256": "05c4023ee0b1c76e58f846ef289890e5416f6e9f52199eb48bee182683e62515",
+                "Sha256": "5a8bf091b9d5af60a538251ff00fa4546bf9aefa2338c817d54d3720fba3e2d5",
                 "Mode": "0755"
             }
         ],
@@ -1440,7 +1440,7 @@
             {
                 "Name": "fakesip-dl",
                 "Path": "apps/fakesip/fakesip-dl",
-                "Sha256": "565cadf163065be9e47f2fca2d778e3e4d7d22a37f86503d13249cca0c64e58d",
+                "Sha256": "ed4b35158e10bcfecf373be7fe33c03f5d642d7a2d6953179d603afd14d42102",
                 "Mode": "0755"
             }
         ],
