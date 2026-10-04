@@ -1111,7 +1111,7 @@
                                 <span v-for="(v, k) in { 'nat 链': statusData.rules.nat, 'mangle 链': statusData.rules.mangle, 'PREROUTING 跳转': statusData.rules.jump, '策略路由': statusData.rules.route, '直连白名单': statusData.rules.ipset }"
                                     :key="k"
                                     class="px-3 py-1.5 rounded-xl border"
-                                    :class="v === '就位' ? 'bg-emerald-50 border-emerald-200 text-emerald-700' : 'bg-red-50 border-red-200 text-red-600'">
+                                    :class="v === '就位' ? 'bg-emerald-50 border-emerald-200 text-emerald-700' : (v === '缺失' ? 'bg-red-50 border-red-200 text-red-600' : 'bg-gray-50 border-gray-200 text-gray-500')">
                                     {{ k }}：{{ v }}
                                 </span>
                                 <span v-if="statusData.rules.ipset_n"
@@ -2662,7 +2662,30 @@
                             statusError.value = String(text || '').slice(0, 300) || ('HTTP ' + res.status);
                             statusData.value = null;
                         } else {
-                            statusData.value = JSON.parse(text);
+                            // 第三方插件的 status 脚本可能只给出部分字段，这里统一补默认值，
+                            // 避免模板里取不到字段直接报错（README 里承诺了字段可省略）
+                            const d = JSON.parse(text) || {};
+                            const num = (v) => { const n = Number(v); return isFinite(n) ? n : 0; };
+                            const arr = (v) => Array.isArray(v) ? v : [];
+                            const obj = (v) => (v && typeof v === 'object') ? v : {};
+                            const fd = obj(d.fd), ct = obj(d.conntrack), rl = obj(d.rules);
+                            statusData.value = {
+                                running: d.running !== false,
+                                time: d.time || '', pid: d.pid || '-', uptime: d.uptime || '-', mem: d.mem || '-',
+                                mode: d.mode || '', hijack: d.hijack || '', socks: d.socks || '',
+                                dns_cn: d.dns_cn || '', dns_foreign: d.dns_foreign || '', loglevel: d.loglevel || '',
+                                total: num(d.total), tcp: num(d.tcp), udp: num(d.udp), other: num(d.other),
+                                fd: { count: fd.count !== undefined ? fd.count : 0, max: fd.max !== undefined ? fd.max : 0, pct: num(fd.pct) },
+                                proto: arr(d.proto), states: arr(d.states),
+                                remote_ports: arr(d.remote_ports), local_ports: arr(d.local_ports), lan: arr(d.lan),
+                                conntrack: { count: ct.count !== undefined ? ct.count : 0, max: ct.max !== undefined ? ct.max : 0, pct: num(ct.pct) },
+                                rules: {
+                                    nat: rl.nat || '未知', mangle: rl.mangle || '未知', jump: rl.jump || '未知',
+                                    route: rl.route || '未知', ipset: rl.ipset || '未知',
+                                    ipset_n: rl.ipset_n !== undefined ? rl.ipset_n : ''
+                                },
+                                verdicts: arr(d.verdicts)
+                            };
                             statusError.value = '';
                         }
                     } catch (e) {

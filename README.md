@@ -192,6 +192,111 @@ systemd 服务可用 `EnvironmentFile=/data/softcenter/config/<id>.env`。
 "command": "sed -n 's/^LEVEL=/级别: /p' /data/softcenter/config/x.env; tail -n 50 /var/log/x.log"
 ```
 
+### 运行状态面板（`<id>-status` 脚本 + `--json`）
+
+插件只要自带一个 `<插件ID>-status` 脚本并在 `apps.json` 的 `Files` 里声明，应用卡片上就会自动出现
+**运行状态**按钮（⚡ 图标，位于重启按钮左侧）。点开后是一个图表化面板，**每 5 秒自动刷新**。
+
+调用链：
+
+```
+点击卡片上的 ⚡
+  → GET /api/apps/{id}/status_json          （面板后端，需要 Authorization 令牌）
+    → 执行 /data/softcenter/bin/{id}-status --json   （20 秒超时，只接受以 { 开头的输出）
+      → 你的脚本把结构化数据打到 stdout
+        → 前端渲染成卡片 / 进度条 / 柱状图 / 表格
+```
+
+`Files` 声明示例（**必须**是 `<id>-status`，模式 0755，带 SHA256）：
+
+```jsonc
+{
+    "Name": "myapp-status",
+    "Path": "apps/myapp/myapp-status",
+    "Sha256": "……",
+    "Mode": "0755"
+}
+```
+
+#### JSON 格式
+
+脚本 `--json` 时**只输出 JSON**（不要夹日志），下面每个字段都可省略，前端会补默认值：
+
+```jsonc
+{
+  "running": true,                       // 必填。false 时面板只提示"内核未运行"+启动命令
+  "time": "2026-10-05 00:10:53",         // 采集时间（显示在面板标题栏）
+  "pid": "1087425",                      // 进程 PID
+  "uptime": "3h24m",                     // 运行时长（可读文本）
+  "mem": "38.0 MB",                      // 内存占用（可读文本）
+  "mode": "1 GFWList",                   // 当前工作模式（自由文本）
+  "hijack": "关", "socks": "关",          // 开关状态（自由文本）
+  "dns_cn": "223.5.5.5",                 // 以下三项显示在标题栏
+  "dns_foreign": "8.8.8.8",
+  "loglevel": "warning",
+
+  "total": 12,                           // 概览卡：总连接数
+  "tcp": 10, "udp": 2, "other": 0,       // 协议数量
+
+  "fd":         { "count": "42", "max": "1024", "pct": 4 },
+  "conntrack":  { "count": "328", "max": "65536", "pct": 0 },
+
+  "proto":   [ { "name": "tcp", "count": 10, "pct": "83.3" } ],
+  "states":  [ { "short": "ESTAB", "name": "ESTABLISHED", "count": 8, "pct": "80.0" } ],
+  "remote_ports": [ { "port": "443", "service": "https", "count": 6, "pct": "50.0" } ],
+  "local_ports":  [ { "port": "1280", "service": "xwall-tcp", "count": 2, "pct": "16.7" } ],
+  "lan":     [ { "ip": "192.168.1.23", "name": "XiaoMing-iPhone",
+                 "mac": "a4:5e:60:1a:2b:3c", "count": 9, "pct": "100.0" } ],
+
+  "rules":   { "nat": "就位", "mangle": "就位", "jump": "就位",
+               "route": "就位", "ipset": "就位", "ipset_n": "15" },
+
+  "verdicts": [ { "level": "ok", "text": "未见异常：连接规模 12（TCP 10 / UDP 2）" } ]
+}
+```
+
+字段说明：
+
+| 字段 | 类型 | 面板用法 |
+|---|---|---|
+| `running` | bool | `false` 时只显示"内核未运行"提示，其余字段忽略 |
+| `total` / `tcp` / `udp` / `other` | number | 顶部概览卡与协议占比柱状图 |
+| `fd` / `conntrack` | `{count,max,pct}` | 资源占用进度条；`pct` 是**数字**（不带 `%`），≥70/≥80 会变橙、≥90 变红 |
+| `proto[].name` | `"tcp"/"udp"` | 颜色：udp 紫、其它蓝 |
+| `states[].name` | 字符串 | 状态色：ESTABLISHED 绿、TIME-WAIT 灰、SYN-SENT/LAST-ACK 橙、CLOSE-WAIT 红 |
+| `remote_ports` / `local_ports` | 数组 | 两组端口柱状图（`service` 是端口助记，如 `https`，没有就填 `-`） |
+| `lan[]` | 数组 | 局域网设备表格：**IP / 客户端名称 / MAC / 会话数 / 占比**，名称与 MAC 可填 `-` |
+| `rules.*` | 字符串 | 徽标：值为 **`就位`** 显示绿色，**`缺失`** 显示红色，其它值显示灰色（如 `未知`） |
+| `verdicts[].level` | `ok`/`warn`/`info` | 结论配色与图标：绿 ✓ / 红 ⚠ / 蓝 ⓘ |
+
+#### 脚本编写要点
+
+* **必须能被 POSIX sh 解析**（路由器 `/bin/sh` 是 busybox ash，不是 bash）：不要用 `${V//pat/rep}`、`[[ ]]`、数组、`<<<`；`${V//pat/rep}` 会直接 `Bad substitution` 终止脚本。
+* **只读**：诊断脚本不要改 iptables / 配置 / 进程状态。
+* **快**：整个脚本要在 20 秒内跑完（超时会被后端 kill）；不要在每次调用里做大量 DNS 查询。
+* **建议同时保留文本模式**：无参数时输出人类可读的 ASCII 报告，这样「扩展 → 运行状态排查」按钮和命令行都能用（参考 `apps/xwall/xwall-status`：`--json` 输出 JSON，无参数输出带柱状图的中文报告）。
+* **JSON 转义**：值里出现 `"` 或 `\` 时要转义（POSIX sh 里可用 `sed -e 's/\\\\/\\\\\\\\/g' -e 's/"/\\\\"/g'` 处理，或干脆只输出安全字符）。
+* **计数用整数、百分比用数字**：`"pct": 83.3`（`83.3%` 这种带百分号的字符串会让前端进度条算不出来）。
+
+最小骨架：
+
+```sh
+#!/bin/sh
+PROC_NAME="myapp-core"
+if [ "${1:-}" = "--json" ]; then
+    pid=$(pidof "$PROC_NAME" 2>/dev/null | awk '{print $1}')
+    if [ -z "$pid" ]; then
+        printf '{"running":false}\n'
+        exit 0
+    fi
+    conn=$(ss -anp 2>/dev/null | grep -c -- "$PROC_NAME")
+    printf '{"running":true,"pid":"%s","total":%s,"tcp":%s,"udp":%s,"verdicts":[{"level":"ok","text":"运行中"}]}\n' \
+        "$pid" "$conn" 0 0
+    exit 0
+fi
+printf 'MyApp 状态：运行中，连接数 %s\n' "$(ss -anp 2>/dev/null | grep -c -- "$PROC_NAME")"
+```
+
 ---
 
 ## 🤝 贡献与反馈
