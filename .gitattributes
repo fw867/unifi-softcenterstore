@@ -19,6 +19,7 @@ apps/**/udm-le text eol=lf
 apps/**/wechat text eol=lf
 apps/**/xwall text eol=lf
 apps/**/xwall-ssup text eol=lf
+apps/**/xwall-rules text eol=lf
 
 # 二进制核心，禁止换行转换
 apps/ddnsto/ddnsto-core binary

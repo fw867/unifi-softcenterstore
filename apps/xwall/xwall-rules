@@ -1,0 +1,207 @@
+#!/bin/sh
+
+# UniFi SoftCenter · XWall 路由规则库独立更新脚本 (Loyalsoldier 官方源)
+#
+# 功能：
+#   1. 通过 GitHub API 获取 Loyalsoldier/v2ray-rules-dat 最新版本号 (tag_name)
+#   2. 与本地记录的版本号比对，一致则跳过
+#   3. 下载 geoip.dat、geosite.dat 及其配套的 sha256sum 校验文件
+#   4. 严格比对 SHA256，通过后覆盖本地文件，并更新本地版本号记录
+#   5. 自动重启 XWall 服务以重载新规则
+#
+# 环境变量：
+#   FORCE_DOWNLOAD=1   版本号一致也强制重下
+#   NO_RESTART=1       更新后不重启 XWall
+
+# cron 里的 PATH 极简，显式固定一遍，保证 curl / sha256sum 等命令可被找到
+PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+export PATH
+
+echo_date() {
+    echo "【$(date "+%Y年%m月%d日 %H:%M:%S")】: $1"
+}
+
+# ================= 路径配置 =================
+XWALL_DIR="/data/softcenter/bin/xwall-core"
+XWALL_BIN="/data/softcenter/bin/xwall"
+VERSION_FILE="$XWALL_DIR/rules.version"
+TMP_DIR="/tmp/xwall_rules"
+
+REPO="Loyalsoldier/v2ray-rules-dat"
+GITHUB_API="https://api.github.com/repos/$REPO/releases/latest"
+
+FORCE_DOWNLOAD="${FORCE_DOWNLOAD:-0}"
+NO_RESTART="${NO_RESTART:-0}"
+
+# ================= 代理设置 =================
+SC_PROXY=$(sed -n 's/.*"LocalProxy"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' /data/softcenter/config.json 2>/dev/null | head -n1)
+CURL_OPT=""
+if [ -n "$SC_PROXY" ]; then
+    CURL_OPT="-x $SC_PROXY"
+    echo_date "规则更新代理 (全局设置): $SC_PROXY"
+else
+    echo_date "未配置更新代理，直连 GitHub"
+fi
+
+human_size() {
+    awk -v b="${1:-0}" 'BEGIN{
+        split("B KB MB GB", u, " ")
+        i = 1
+        while (b >= 1024 && i < 4) { b /= 1024; i++ }
+        if (i == 1) printf "%d %s", b, u[i]
+        else printf "%.1f %s", b, u[i]
+    }'
+}
+
+download_with_progress() {
+    local url="$1"
+    local out="$2"
+    local err="/tmp/xwall_rules_curl.err"
+    local pid last=0 p got
+
+    : > "$err"
+    curl $CURL_OPT -fL --connect-timeout 15 --max-time 120 -o "$out" "$url" 2>"$err" &
+    pid=$!
+
+    while kill -0 "$pid" 2>/dev/null; do
+        sleep 1
+        p=$(tr '\r' '\n' < "$err" 2>/dev/null | sed -n 's/.*[[:space:]]\([0-9][0-9]*\)[[:space:]]*%.*/\1/p' | tail -n1)
+        p=${p:-0}
+        if [ "$p" -ge $((last + 20)) ] || [ "$p" -ge 100 ]; then
+            got=$(wc -c < "$out" 2>/dev/null || echo 0)
+            echo_date "  ▸ 进度 ${p}%  已下载 $(human_size "$got")"
+            last=$p
+        fi
+    done
+    wait "$pid"
+    return $?
+}
+
+# 检查下载文件是否有效（非空、非报错网页）
+dat_ok() {
+    local f="$1"
+    [ -s "$f" ] || return 1
+    [ "$(wc -c < "$f" | tr -d ' ')" -ge 10240 ] || return 1
+    [ "$(head -c 1 "$f" 2>/dev/null)" != "<" ] || return 1
+    return 0
+}
+
+# ================= 获取线上最新版本 =================
+get_latest_version() {
+    echo_date "检测规则库 ($REPO) 最新版本..."
+    
+    LATEST_INFO=$(curl $CURL_OPT --connect-timeout 10 --max-time 30 -fsSL "$GITHUB_API")
+    CURL_RC=$?
+    
+    if [ "$CURL_RC" != "0" ] || [ -z "$LATEST_INFO" ]; then
+        echo_date "❌ 获取版本信息失败 (curl exit=${CURL_RC})，请检查网络！"
+        exit 1
+    fi
+
+    # Loyalsoldier 的 tag 通常为纯数字 (如 202310262215)
+    XVERSION=$(printf '%s\n' "$LATEST_INFO" | sed -nE 's/.*"tag_name"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p' | head -n1)
+    XVERSION=$(printf '%s' "$XVERSION" | tr -d '\r\n ')
+
+    if [ -z "$XVERSION" ] || ! echo "$XVERSION" | grep -Eq '^[0-9]+$'; then
+        echo_date "❌ 解析版本号失败（得到：${XVERSION:-空}），中止更新。"
+        exit 1
+    fi
+    echo_date "✅ 线上最新版本：$XVERSION"
+}
+
+# ================= 对比本地版本 =================
+check_local_version() {
+    LOCAL_VERSION="未知"
+    if [ -s "$VERSION_FILE" ]; then
+        LOCAL_VERSION=$(cat "$VERSION_FILE" | tr -d '\r\n ')
+    fi
+
+    if [ ! -s "$XWALL_DIR/geoip.dat" ] || [ ! -s "$XWALL_DIR/geosite.dat" ]; then
+        echo_date "⚠️ 本地数据文件缺失，强制执行下载。"
+        FORCE_DOWNLOAD=1
+    fi
+
+    if [ "$FORCE_DOWNLOAD" != "1" ] && [ "$LOCAL_VERSION" = "$XVERSION" ]; then
+        echo_date "🎉 本地规则库已是最新版 ($LOCAL_VERSION)，无需更新。"
+        exit 0
+    else
+        echo_date "🚀 准备更新：$LOCAL_VERSION -> $XVERSION"
+    fi
+}
+
+# ================= 下载与校验 =================
+download_and_verify() {
+    local file_name="$1"
+    local dl_base="https://github.com/$REPO/releases/download/${XVERSION}"
+    
+    echo_date "开始下载 $file_name ..."
+    
+    # 1. 下载 SHA256 校验文件
+    if ! curl $CURL_OPT --connect-timeout 15 --max-time 30 -fsSL -o "$file_name.sha256sum" "$dl_base/$file_name.sha256sum"; then
+        echo_date "❌ 获取 $file_name 校验文件失败！"
+        return 1
+    fi
+    
+    # 2. 下载主规则文件
+    if ! download_with_progress "$dl_base/$file_name" "$file_name" || ! dat_ok "$file_name"; then
+        echo_date "❌ $file_name 下载失败或文件已损坏！"
+        return 1
+    fi
+    
+    # 3. 严格比对 SHA256
+    ONLINE_HASH=$(awk '{print $1}' "$file_name.sha256sum" | tr -d ' \r')
+    LOCAL_HASH=$(sha256sum "$file_name" | awk '{print $1}')
+    
+    if [ -z "$ONLINE_HASH" ] || [ "$ONLINE_HASH" != "$LOCAL_HASH" ]; then
+        echo_date "❌ $file_name SHA256 校验未通过！"
+        echo_date "   期望：$ONLINE_HASH"
+        echo_date "   实际：$LOCAL_HASH"
+        return 1
+    fi
+    
+    echo_date "✅ $file_name 校验通过 ($LOCAL_HASH)"
+    return 0
+}
+
+# ================= 主流程 =================
+# 仅在交互式终端清屏：cron / 面板扩展按钮调用时 stdout 不是 TTY，清屏转义符会污染日志
+[ -t 1 ] && clear
+echo_date "==================================================================="
+echo_date "              XWall 规则库 (.dat) 独立更新脚本"
+echo_date "==================================================================="
+
+mkdir -p "$XWALL_DIR"
+get_latest_version
+check_local_version
+
+rm -rf "$TMP_DIR"
+mkdir -p "$TMP_DIR" && cd "$TMP_DIR"
+
+if ! download_and_verify "geoip.dat" || ! download_and_verify "geosite.dat"; then
+    echo_date "❌ 规则下载或校验失败，已中止。本地文件未受影响。"
+    rm -rf "$TMP_DIR"
+    exit 1
+fi
+
+echo_date "正在覆盖本地规则文件..."
+mv -f geoip.dat "$XWALL_DIR/geoip.dat"
+mv -f geosite.dat "$XWALL_DIR/geosite.dat"
+
+# 更新版本记录
+echo "$XVERSION" > "$VERSION_FILE"
+
+rm -rf "$TMP_DIR"
+echo_date "🎉 规则库更新完成！最新版本号: $XVERSION"
+
+# 重载 Xray 进程
+if [ "$NO_RESTART" = "1" ]; then
+    echo_date "NO_RESTART=1，跳过自动重启服务。"
+else
+    if pgrep -x "xwall-xray" >/dev/null 2>&1; then
+        echo_date "🔄 正在重启 XWall 服务以应用新规则..."
+        "$XWALL_BIN" restart
+    else
+        echo_date "提示：XWall 当前未运行，下次启动将自动使用新规则。"
+    fi
+fi
+echo_date "==================================================================="

@@ -146,6 +146,7 @@ apps/
 | `number` | 数字 | `Min`, `Max` |
 | `port` | 端口 | 1–65535 |
 | `ip` | IP 地址 | IPv4 / IPv6 校验 |
+| `time` | 时间 | HH:MM（00:00–23:59） |
 | `path` | 路径 | `Monospace` |
 | `switch` | 开关 | 存储为 `1` / `0` |
 | `select` | 下拉 | `Options: [{Label, Value}]` |

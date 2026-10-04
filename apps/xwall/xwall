@@ -1,53 +1,36 @@
 #!/bin/sh
 
-# UniFi SoftCenter · XWall —— 全流量交给 Xray，由 Xray 规则集分流（国内直连 / 国外代理）
+# UniFi SoftCenter · XWall —— 全流量交给 Xray，由 Xray 规则集分流（全能双栈/纯净 IPv4 动态切换版）
 # 面板配置：/data/softcenter/config/xwall.env
-#   XWALL_CONFIG      配置文件（只需 outbounds，必须有一个 tag=proxy 的出站）
-#   PROXY_MODE        默认代理模式（1 GFWList / 2 国内白名单 / 3 游戏模式 / 4 全局代理）
-#   XRAY_LOG_LEVEL    Xray 运行日志级别（debug / info / warning / error / none）
-#   DNS_CN/DNS_FOREIGN 国内 / 国外 DNS
-#   DNS_HIJACK        域名劫持开关（开启后下发 PREROUTING 53 端口劫持）
-#   PROXY_WHITE_LIST  代理白名单（名单内局域网设备直连，其余全部走代理）
-#   XWALL_SOCKS_*     SOCKS5 入站（开关 / 端口 / 监听地址 / 验证方式）
-#
-# 与 koolss 完全隔离，规则互不干扰：
-#   进程 xwall-xray ｜ 自定义链 XWALL ｜ ipset xwall_bypass ｜ 策略路由 fwmark 0x08 / table 320
-#   （koolss 使用 koolss-xray / V2RAY / white_list / 0x07 / table 310）
-# 注意：两个插件都会接管全部流量（且都用 1280/1281 端口），只能二选一运行。
-#
-# 内核与数据文件放在同一目录（bin/xwall-core），便于 Xray 按 XRAY_LOCATION_ASSET
-# 找到 geoip.dat / geosite.dat；注意 /data/softcenter/bin/xwall 是插件脚本本体，不能当目录用。
 
 PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 export PATH
 
-# ================= 名称与路径（改这里即可全局生效） =================
+# ================= 名称与路径 =================
 PROC_NAME="xwall-xray"
 SSUP_BIN="/data/softcenter/bin/xwall-ssup"
-XWALL_DIR="/data/softcenter/bin/xwall-core"   # 内核 + geoip.dat + geosite.dat
+RULES_BIN="/data/softcenter/bin/xwall-rules"
+RULES_LOG="/var/log/xwall-rules.log"
+XWALL_DIR="/data/softcenter/bin/xwall-core"
 XRAY_BIN="$XWALL_DIR/xwall-xray"
 ASSET_DIR="$XWALL_DIR"
-USER_JSON="/tmp/xwall_user.json"        # 面板粘贴的原始配置
-XRAY_JSON="/tmp/xwall.json"             # 插件生成后的运行配置
-# 内核自身日志：错误日志按面板级别写文件；访问日志默认关闭（不设 access 时 Xray 会把它灌到 stdout）
+USER_JSON="/tmp/xwall_user.json"
+XRAY_JSON="/tmp/xwall.json"
 XRAY_LOG="/var/log/xwall-xray.log"
 LOG_FILE="/var/log/xwall.log"
 LOCK_FILE="/var/lock/xwall.lock"
-CHAIN="XWALL"                           # nat / mangle 自定义链名
-IPSET_BYPASS="xwall_bypass"             # 防回环目标名单
-FWMARK="0x08"                           # TPROXY 标记（koolss 用 0x07，避免冲突）
-ROUTE_TABLE="320"                       # 策略路由表（koolss 用 310）
-TCP_PORT="1280"                         # TCP 透明代理端口
-UDP_PORT="1281"                         # UDP TPROXY 端口
-DNS_PORT="15353"                        # 域名劫持用的 DNS 入站端口（仅本机/LAN 可达）
+CHAIN="XWALL"
+IPSET_BYPASS="xwall_bypass"
+FWMARK="0x08"
+ROUTE_TABLE="320"
+TCP_PORT="1280"
+UDP_PORT="1281"
+DNS_PORT="15353"
 DNS_LOCAL_DOMAINS='["domain:local","domain:localdomain","domain:lan","domain:home.arpa","domain:invalid","domain:localhost"]'
 
-# 明确告知 Xray 数据文件目录，不依赖各版本的默认搜索顺序
 XRAY_LOCATION_ASSET="$ASSET_DIR"
 export XRAY_LOCATION_ASSET
-# ===================================================================
 
-# 状态探针：SoftCenter 每 3 秒轮询，必须轻量，不读配置、不写日志
 if [ "$1" = "status" ]; then
     if pgrep -x "$PROC_NAME" >/dev/null 2>&1; then echo "running"; exit 0; fi
     echo "stopped"
@@ -57,40 +40,33 @@ fi
 CONFIG="/data/softcenter/config/xwall.env"
 [ -f "$CONFIG" ] && . "$CONFIG"
 
-# ================= 面板设置项 =================
 XWALL_CONFIG="${XWALL_CONFIG:-}"
-# 默认代理模式：1 GFWList / 2 国内白名单 / 3 游戏模式 / 4 全局代理（不代理＝直接关插件，不再提供）
 PROXY_MODE="${PROXY_MODE:-2}"
-# Xray 运行日志级别：debug / info / warning / error / none
 XRAY_LOG_LEVEL="${XRAY_LOG_LEVEL:-warning}"
 DNS_CN="${DNS_CN:-223.5.5.5}"
 DNS_FOREIGN="${DNS_FOREIGN:-8.8.8.8}"
-# 域名劫持：开启后把局域网所有 53 端口查询劫持进 Xray（国内走国内 DNS，国外走 FakeIP + 国外 DNS）
 DNS_HIJACK="${DNS_HIJACK:-0}"
-# 代理白名单：名单内的局域网设备直连（旁路 Xray），其余设备全部走代理
 PROXY_WHITE_LIST="${PROXY_WHITE_LIST:-}"
-# 目标黑白名单：白名单直连、黑名单强制走代理（白名单优先）
 WHITE_DOMAIN_LIST="${WHITE_DOMAIN_LIST:-}"
 WHITE_IP_LIST="${WHITE_IP_LIST:-}"
 BLACK_DOMAIN_LIST="${BLACK_DOMAIN_LIST:-}"
 BLACK_IP_LIST="${BLACK_IP_LIST:-}"
 
-# SOCKS5 入站
 XWALL_SOCKS_ENABLE="${XWALL_SOCKS_ENABLE:-0}"
 XWALL_SOCKS_PORT="${XWALL_SOCKS_PORT:-1283}"
-XWALL_SOCKS_LISTEN="${XWALL_SOCKS_LISTEN:-0}"   # 0: 仅本机 127.0.0.1, 1: 局域网 0.0.0.0
-XWALL_SOCKS_AUTH="${XWALL_SOCKS_AUTH:-0}"       # 0: 无验证, 1: 用户名密码
+XWALL_SOCKS_LISTEN="${XWALL_SOCKS_LISTEN:-0}"
+XWALL_SOCKS_AUTH="${XWALL_SOCKS_AUTH:-0}"
 XWALL_SOCKS_USER="${XWALL_SOCKS_USER:-}"
 XWALL_SOCKS_PASS="${XWALL_SOCKS_PASS:-}"
-# 操作锁最长等待秒数（避免多个 start/stop 叠在一起永久卡死）
 LOCK_WAIT="${LOCK_WAIT:-20}"
-# =============================================
+XWALL_IPV6_ENABLE="${XWALL_IPV6_ENABLE:-0}"
+XWALL_RULES_AUTO_UPDATE="${XWALL_RULES_AUTO_UPDATE:-0}"
+XWALL_RULES_UPDATE_TIME="${XWALL_RULES_UPDATE_TIME:-07:00}"
 
 log_date() {
     echo "【$(date '+%Y年%m月%d日 %X')】: $1" | tee -a "$LOG_FILE"
 }
 
-# 分隔线：把每次启动/停止/重启切开，便于在一份日志里分清轮次
 log_sep() {
     log_date "════════════════════ $1 ════════════════════"
 }
@@ -106,7 +82,6 @@ decode_b64() {
     esac
 }
 
-# 探测局域网地址（dnsmasq 一定监听它）：先看 br0，再从内核直连路由里找
 detect_lan_ip() {
     local addr=""
     if [ -d /sys/class/net/br0 ]; then
@@ -118,47 +93,35 @@ detect_lan_ip() {
     printf '%s' "$addr"
 }
 
-# 统计名单有效行数（忽略空行与 # 注释），仅用于日志
 count_entries() {
     printf '%s\n' "$1" | grep -v '^[[:space:]]*$' | grep -v '^[[:space:]]*#' | wc -l | tr -d ' '
 }
 
 DIRECT_LIST=$(decode_b64 "$PROXY_WHITE_LIST")
 
-# ================= 内核 / 数据文件 =================
 have_core() { [ -x "$XRAY_BIN" ]; }
 have_assets() { [ -s "$ASSET_DIR/geoip.dat" ] && [ -s "$ASSET_DIR/geosite.dat" ]; }
 
-# 启动前检查内核与 geoip/geosite，缺失时调用 xwall-ssup 自动补齐
 ensure_core() {
-    if have_core && have_assets; then
-        return 0
-    fi
-
+    if have_core && have_assets; then return 0; fi
     if have_core; then
         log_date "缺少 geoip.dat / geosite.dat，开始自动获取..."
     else
         log_date "未检测到 Xray 内核（$XRAY_BIN），开始自动下载..."
     fi
-
     if [ ! -x "$SSUP_BIN" ]; then
         log_date "未找到 $SSUP_BIN，无法自动下载内核/数据文件"
         return 1
     fi
-
     SSUP_NO_START=1 "$SSUP_BIN" 2>&1 | tee -a "$LOG_FILE"
-
     if have_core && have_assets; then
         log_date "Xray 内核与 geoip/geosite 数据文件已就绪"
         return 0
     fi
-
-    log_date "内核/数据文件仍缺失：内核=$([ -x "$XRAY_BIN" ] && echo ok || echo 缺失) geoip=$([ -s "$ASSET_DIR/geoip.dat" ] && echo ok || echo 缺失) geosite=$([ -s "$ASSET_DIR/geosite.dat" ] && echo ok || echo 缺失)"
+    log_date "Xray 内核/数据文件仍缺失，请检查网络。"
     return 1
 }
 
-# ================= 运行配置生成 =================
-# 面板只需提供 outbounds（至少一个 tag 为 proxy 的出站），其余由插件生成
 decode_config() {
     case "$XWALL_CONFIG" in
         b64:*) echo "${XWALL_CONFIG#b64:}" | base64 -d > "$USER_JSON" 2>/dev/null ;;
@@ -171,37 +134,36 @@ decode_config() {
 }
 
 build_xray_config() {
-    log_date "生成 Xray 运行配置（全流量接管 + Xray 规则集分流）..."
+    local msg="纯净 IPv4 强制版"
+    local in_listen="0.0.0.0"
+    local out_send="0.0.0.0"
+    local q_strategy="UseIPv4"
+    local d_strategy="UseIPv4"
+
+    if [ "$XWALL_IPV6_ENABLE" = "1" ]; then
+        msg="全能双栈 IPv6 开启版"
+        in_listen="::"
+        out_send="::"
+        q_strategy="UseIP"
+        d_strategy="AsIs"
+    fi
+
+    log_date "生成 Xray 运行配置（$msg）..."
 
     fake_pool="198.18.0.0/15"
-
     socks_listen_ip="127.0.0.1"
-    [ "$XWALL_SOCKS_LISTEN" = "1" ] && socks_listen_ip="0.0.0.0"
+    [ "$XWALL_SOCKS_LISTEN" = "1" ] && socks_listen_ip="$in_listen"
 
-    # 域名劫持入站：只监听局域网地址（拿不到就退化为全网卡，靠 UniFi 的 WAN 入站策略兜底）
     local lan_ip
     lan_ip=$(detect_lan_ip)
-    dns_listen="${lan_ip:-0.0.0.0}"
-    # 本地域名的兜底 DNS：交给路由自身的 dnsmasq，保证 .local / .localdomain 这类名字仍可解析
     local_dns="${lan_ip:-127.0.0.1}"
+    dns_listen="$in_listen"
 
-    # 日志级别白名单校验（面板已限制，这里再兜一层）
     case "$XRAY_LOG_LEVEL" in
         debug|info|warning|error|none) ;;
         *) XRAY_LOG_LEVEL="warning" ;;
     esac
 
-    # ===== 默认代理模式 → Xray 规则集（iptables 只负责把流量交给 Xray） =====
-    #   1 GFWList   ：只代理名单内域名/IP，其余直连
-    #   2 国内白名单 ：国内域名/IP 直连，其余走代理（默认）
-    #   3 游戏模式   ：TCP 全部走代理，UDP 仅非国内走代理
-    #   4 全局代理   ：除内网外全部走代理
-    #   不提供"不代理"：需要不代理直接停用插件即可
-    #
-    # proxy_domains = "确定要走代理的域名集合"，只维护这一处：
-    #   - 路由规则：命中 → proxy
-    #   - DNS/FakeDNS：只有这个集合才发假地址，避免"假地址被直连"（默认直连模式下尤其致命）
-    # geoip 只列官方 dat 里确实存在的分类（geoip:line / geoip:discord 不存在，加了内核会拒绝启动）
     proxy_domains='[]'
     case "$PROXY_MODE" in
         1)
@@ -246,7 +208,6 @@ build_xray_config() {
             mode_name="全局代理"
             ;;
         *)
-            # 非法值，以及旧版本遗留的 0（不代理）→ 回落到国内白名单
             PROXY_MODE="2"
             routing_rules='[
                 {"type": "field", "outboundTag": "direct", "ip": ["geoip:private"]},
@@ -258,50 +219,39 @@ build_xray_config() {
             ;;
     esac
 
-    # 黑白名单（按目的地）：白名单直连、黑名单强制走代理
     white_domains=$(decode_b64 "$WHITE_DOMAIN_LIST")
     white_ips=$(decode_b64 "$WHITE_IP_LIST")
     black_domains=$(decode_b64 "$BLACK_DOMAIN_LIST")
     black_ips=$(decode_b64 "$BLACK_IP_LIST")
 
-    # 只取用户配置的 outbounds，其余项（inbounds/dns/routing/fakedns/log…）全部由脚本生成
     if ! jq -e '(.outbounds | type) == "array" and (.outbounds | length) > 0' "$USER_JSON" >/dev/null 2>&1; then
-        log_date "「配置文件」缺少 outbounds 数组（至少需要一个出站，如 tag=proxy 的节点）"
+        log_date "「配置文件」缺少 outbounds 数组"
         exit 1
     fi
     if ! jq -e '[.outbounds[]? | select(.tag == "proxy")] | length > 0' "$USER_JSON" >/dev/null 2>&1; then
-        log_date "「配置文件」里没有 tag 为 proxy 的出站，无法分流！请保留一个 \"tag\": \"proxy\" 的出站"
+        log_date "缺少 tag 为 proxy 的出站，无法分流！"
         exit 1
     fi
-    extra_keys=$(jq -r '[keys[] | select(. != "outbounds")] | join("、")' "$USER_JSON" 2>/dev/null | tr -d '\r')
-    [ -n "$extra_keys" ] && log_date "提示：配置文件里的 $extra_keys 不生效（inbounds/dns/routing/fakedns/log 等由插件生成）"
-    dropped_tags=$(jq -r '[.outbounds[]? | select(.tag == "direct" or .tag == "block" or .tag == "dns-out") | .tag] | join("、")' "$USER_JSON" 2>/dev/null | tr -d '\r')
-    [ -n "$dropped_tags" ] && log_date "提示：已忽略配置文件里 tag 为 $dropped_tags 的出站（这些由插件生成）"
 
-    # 代理服务器自身的域名要在 Xray 路由里直连（避免客户端访问该域名时又绕回代理形成回环）
-    server_domain_rule='[]'
-    local d
-    for d in ${PROXY_DOMAINS:-}; do
-        [ -z "$d" ] && continue
-        if [ "$server_domain_rule" = '[]' ]; then
-            server_domain_rule="[\"domain:$d\""
-        else
-            server_domain_rule="$server_domain_rule,\"domain:$d\""
-        fi
-    done
-    [ "$server_domain_rule" != '[]' ] && server_domain_rule="$server_domain_rule]"
+    if [ "$PROXY_MODE" = "1" ]; then
+        dns_foreign_target="direct"
+    else
+        dns_foreign_target="proxy"
+    fi
 
-    # 客户端侧入站：只有这些入站接住的 53 端口流量才交给 dns-out（DNS 模块自己的上游查询不带入站标签，
-    # 因此不会被这条规则抓回；再加上 iptables 的 dst-type LOCAL，回包也不会被 TPROXY 劫持）
     client_inbounds='["tproxy-tcp","tproxy-udp"'
     if [ "$XWALL_SOCKS_ENABLE" = "1" ]; then client_inbounds="$client_inbounds"',"socks-in"'; fi
     client_inbounds="$client_inbounds"']'
 
     jq -n --slurpfile user "$USER_JSON" \
+       --arg inListen "$in_listen" \
+       --arg outSend "$out_send" \
+       --arg qStrategy "$q_strategy" \
+       --arg dStrategy "$d_strategy" \
        --argjson baseRules "$routing_rules" \
-       --argjson serverDomains "${server_domain_rule:-[]}" \
        --argjson proxyDomains "$proxy_domains" \
        --argjson clientInbounds "$client_inbounds" \
+       --arg dnsForeignTarget "$dns_foreign_target" \
        --arg whiteDomains "$white_domains" \
        --arg whiteIps "$white_ips" \
        --arg blackDomains "$black_domains" \
@@ -322,24 +272,13 @@ build_xray_config() {
        --arg socks_auth "$XWALL_SOCKS_AUTH" \
        --arg socks_user "$XWALL_SOCKS_USER" \
        --arg socks_pass "$XWALL_SOCKS_PASS" '
-      # ---- 名单解析：去空行/注释，纯 IP 或网段自动归到 IP 规则，其余按域名规则 ----
-      def cleanList:
-        split("\n")
-        | map(gsub("\\r"; "") | gsub("^[[:space:]]+"; "") | gsub("[[:space:]]+$"; ""))
-        | map(select(length > 0 and (startswith("#") | not)));
-      def isIpEntry:
-        test("^[0-9]{1,3}(\\.[0-9]{1,3}){3}(/[0-9]{1,2})?$")
-        or (test("^[0-9a-fA-F:]+(/[0-9]{1,3})?$") and test(":"));
-      def asDomain:
-        if test("^(domain|full|keyword|regexp|geosite|ext):") then .
-        elif startswith("*.") then "domain:" + .[2:]
-        else "domain:" + . end;
+      def cleanList: split("\n") | map(gsub("\\r"; "") | gsub("^[[:space:]]+"; "") | gsub("[[:space:]]+$"; "")) | map(select(length > 0 and (startswith("#") | not)));
+      def isIpEntry: test("^[0-9]{1,3}(\\.[0-9]{1,3}){3}(/[0-9]{1,2})?$") or (test("^[0-9a-fA-F:]+(/[0-9]{1,3})?$") and test(":"));
+      def asDomain: if test("^(domain|full|keyword|regexp|geosite|ext):") then . elif startswith("*.") then "domain:" + .[2:] else "domain:" + . end;
 
       ($user[0].outbounds | map(select(.tag != "direct" and .tag != "block" and .tag != "dns-out"))) as $userOutbounds |
-      ($whiteDomains | cleanList) as $wdAll |
-      ($whiteIps | cleanList) as $wiAll |
-      ($blackDomains | cleanList) as $bdAll |
-      ($blackIps | cleanList) as $biAll |
+      ($whiteDomains | cleanList) as $wdAll | ($whiteIps | cleanList) as $wiAll |
+      ($blackDomains | cleanList) as $bdAll | ($blackIps | cleanList) as $biAll |
       (($wdAll | map(select(isIpEntry | not) | asDomain)) + ($wiAll | map(select(isIpEntry | not) | asDomain))) as $whiteDomRule |
       (($wdAll | map(select(isIpEntry))) + ($wiAll | map(select(isIpEntry)))) as $whiteIpRule |
       (($bdAll | map(select(isIpEntry | not) | asDomain)) + ($biAll | map(select(isIpEntry | not) | asDomain))) as $blackDomRule |
@@ -351,6 +290,7 @@ build_xray_config() {
       "inbounds": ([
         {
           "tag": "tproxy-tcp",
+          "listen": $inListen,
           "port": 1280,
           "protocol": "dokodemo-door",
           "settings": { "network": "tcp", "followRedirect": true },
@@ -358,6 +298,7 @@ build_xray_config() {
         },
         {
           "tag": "tproxy-udp",
+          "listen": $inListen,
           "port": 1281,
           "protocol": "dokodemo-door",
           "settings": { "network": "udp", "followRedirect": true },
@@ -388,34 +329,28 @@ build_xray_config() {
         }
       ] else [] end)),
       "dns": {
+        "queryStrategy": $qStrategy,
         "servers": (
           [
             { "address": $dnsCn, "domains": (["geosite:cn"] + $whiteDomRule) },
             { "address": $localDns, "domains": $localDomains },
-            (if ($proxyDomains | length) > 0 then
-               { "address": "fakedns", "domains": $proxyDomains }
-             else "fakedns" end)
+            (if ($proxyDomains | length) > 0 then { "address": "fakedns", "domains": $proxyDomains } else "fakedns" end)
           ]
-          # 默认直连的模式（GFWList）：走代理的域名其非 A/AAAA 查询仍交给国外 DNS，
-          # 其余未列出的域名（含大量未收录的国内站点）用国内 DNS 真实解析，最后才兜底国外 DNS
-          + (if ($proxyDomains | length) > 0 then
-               [ { "address": $dnsForeign, "domains": $proxyDomains }, $dnsCn ]
-             else [] end)
+          + (if ($proxyDomains | length) > 0 then [ { "address": $dnsForeign, "domains": $proxyDomains }, $dnsCn ] else [] end)
           + [ $dnsForeign ]
         )
       },
       "routing": {
         "domainStrategy": "IPIfNonMatch",
         "rules": (
-          # 任何被透明入站接住的 53 端口流量都交给 Xray 内部 DNS 模块清洗（不论是否开启域名劫持）。
-          # 规则限定在客户端侧入站：DNS 模块自己的上游查询不带这些入站标签，
-          # 不会被同一条规则抓回 dns-out（上游回包另有 iptables 的 dst-type LOCAL 兜底）。
           [
+            {"type": "field", "ip": [$dnsCn], "outboundTag": "direct"},
+            {"type": "field", "ip": [$localDns], "outboundTag": "direct"},
+            {"type": "field", "ip": [$dnsForeign], "outboundTag": $dnsForeignTarget}
+          ] + [
             {"type": "field", "inboundTag": $clientInbounds, "port": 53, "outboundTag": "dns-out"}
           ] + (if $dnsHijack == "1" then [
             {"type": "field", "inboundTag": ["dns-in"], "outboundTag": "dns-out"}
-          ] else [] end) + (if ($serverDomains | length) > 0 then [
-            {"type": "field", "domain": $serverDomains, "outboundTag": "direct"}
           ] else [] end) + (if ($whiteDomRule | length) > 0 then [
             {"type": "field", "domain": $whiteDomRule, "outboundTag": "direct"}
           ] else [] end) + (if ($whiteIpRule | length) > 0 then [
@@ -429,32 +364,36 @@ build_xray_config() {
           ] + $baseRules
         )
       },
-      "outbounds": ($userOutbounds + [
-        {"tag": "direct", "protocol": "freedom"},
-        {"tag": "block", "protocol": "blackhole"},
-        {"tag": "dns-out", "protocol": "dns"}
-      ])
+      "outbounds": (
+        ($userOutbounds + [
+          {
+            "tag": "direct",
+            "protocol": "freedom",
+            "settings": { "domainStrategy": $dStrategy }
+          },
+          {
+            "tag": "block",
+            "protocol": "blackhole"
+          },
+          {
+            "tag": "dns-out",
+            "protocol": "dns"
+          }
+        ]) | map(if .protocol == "blackhole" or .protocol == "dns" then . else . + {"sendThrough": $outSend} end)
+      )
       }
     ' > "$XRAY_JSON.tmp"
 
     if [ ! -s "$XRAY_JSON.tmp" ]; then
-        log_date "配置生成失败：请确认已安装 jq，且「配置文件」是合法 JSON"
+        log_date "Xray 配置生成失败：请确认已安装 jq，且「配置文件」是合法 JSON"
         rm -f "$XRAY_JSON.tmp"
         exit 1
     fi
 
     mv -f "$XRAY_JSON.tmp" "$XRAY_JSON"
-    log_date "Xray 运行配置生成成功：$XRAY_JSON（代理模式=$PROXY_MODE $mode_name）"
-    log_date "DNS：国内=$DNS_CN，国外=$DNS_FOREIGN；域名劫持=$DNS_HIJACK；错误日志级别=$XRAY_LOG_LEVEL；访问日志=关闭"
-    if [ "$DNS_HIJACK" = "1" ]; then
-        log_date "DNS 走向：客户端查询经 nat REDIRECT 进 dns-in(:$DNS_PORT)，已省略 port 53 路由规则（规避 DNS 出口回环）"
-    else
-        log_date "DNS 走向：未开启域名劫持，客户端查外部 DNS 的流量由 port 53 路由规则接住"
-    fi
-    log_date "名单：域名白名单 $(count_entries "$white_domains") 条 / IP 白名单 $(count_entries "$white_ips") 条 / 域名黑名单 $(count_entries "$black_domains") 条 / IP 黑名单 $(count_entries "$black_ips") 条（白名单优先）"
+    log_date "Xray 运行配置生成成功（代理模式=$PROXY_MODE $mode_name，底层联动: $msg）"
 }
 
-# 带超时地调用内核（个别环境可能卡住，避免拖死启动流程）
 run_config_test() {
     if command -v timeout >/dev/null 2>&1; then
         timeout 20 "$XRAY_BIN" "$@" 2>&1
@@ -463,70 +402,53 @@ run_config_test() {
     fi
 }
 
-# 生成后校验：结构自检 + 交给内核自己做一次配置检查（-test）
-validate_config() {    if ! jq -e '
+validate_config() {    
+    if ! jq -e '
         (.outbounds | type == "array") and ((.outbounds | length) >= 4) and
-        ([.outbounds[].tag] | length == (unique | length)) and
-        ([.outbounds[].tag] | index("proxy") != null) and
-        ([.outbounds[].tag] | index("direct") != null) and
-        ([.outbounds[].tag] | index("block") != null) and
-        ([.outbounds[].tag] | index("dns-out") != null) and
-        (.inbounds | length >= 2) and
-        (.routing.rules | length >= 2) and
-        (.fakedns | length >= 1) and
-        (.dns.servers | length >= 3)
+        ([.outbounds[].tag] | index("proxy") != null)
       ' "$XRAY_JSON" >/dev/null 2>&1; then
-        log_date "配置结构自检失败：入站/出站/路由/DNS 不完整，或出站 tag 重复、缺少 proxy 出站"
+        log_date "Xray 配置结构自检失败：入站/出站不完整"
         return 1
     fi
 
     local out
     out=$(run_config_test run -test -c "$XRAY_JSON")
     case "$out" in
-        *"Configuration OK"*|*"Configuration ok"*) log_date "内核配置自检通过"; return 0 ;;
+        *"Configuration OK"*|*"Configuration ok"*) log_date "Xray 配置自检通过"; return 0 ;;
     esac
-    # 老版本内核没有 run -test 子命令，退回 -test
     out=$(run_config_test -test -c "$XRAY_JSON")
     case "$out" in
-        *"Configuration OK"*|*"Configuration ok"*) log_date "内核配置自检通过"; return 0 ;;
+        *"Configuration OK"*|*"Configuration ok"*) log_date "Xray 配置自检通过"; return 0 ;;
         *"ailed to"*|*"ailed:"*)
-            log_date "内核配置自检失败：$(printf '%s' "$out" | tail -n 3 | tr '\n' ' ')"
+            log_date "Xray 配置自检失败：$(printf '%s' "$out" | tail -n 3 | tr '\n' ' ')"
             return 1
             ;;
     esac
-    log_date "内核不支持配置自检（-test），跳过（启动阶段仍会验证进程是否存活）"
     return 0
 }
 
 prepare_config() {
     if [ -z "$XWALL_CONFIG" ]; then
-        log_date "未配置 Xray JSON，请在软件中心「XWall → 基本设置」粘贴配置"
+        log_date "未配置 Xray JSON，请在基本设置粘贴配置"
         exit 1
     fi
     decode_config
     if ! jq -e . "$USER_JSON" >/dev/null 2>&1; then
-        log_date "「配置文件」不是合法 JSON，请检查（只填 outbounds 即可）"
+        log_date "「配置文件」不是合法 JSON"
         exit 1
     fi
-    # 先解析代理服务器地址：Xray 配置里要为服务器域名下发直连规则，iptables 白名单也要用它
-    collect_proxy_servers
     build_xray_config
     validate_config || exit 1
 }
 
-
-# ================= 进程锁 =================
 set_lock() {
     mkdir -p /var/lock 2>/dev/null
     exec 9>"$LOCK_FILE" 2>/dev/null
-    # 绝不无限等锁：曾经踩过坑 —— 上一次 start 异常退出没解锁，锁被它拉起的 xray 子进程
-    # 继承持有，后续每次 stop/start 都永久卡死（ps 里堆一串 /bin/sh xwall stop）。
-    # 各版本 flock 对 -w 支持不一致，所以用 -n 轮询，最多等 LOCK_WAIT 秒。
     local i=0
     while ! flock -n 9 2>/dev/null; do
         i=$((i + 1))
         if [ "$i" -ge "$LOCK_WAIT" ]; then
-            log_date "已有另一个 XWall 操作正在进行（锁被占用，等待 ${LOCK_WAIT}s 超时），本次跳过；若确认无其它操作：killall -9 $PROC_NAME 后重试"
+            log_date "已有其他 XWall 操作进行中，跳过本次执行。"
             return 1
         fi
         sleep 1
@@ -534,177 +456,118 @@ set_lock() {
     return 0
 }
 
-unset_lock() {
-    flock -u 9 2>/dev/null
-    exec 9>&- 2>/dev/null
-    rm -f "$LOCK_FILE" 2>/dev/null
-}
+unset_lock() { flock -u 9 2>/dev/null; exec 9>&- 2>/dev/null; rm -f "$LOCK_FILE" 2>/dev/null; }
 
-# ================= ipset：防回环目标名单 =================
 create_ipsetlist() {
-    log_date "初始化防回环 ipset 名单（$IPSET_BYPASS）..."
-    ipset -! create "$IPSET_BYPASS" nethash
-    ipset flush "$IPSET_BYPASS"
+    log_date "初始化防回环 ipset 名单（$IPSET_BYPASS / xwall_src）..."
+    ipset -! create "$IPSET_BYPASS" nethash 2>/dev/null
+    ipset flush "$IPSET_BYPASS" 2>/dev/null
+    
+    ipset -! create xwall_src nethash 2>/dev/null
+    ipset flush xwall_src 2>/dev/null
+    for ip in 192.168.0.0/16 10.0.0.0/8 172.16.0.0/12 100.64.0.0/10; do
+        ipset -! add xwall_src $ip 2>/dev/null
+    done
+
+    # 若开启双栈，拉起对应的 IPv6 拦截名单库
+    if [ "$XWALL_IPV6_ENABLE" = "1" ]; then
+        ipset -! create "${IPSET_BYPASS}6" nethash family inet6 2>/dev/null
+        ipset flush "${IPSET_BYPASS}6" 2>/dev/null
+
+        ipset -! create xwall_src6 nethash family inet6 2>/dev/null
+        ipset flush xwall_src6 2>/dev/null
+        for ip in fe80::/10 fc00::/7; do ipset -! add xwall_src6 $ip 2>/dev/null; done
+        
+        # 动态下发针对 UDM/UCG 的 LAN IPv6 前缀 (PD/GUA) 白名单
+        for ip in $(ip -6 route show 2>/dev/null | awk '/dev br/{if($1!="default" && $1!="fe80::/64") print $1}'); do
+            ipset -! add xwall_src6 $ip 2>/dev/null
+        done
+        log_date "已加载动态 IPv6 局域网拦截集"
+    fi
 }
 
 add_bypass_ip() {
-    # 代理服务器自身必须直连，否则会回环；地址已在 collect_proxy_servers 里解析好
-    local msg ip_lan ip
+    local ip_lan ip
     ip_lan="0.0.0.0/8 10.0.0.0/8 100.64.0.0/10 127.0.0.0/8 169.254.0.0/16 172.16.0.0/12 192.168.0.0/16 224.0.0.0/4 240.0.0.0/4 $DNS_CN"
-
-    if ! {
-        for ip in $ip_lan ${PROXY_IPS:-}; do
-            [ -n "$ip" ] && echo "add $IPSET_BYPASS $ip"
-        done
-    } | ipset -! restore; then
-        log_date "警告：直连白名单写入失败（ipset 不可用？），回环保护可能失效"
-    fi
-
-    msg="直连白名单已下发：内网网段 + 国内 DNS"
-    # 注意：这里只能用 POSIX 写法。脚本是 #!/bin/sh，UniFi 的 /bin/sh 是 busybox ash，
-    # 不支持 ${VAR//pat/rep}，一写就会 "Bad substitution" 直接终止整个脚本（规则就下发不了了）
-    if [ -n "$(printf '%s' "${PROXY_IPS:-}" | tr -d ' ')" ]; then
-        msg="$msg + 代理服务器 $(printf '%s' "$PROXY_IPS" | sed 's/^ *//;s/  */,/g')"
-    else
-        msg="$msg（未识别到代理服务器 IP，回环保护可能失效）"
-    fi
-    log_date "$msg"
-    # 注意：国外 DNS 不加入直连名单，它需要经 Xray 代理出去，避免被污染
-}
-
-# ================= 代理服务器地址：从用户配置的出站里提取 =================
-# 解析域名 → 逐行输出所有 IPv4（兼容 bind / busybox / dnsmasq 的 nslookup 输出）
-# IPv6 不做旁路：插件本身只接管 IPv4，不经由透明代理也就不会回环
-resolve_host() {
-    local host="$1" dns out ips ip
-    ips=""
-    for dns in "$DNS_CN" "$DNS_FOREIGN" ""; do
-        if [ -n "$dns" ]; then
-            if command -v timeout >/dev/null 2>&1; then
-                out=$(timeout 5 nslookup "$host" "$dns" 2>/dev/null)
-            else
-                out=$(nslookup "$host" "$dns" 2>/dev/null)
-            fi
+    
+    for ip in $ip_lan; do
+        if echo "$ip" | grep -q ":"; then
+            [ "$XWALL_IPV6_ENABLE" = "1" ] && ipset -! add "${IPSET_BYPASS}6" $ip 2>/dev/null
         else
-            out=$(nslookup "$host" 2>/dev/null)
+            ipset -! add "$IPSET_BYPASS" $ip 2>/dev/null
         fi
-        ips=$(printf '%s\n' "$out" | awk '/^Name:/{f=1;next} f && /^Address/{print $NF}' | tr -d '\r' | grep -v ':')
-        [ -n "$ips" ] && break
     done
-    for ip in $ips; do printf '%s\n' "$ip"; done
-}
-
-# 从用户配置里所有出站提取服务器地址（域名或 IP），覆盖各家协议与多节点写法：
-#   vless/vmess → settings.vnext[].address      trojan/shadowsocks/socks/http → settings.servers[].address
-#   其它 → settings.address / settings.server   wireguard → settings.peers[].endpoint（去掉端口）
-# 结果放到 PROXY_SERVERS（原始地址）/ PROXY_DOMAINS（其中的域名）/ PROXY_IPS（解析出的 IPv4）
-collect_proxy_servers() {
-    PROXY_SERVERS=""
-    PROXY_DOMAINS=""
-    PROXY_IPS=""
-    local servers server resolved ip
-
-    servers=$(jq -r '
-        [ .outbounds[]?
-          | select((.tag // "") != "direct" and (.tag // "") != "block" and (.tag // "") != "dns-out")
-          | ( (.settings.vnext[]?.address), (.settings.servers[]?.address),
-              (.settings.address?), (.settings.server?),
-              ((.settings.peers[]?.endpoint?) | sub(":[0-9]+$"; "") | sub("^\\[(.*)\\]$"; "\\1")) )
-          | select(. != null and . != "")
-        ] | unique | .[]' "$USER_JSON" 2>/dev/null | tr -d '\r')
-
-    if [ -z "$servers" ]; then
-        log_date "警告：未从「配置文件」的出站里识别到代理服务器地址（回环保护可能失效）"
-        return 0
-    fi
-
-    for server in $servers; do
-        PROXY_SERVERS="$PROXY_SERVERS $server"
-        resolved=""
-        case "$server" in
-            *:*)   # IPv6 地址
-                log_date "代理服务器 $server 是 IPv6（插件只接管 IPv4，无需加入白名单）"
-                continue
-                ;;
-            *[!0-9.]*)   # 含数字/点以外的字符 → 域名
-                PROXY_DOMAINS="$PROXY_DOMAINS $server"
-                resolved=$(resolve_host "$server")
-                if [ -z "$resolved" ]; then
-                    log_date "警告：代理服务器域名 $server 解析失败，未能加入直连白名单（可能回环，请检查 DNS）"
-                    continue
-                fi
-                log_date "代理服务器域名 $server → $(printf '%s' "$resolved" | tr '\n' ' ')(加入直连白名单)"
-                ;;
-            *) resolved="$server" ;;
-        esac
-        for ip in $resolved; do
-            case " $PROXY_IPS " in
-                *" $ip "*) ;;
-                *) PROXY_IPS="$PROXY_IPS $ip" ;;
-            esac
+    
+    if [ "$XWALL_IPV6_ENABLE" = "1" ]; then
+        for ip in ::1/128 fe80::/10 fc00::/7 ff00::/8; do
+            ipset -! add "${IPSET_BYPASS}6" $ip 2>/dev/null
         done
-    done
-    log_date "代理出站服务器（共 $(printf '%s' "$PROXY_SERVERS" | wc -w | tr -d ' ') 个）：$(printf '%s' "$PROXY_SERVERS" | sed 's/^ *//;s/  */,/g')"
-    return 0
+    fi
 }
 
-# ================= 直连白名单（局域网设备旁路） =================
 add_direct_rule() {
     local table="$1" line
     [ -z "$DIRECT_LIST" ] && return 0
     printf '%s\n' "$DIRECT_LIST" | while IFS= read -r line || [ -n "$line" ]; do
         line=$(trim "$line")
-        case "$line" in
-            "" | \#*) continue ;;
-        esac
-        case "$line" in
-            *[!0-9./]*)
-                log_date "跳过非法的局域网白名单条目：$line"
-                continue
-                ;;
-        esac
-        if iptables -t "$table" -A "$CHAIN" -s "$line" -j RETURN; then
-            [ "$table" = "nat" ] && log_date "直连白名单（不走代理）：$line"
+        case "$line" in "" | \#* | *[!0-9a-fA-F.:/]*) continue ;; esac
+        
+        if echo "$line" | grep -q ":"; then
+            [ "$XWALL_IPV6_ENABLE" = "1" ] && ip6tables -t "$table" -A "$CHAIN" -s "$line" -j RETURN
         else
-            log_date "直连白名单条目下发失败：$line"
+            iptables -t "$table" -A "$CHAIN" -s "$line" -j RETURN
         fi
     done
 }
 
-# ================= 防火墙劫持 =================
 ipts_update() {
-    log_date "下发流量劫持规则（nat/mangle $CHAIN 链）..."
+    log_date "下发流量劫持规则（包含动态防火墙守护钩子）..."
 
+    # ==================== IPv4 链路 ====================
     iptables -t nat -N "$CHAIN" 2>/dev/null
     iptables -t mangle -N "$CHAIN" 2>/dev/null
 
-    # TPROXY 回包交给本机
     ip rule add fwmark "$FWMARK" table "$ROUTE_TABLE" pref 789 2>/dev/null
     ip route add local 0.0.0.0/0 dev lo table "$ROUTE_TABLE" 2>/dev/null
 
-    # 1. 【最优先】目标为本机地址的包一律放行，绝不透明代理。
-    #    关键：上游 DNS / 代理服务器的**回包**也是"发往路由器自身 IP"的入站包，
-    #    同样会走 mangle PREROUTING；若不在这里 RETURN，它们会被自己的 TPROXY 规则
-    #    抓回 Xray，每次回包凭空变成一个 UDP 会话并新建套接字 —— 直到临时端口耗尽，
-    #    同时 DNS 客户端永远收不到应答（app/dns: cannot find the pending request）。
+    iptables -t nat -A "$CHAIN" -m set ! --match-set xwall_src src -j RETURN
+    iptables -t mangle -A "$CHAIN" -m set ! --match-set xwall_src src -j RETURN
+
     iptables -t nat -A "$CHAIN" -m addrtype --dst-type LOCAL -j RETURN
     iptables -t mangle -A "$CHAIN" -m addrtype --dst-type LOCAL -j RETURN
 
-    # 2. 防回环：内网 / DNS / 代理服务器自身直连
     iptables -t nat -A "$CHAIN" -m set --match-set "$IPSET_BYPASS" dst -j RETURN
     iptables -t mangle -A "$CHAIN" -m set --match-set "$IPSET_BYPASS" dst -j RETURN
 
-    # 3. 代理白名单：名单内的局域网设备直连（旁路 Xray）
-    if [ -n "$DIRECT_LIST" ]; then
-        add_direct_rule "nat"
-        add_direct_rule "mangle"
+    # ==================== IPv6 链路 ====================
+    if [ "$XWALL_IPV6_ENABLE" = "1" ]; then
+        ip6tables -t nat -N "$CHAIN" 2>/dev/null
+        ip6tables -t mangle -N "$CHAIN" 2>/dev/null
+
+        ip -6 rule add fwmark "$FWMARK" table "$ROUTE_TABLE" pref 789 2>/dev/null
+        ip -6 route add local ::/0 dev lo table "$ROUTE_TABLE" 2>/dev/null
+
+        ip6tables -t nat -A "$CHAIN" -m set ! --match-set xwall_src6 src -j RETURN
+        ip6tables -t mangle -A "$CHAIN" -m set ! --match-set xwall_src6 src -j RETURN
+
+        ip6tables -t nat -A "$CHAIN" -m addrtype --dst-type LOCAL -j RETURN
+        ip6tables -t mangle -A "$CHAIN" -m addrtype --dst-type LOCAL -j RETURN
+
+        ip6tables -t nat -A "$CHAIN" -m set --match-set "${IPSET_BYPASS}6" dst -j RETURN
+        ip6tables -t mangle -A "$CHAIN" -m set --match-set "${IPSET_BYPASS}6" dst -j RETURN
     fi
 
-    # 4. 兜底：其余流量全部交给 Xray（规则集分流由 Xray 负责）
+    # 局域网设备的混合旁路过滤
+    if [ -n "$DIRECT_LIST" ]; then add_direct_rule "nat"; add_direct_rule "mangle"; fi
+
+    # 透明底包重置
     iptables -t nat -A "$CHAIN" -p tcp -j REDIRECT --to-ports "$TCP_PORT"
     iptables -t mangle -A "$CHAIN" -p udp -j TPROXY --on-port "$UDP_PORT" --tproxy-mark "$FWMARK"
+    if [ "$XWALL_IPV6_ENABLE" = "1" ]; then
+        ip6tables -t nat -A "$CHAIN" -p tcp -j REDIRECT --to-ports "$TCP_PORT"
+        ip6tables -t mangle -A "$CHAIN" -p udp -j TPROXY --on-port "$UDP_PORT" --tproxy-mark "$FWMARK"
+    fi
 
-    # 5. 挂到 PREROUTING：插在 UniFi 自己的跳转之后，避免被其规则先处理
     local PR_INDEX MA_INDEX
     PR_INDEX=$(iptables -t nat -L PREROUTING --line-numbers 2>/dev/null | awk '/UBIOS_PREROUTING_JUMP/{print $1}' | head -n1)
     [ -n "$PR_INDEX" ] && RULE_INDEX=$((PR_INDEX + 1)) || RULE_INDEX=1
@@ -714,77 +577,74 @@ ipts_update() {
     [ -n "$MA_INDEX" ] && RULE1_INDEX=$((MA_INDEX + 1)) || RULE1_INDEX=1
     iptables -t mangle -I PREROUTING "$RULE1_INDEX" -p udp -j "$CHAIN"
 
-    # 5. 域名劫持：把 53 端口查询改送 Xray 的 dns-in 入站（插在 XWALL 之前，连发往路由器自身的查询也接管）
+    if [ "$XWALL_IPV6_ENABLE" = "1" ]; then
+        local PR6_INDEX MA6_INDEX
+        PR6_INDEX=$(ip6tables -t nat -L PREROUTING --line-numbers 2>/dev/null | awk '/UBIOS_PREROUTING_JUMP/{print $1}' | head -n1)
+        [ -n "$PR6_INDEX" ] && RULE6_INDEX=$((PR6_INDEX + 1)) || RULE6_INDEX=1
+        ip6tables -t nat -I PREROUTING "$RULE6_INDEX" -p tcp -j "$CHAIN"
+
+        MA6_INDEX=$(ip6tables -t mangle -L PREROUTING --line-numbers 2>/dev/null | awk '/UBIOS_PREROUTING_JUMP/{print $1}' | head -n1)
+        [ -n "$MA6_INDEX" ] && RULE16_INDEX=$((MA6_INDEX + 1)) || RULE16_INDEX=1
+        ip6tables -t mangle -I PREROUTING "$RULE16_INDEX" -p udp -j "$CHAIN"
+    fi
+
     if [ "$DNS_HIJACK" = "1" ]; then
         iptables -t nat -I PREROUTING "$RULE_INDEX" -p udp --dport 53 -j REDIRECT --to-ports "$DNS_PORT"
         iptables -t nat -I PREROUTING "$RULE_INDEX" -p tcp --dport 53 -j REDIRECT --to-ports "$DNS_PORT"
-        log_date "域名劫持已开启：LAN 的 53 端口查询 → Xray dns-in(:$DNS_PORT)"
+        if [ "$XWALL_IPV6_ENABLE" = "1" ]; then
+            ip6tables -t nat -I PREROUTING "$RULE6_INDEX" -p udp --dport 53 -j REDIRECT --to-ports "$DNS_PORT"
+            ip6tables -t nat -I PREROUTING "$RULE6_INDEX" -p tcp --dport 53 -j REDIRECT --to-ports "$DNS_PORT"
+        fi
+        log_date "DNS劫持已开启：全面接管内部 53 端口查询"
     fi
-
-    log_date "劫持规则就绪：TCP → $TCP_PORT，UDP → TPROXY $UDP_PORT（mark $FWMARK / table $ROUTE_TABLE）"
 }
 
 ipts_origin() {
-    # 只回收"本插件自己下发"的规则，便于反复 start 不叠加：
-    #   1) 本插件加的 53 端口 REDIRECT（目标端口就是本插件的 DNS_PORT）
-    #   2) 本插件在 PREROUTING 里挂的 -j XWALL 跳转
-    #   3) 本插件自己的 XWALL 链（nat/mangle 各一张）
-    #   4) 本插件的策略路由 / ipset
-    # 绝不触碰 UniFi 及其它插件的任何规则（没有 -F PREROUTING、没有整表清空）
-    local n53=0 njmp=0 nchain=0
-    while iptables -t nat -D PREROUTING -p udp --dport 53 -j REDIRECT --to-ports "$DNS_PORT" 2>/dev/null; do n53=$((n53 + 1)); done
-    while iptables -t nat -D PREROUTING -p tcp --dport 53 -j REDIRECT --to-ports "$DNS_PORT" 2>/dev/null; do n53=$((n53 + 1)); done
-    while iptables -t nat -D PREROUTING -p tcp -j "$CHAIN" 2>/dev/null; do njmp=$((njmp + 1)); done
-    while iptables -t mangle -D PREROUTING -p udp -j "$CHAIN" 2>/dev/null; do njmp=$((njmp + 1)); done
-    for table in nat mangle; do
-        if iptables -t "$table" -S "$CHAIN" >/dev/null 2>&1; then nchain=$((nchain + 1)); fi
-        iptables -t "$table" -F "$CHAIN" 2>/dev/null
-        iptables -t "$table" -X "$CHAIN" 2>/dev/null
-    done
+    while iptables -t nat -D PREROUTING -p udp --dport 53 -j REDIRECT --to-ports "$DNS_PORT" 2>/dev/null; do :; done
+    while iptables -t nat -D PREROUTING -p tcp --dport 53 -j REDIRECT --to-ports "$DNS_PORT" 2>/dev/null; do :; done
+    while iptables -t nat -D PREROUTING -p tcp -j "$CHAIN" 2>/dev/null; do :; done
+    while iptables -t mangle -D PREROUTING -p udp -j "$CHAIN" 2>/dev/null; do :; done
+    for table in nat mangle; do iptables -t "$table" -F "$CHAIN" 2>/dev/null; iptables -t "$table" -X "$CHAIN" 2>/dev/null; done
 
-    if [ $((n53 + njmp + nchain)) -eq 0 ]; then
-        log_date "本插件没有遗留的 iptables 规则需要清理（其它规则一律不动）"
-    else
-        log_date "只清理本插件上轮下发的规则：53 劫持 $n53 条 / XWALL 跳转 $njmp 条 / XWALL 链 $nchain 张（UniFi 与其它插件规则不动）"
-    fi
+    while ip6tables -t nat -D PREROUTING -p udp --dport 53 -j REDIRECT --to-ports "$DNS_PORT" 2>/dev/null; do :; done
+    while ip6tables -t nat -D PREROUTING -p tcp --dport 53 -j REDIRECT --to-ports "$DNS_PORT" 2>/dev/null; do :; done
+    while ip6tables -t nat -D PREROUTING -p tcp -j "$CHAIN" 2>/dev/null; do :; done
+    while ip6tables -t mangle -D PREROUTING -p udp -j "$CHAIN" 2>/dev/null; do :; done
+    for table in nat mangle; do ip6tables -t "$table" -F "$CHAIN" 2>/dev/null; ip6tables -t "$table" -X "$CHAIN" 2>/dev/null; done
 
     if ip rule show 2>/dev/null | grep -q "lookup $ROUTE_TABLE"; then
-        log_date "清理本插件的策略路由（table $ROUTE_TABLE）..."
-        while ip rule show 2>/dev/null | grep -q "lookup $ROUTE_TABLE"; do
-            ip rule del fwmark "$FWMARK" table "$ROUTE_TABLE" 2>/dev/null || break
-        done
+        while ip rule show 2>/dev/null | grep -q "lookup $ROUTE_TABLE"; do ip rule del fwmark "$FWMARK" table "$ROUTE_TABLE" 2>/dev/null || break; done
+    fi
+    if ip -6 rule show 2>/dev/null | grep -q "lookup $ROUTE_TABLE"; then
+        while ip -6 rule show 2>/dev/null | grep -q "lookup $ROUTE_TABLE"; do ip -6 rule del fwmark "$FWMARK" table "$ROUTE_TABLE" 2>/dev/null || break; done
     fi
     ip route del local 0.0.0.0/0 dev lo table "$ROUTE_TABLE" >/dev/null 2>&1
+    ip -6 route del local ::/0 dev lo table "$ROUTE_TABLE" >/dev/null 2>&1
+    
     ipset destroy "$IPSET_BYPASS" 2>/dev/null
+    ipset destroy xwall_src 2>/dev/null
+    ipset destroy "${IPSET_BYPASS}6" 2>/dev/null
+    ipset destroy xwall_src6 2>/dev/null
 }
 
 ipfwd_on() {
     if [ "$(cat /proc/sys/net/ipv4/ip_forward 2>/dev/null)" != "1" ]; then
         echo 1 > /proc/sys/net/ipv4/ip_forward 2>/dev/null
-        log_date "已开启 IPv4 转发"
     fi
 }
 
-# ================= 进程 =================
 start_v2ray() {
-    log_date "启动 Xray 主进程（$XRAY_BIN，日志级别 $XRAY_LOG_LEVEL，访问日志关闭）..."
-
-    # 每次启动清空上一轮内核日志，避免 debug 级别长期累积
+    log_date "启动 Xray 主进程..."
     mkdir -p "$(dirname "$XRAY_LOG")" 2>/dev/null
     : > "$XRAY_LOG" 2>/dev/null
-    # 清理旧版本遗留的临时日志（旧版把 stdout/访问日志写在这里）
     rm -f /tmp/xwall_core.log 2>/dev/null
 
-    # 透明代理的 UDP 是"一会话一套接字"，繁忙网络下同时占用数百个 fd 很正常。
-    # 只在当前上限偏低时才抬高；系统已给出更大值时绝不覆盖（避免把 524287 调成 65535）
     local cur_fd
     cur_fd=$(ulimit -n 2>/dev/null)
     if [ -n "$cur_fd" ] && [ "$cur_fd" -lt 65535 ] 2>/dev/null; then
-        ulimit -n 65535 2>/dev/null || log_date "提示：文件描述符上限提升失败（当前 $cur_fd），大量 UDP 会话时可能触碰上限"
+        ulimit -n 65535 2>/dev/null || true
     fi
 
-    # 内核 stdout/stderr 一并追加到同一个日志文件：不额外产生文件，且启动期报错仍可回看
-    # 9>&- 很关键：不要把操作锁的描述符传给子进程，否则内核会一直替我们"占着锁"
     "$XRAY_BIN" run -c "$XRAY_JSON" >>"$XRAY_LOG" 2>&1 9>&- &
 
     local i=10
@@ -793,62 +653,92 @@ start_v2ray() {
         sleep 1
         i=$((i - 1))
     done
-
-    log_date "Xray 启动失败，内核输出（末尾 10 行）："
-    tail -n 10 "$XRAY_LOG" 2>/dev/null | tee -a "$LOG_FILE"
     return 1
 }
 
 kill_process() {
     if pidof "$PROC_NAME" >/dev/null 2>&1; then
-        log_date "正在关闭 Xray 进程..."
         killall "$PROC_NAME" 2>/dev/null
         sleep 1
         killall -9 "$PROC_NAME" 2>/dev/null
     fi
 }
 
-# ================= 主流程 =================
-# 清理历史遗留的定时任务条目（早期版本装过每 2 分钟的 check，现已移除该功能）
 cleanup_legacy_cron() {
     if crontab -l 2>/dev/null | grep -q "softcenter:xwall"; then
         crontab -l 2>/dev/null | grep -v "softcenter:xwall" | crontab - 2>/dev/null
-        log_date "已移除历史遗留的定时自检条目（softcenter:xwall）"
     fi
+}
+
+setup_cron() {
+    cleanup_legacy_cron
+    crontab -l 2>/dev/null > /tmp/cron_tmp
+    echo "* * * * * /data/softcenter/bin/xwall watchdog #softcenter:xwall" >> /tmp/cron_tmp
+    if [ "$XWALL_RULES_AUTO_UPDATE" = "1" ]; then
+        # 执行时刻取自面板（HH:MM）。该值最终会写进 crontab，必须严格校验：
+        # 只接受 00:00-23:59，其它任何内容（含注入字符）一律回落到 07:00
+        rules_time=$(printf '%s' "$XWALL_RULES_UPDATE_TIME" | tr -d ' \t\r\n')
+        case "$rules_time" in
+            [0-1][0-9]:[0-5][0-9]|[2][0-3]:[0-5][0-9]) ;;
+            *) rules_time="07:00" ;;
+        esac
+        cron_hour=${rules_time%:*}
+        cron_min=${rules_time#*:}
+        # 去掉前导零（两段恒为两位数字，故不会变成空）
+        case "$cron_hour" in 0*) cron_hour=${cron_hour#0} ;; esac
+        case "$cron_min" in 0*) cron_min=${cron_min#0} ;; esac
+
+        echo "$cron_min $cron_hour * * * if [ -x $RULES_BIN ]; then $RULES_BIN >>$RULES_LOG 2>&1; fi #softcenter:xwall-rules" >> /tmp/cron_tmp
+        log_date "路由规则自动更新已开启：每天 $(printf '%02d:%02d' "$cron_hour" "$cron_min") 执行 xwall-rules（日志 $RULES_LOG）"
+    fi
+    crontab /tmp/cron_tmp 2>/dev/null
+    rm -f /tmp/cron_tmp
+}
+
+watchdog() {
+    # 尝试非阻塞获取锁。如果获取失败，说明正在执行 start/stop/restart，直接静默退出防干扰
+    mkdir -p /var/lock 2>/dev/null
+    exec 9>"$LOCK_FILE" 2>/dev/null
+    if ! flock -n 9 2>/dev/null; then
+        return 0
+    fi
+
+    if pgrep -x "$PROC_NAME" >/dev/null 2>&1; then
+        local rule_lost=0
+        if ! iptables -t nat -S PREROUTING 2>/dev/null | grep -q "$CHAIN"; then rule_lost=1; fi
+        if [ "$XWALL_IPV6_ENABLE" = "1" ] && ! ip6tables -t nat -S PREROUTING 2>/dev/null | grep -q "$CHAIN"; then rule_lost=1; fi
+        
+        if [ "$rule_lost" = "1" ]; then
+            log_date "守护机制：检测到劫持规则丢失 (已被 UniFi OS 重置)，正在无感恢复..."
+            ipts_origin
+            create_ipsetlist
+            add_bypass_ip
+            ipts_update
+        fi
+    fi
+
+    # 释放锁
+    flock -u 9 2>/dev/null
+    exec 9>&- 2>/dev/null
 }
 
 start() {
     log_sep "XWall 启动"
     set_lock || exit 1
-    cleanup_legacy_cron
-
-    if ! ensure_core; then
-        log_date "内核/数据文件未就绪，启动中止"
-        unset_lock
-        exit 1
-    fi
-
+    setup_cron
+    if ! ensure_core; then unset_lock; exit 1; fi
     prepare_config
     kill_process
     ipts_origin
     ipfwd_on
-
-    if ! start_v2ray; then
-        log_date "Xray 进程启动失败，已放弃下发劫持规则"
-        unset_lock
-        exit 1
-    fi
-
+    if ! start_v2ray; then unset_lock; exit 1; fi
     create_ipsetlist
     add_bypass_ip
     ipts_update
-
     if pgrep -x "$PROC_NAME" >/dev/null 2>&1; then
         log_date "XWall 已成功运行（PID：$(pidof "$PROC_NAME")）"
     else
-        log_date "XWall 启动异常：模块已执行但进程未在运行"
-        unset_lock
-        exit 1
+        unset_lock; exit 1
     fi
     unset_lock
 }
@@ -860,22 +750,17 @@ stop() {
     kill_process
     ipts_origin
     rm -f "$XRAY_JSON" "$XRAY_JSON.tmp" "$USER_JSON" /tmp/xwall_core.log
-    log_date "XWall 已停止，规则与运行配置已清理（内核日志保留在 $XRAY_LOG）"
+    log_date "XWall 已停止"
     unset_lock
 }
 
-# 任何异常退出都要释放锁（曾经因为异常退出没解锁，把后续所有 start/stop 都卡死）
 trap 'unset_lock' EXIT INT TERM
 
 case ${1} in
     start) start ;;
     stop) stop ;;
     restart) stop; sleep 1; start ;;
-    status)
-        if pgrep -x "$PROC_NAME" >/dev/null 2>&1; then echo "running"; else echo "stopped"; exit 1; fi
-        ;;
-    *)
-        echo "Usage: $0 {start|stop|restart|status}"
-        exit 1
-        ;;
+    watchdog) watchdog ;;
+    status) if pgrep -x "$PROC_NAME" >/dev/null 2>&1; then echo "running"; else echo "stopped"; exit 1; fi ;;
+    *) echo "Usage: $0 {start|stop|restart|status|watchdog}"; exit 1 ;;
 esac

@@ -340,7 +340,7 @@
         "Id": "xwall",
         "Name": "XWall",
         "Type": "Binary Core",
-        "Version": "1.0.3",
+        "Version": "1.0.4",
         "Description": "全流量交给 Xray，由 Xray 规则集自动分流（国内直连 / 国外代理）。",
         "Icon": "shield-check",
         "StartCommand": "/data/softcenter/bin/xwall start",
@@ -350,18 +350,24 @@
         "ConfigPath": "/data/softcenter/config/xwall.env",
         "ConfigKeys": "",
         "LogPath": "/var/log/xwall.log",
-        "CustomCommands": "[{\"name\":\"升级Xray核心\",\"command\":\"/data/softcenter/bin/xwall-ssup\"},{\"name\":\"强制重下核心\",\"command\":\"FORCE_DOWNLOAD=1 /data/softcenter/bin/xwall-ssup\"},{\"name\":\"查看Xray运行日志\",\"command\":\"echo '===== Xray 运行日志 ====='; sed -n 's/^XRAY_LOG_LEVEL=/错误日志级别: /p' /data/softcenter/config/xwall.env 2>/dev/null | head -n1; echo; if [ -s /var/log/xwall-xray.log ]; then tail -n 150 /var/log/xwall-xray.log; else echo '(暂无日志：进程未运行，或日志级别为 none)'; fi\"},{\"name\":\"清空Xray日志\",\"command\":\": > /var/log/xwall-xray.log; echo 'Xray 运行日志已清空'\"}]",
+        "CustomCommands": "[{\"name\":\"升级Xray核心\",\"command\":\"/data/softcenter/bin/xwall-ssup\"},{\"name\":\"强制重下核心\",\"command\":\"FORCE_DOWNLOAD=1 /data/softcenter/bin/xwall-ssup\"},{\"name\":\"更新路由规则\",\"command\":\"/data/softcenter/bin/xwall-rules 2>&1 | tee -a /var/log/xwall-rules.log\"},{\"name\":\"查看Xray运行日志\",\"command\":\"echo '===== Xray 运行日志 ====='; sed -n 's/^XRAY_LOG_LEVEL=/错误日志级别: /p' /data/softcenter/config/xwall.env 2>/dev/null | head -n1; echo; if [ -s /var/log/xwall-xray.log ]; then tail -n 150 /var/log/xwall-xray.log; else echo '(暂无日志：进程未运行，或日志级别为 none)'; fi\"},{\"name\":\"清空Xray日志\",\"command\":\": > /var/log/xwall-xray.log; echo 'Xray 运行日志已清空'\"}]",
         "Files": [
             {
                 "Name": "xwall",
                 "Path": "apps/xwall/xwall",
-                "Sha256": "e95d8b51fcc3a12779d39aaf3e77b4ab8a555e2293a6c20916b04cb633c798a1",
+                "Sha256": "5d7fb366b8ebdda9fc36587b4f4a9c27f258930cd63e9e5eaef6601304d2b4fe",
                 "Mode": "0755"
             },
             {
                 "Name": "xwall-ssup",
                 "Path": "apps/xwall/xwall-ssup",
-                "Sha256": "7f8ea550b967ee5685c397723aea384a316a2f30b04efd85abf9ee393535a123",
+                "Sha256": "c05043ddd3c51d93d2f692fff309a9b15d9c74e03d4f0b3e02ba1ab42b3869b8",
+                "Mode": "0755"
+            },
+            {
+                "Name": "xwall-rules",
+                "Path": "apps/xwall/xwall-rules",
+                "Sha256": "fbf01d297a0395dcf8964d21dcf68d9613b0240febd2b08b3defe5b258edbbd5",
                 "Mode": "0755"
             }
         ],
@@ -406,35 +412,6 @@
                                 }
                             ],
                             "Help": "决定 Xray 规则集的默认走向（iptables 始终把流量交给 Xray，再由规则集分流）：GFWList=只代理 geosite:gfw 与 telegram，其余直连；国内白名单=国内域名/IP 直连、其余走代理；游戏模式=TCP 全走代理、UDP 仅非国内走代理；全局代理=除内网外全部走代理。需要完全不代理时直接停用插件即可，故不再提供该模式"
-                        },
-                        {
-                            "Key": "XRAY_LOG_LEVEL",
-                            "Label": "Xray 运行日志级别",
-                            "Type": "select",
-                            "Default": "warning",
-                            "Options": [
-                                {
-                                    "Label": "debug（排查问题用，日志增长快）",
-                                    "Value": "debug"
-                                },
-                                {
-                                    "Label": "info",
-                                    "Value": "info"
-                                },
-                                {
-                                    "Label": "warning（推荐）",
-                                    "Value": "warning"
-                                },
-                                {
-                                    "Label": "error",
-                                    "Value": "error"
-                                },
-                                {
-                                    "Label": "none（不记录）",
-                                    "Value": "none"
-                                }
-                            ],
-                            "Help": "只控制错误日志级别，写入 /var/log/xwall-xray.log（可用「扩展 → 查看Xray运行日志」查看）；访问日志默认关闭，不会产生 /tmp 下的临时日志；内核 stdout/stderr 也并入同一文件，每次启动清空上一轮"
                         }
                     ]
                 },
@@ -596,6 +573,63 @@
                             "Default": "",
                             "Secret": true,
                             "VisibleWhen": "XWALL_SOCKS_AUTH=1"
+                        }
+                    ]
+                },
+                {
+                    "Title": "高级设置",
+                    "Tab": "高级设置",
+                    "Fields": [
+                        {
+                            "Key": "XWALL_IPV6_ENABLE",
+                            "Label": "IPv6 双栈",
+                            "Type": "switch",
+                            "Default": "0",
+                            "Help": "开启后 Xray 同时监听 IPv4/IPv6（::），域名按双栈解析并下发 ip6tables 的 REDIRECT/TPROXY 规则，局域网 IPv6 流量与 IPv4 一样按规则集分流；内网 IPv6 前缀（GUA/PD）、fe80::/10、fc00::/7 自动直连避免回环，开启「DNS设置 → 域名劫持」时 IPv6 的 53 端口也一并接管。关闭（默认）只接管 IPv4：Xray 强制用 IPv4 出站与解析（UseIPv4），纯 IPv6 目标会连接失败；若路由器已下发 IPv6，设备的 IPv6 流量不会经过代理。需要路由器本身已启用 IPv6 才有意义，保存后自动重启插件生效"
+                        },
+                        {
+                            "Key": "XWALL_RULES_AUTO_UPDATE",
+                            "Label": "自动更新路由规则",
+                            "Type": "switch",
+                            "Default": "0",
+                            "Help": "开启并保存后，插件会在 crontab 写入「每天按下面设定的时刻执行 xwall-rules」的定时任务：从 Loyalsoldier/v2ray-rules-dat 拉取最新 geoip.dat / geosite.dat，校验 SHA256 后覆盖并自动重启插件重载规则（约几秒断流），输出追加到 /var/log/xwall-rules.log；线上版本号与本地记录一致时只记录「已是最新」不会重复下载。关闭并保存会移除该定时任务（停止插件时也会一并清理）。想立刻更新可用「扩展 → 更新路由规则」手动执行一次；路由器在该时刻处于关机/断网状态时不会补跑"
+                        },
+                        {
+                            "Key": "XWALL_RULES_UPDATE_TIME",
+                            "Label": "自动更新执行时间",
+                            "Type": "time",
+                            "Default": "07:00",
+                            "VisibleWhen": "XWALL_RULES_AUTO_UPDATE=1",
+                            "Help": "每天在该时刻（路由器本地时间）执行上面的路由规则更新，格式 HH:MM，例如 07:00、23:30；留空或格式非法时插件自动按 07:00 执行。仅在「自动更新路由规则」开启时显示"
+                        },
+                        {
+                            "Key": "XRAY_LOG_LEVEL",
+                            "Label": "Xray 运行日志级别",
+                            "Type": "select",
+                            "Default": "warning",
+                            "Options": [
+                                {
+                                    "Label": "debug（排查问题用，日志增长快）",
+                                    "Value": "debug"
+                                },
+                                {
+                                    "Label": "info",
+                                    "Value": "info"
+                                },
+                                {
+                                    "Label": "warning（推荐）",
+                                    "Value": "warning"
+                                },
+                                {
+                                    "Label": "error",
+                                    "Value": "error"
+                                },
+                                {
+                                    "Label": "none（不记录）",
+                                    "Value": "none"
+                                }
+                            ],
+                            "Help": "只控制错误日志级别，写入 /var/log/xwall-xray.log（可用「扩展 → 查看Xray运行日志」查看）；访问日志默认关闭，不会产生 /tmp 下的临时日志；内核 stdout/stderr 也并入同一文件，每次启动清空上一轮"
                         }
                     ]
                 }

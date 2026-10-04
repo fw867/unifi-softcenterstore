@@ -399,6 +399,10 @@ static string? ValidateConfigValue(JsonElement field, string value)
             if (!Regex.IsMatch(value, @"^(\d{1,3}\.){3}\d{1,3}$") && !Regex.IsMatch(value, @"^[0-9a-fA-F:]+$"))
                 return $"{label} 不是合法的 IP 地址";
             break;
+        case "time":
+            if (!Regex.IsMatch(value, @"^([01]\d|2[0-3]):[0-5]\d$"))
+                return $"{label} 必须是 HH:MM 格式（00:00-23:59）";
+            break;
         case "switch":
             if (value is not ("0" or "1" or "true" or "false")) return $"{label} 开关值无效";
             break;
