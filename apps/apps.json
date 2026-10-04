@@ -82,7 +82,7 @@
         "Id": "koolss",
         "Name": "XRay",
         "Type": "Binary Core",
-        "Version": "1.2.5",
+        "Version": "1.2.6",
         "Description": "Xray代理，支持GFWList、大陆白名单，游戏、全局模式。",
         "Icon": "shield-check",
         "StartCommand": "/data/softcenter/bin/koolss start",
@@ -103,13 +103,13 @@
             {
                 "Name": "koolss-ssup",
                 "Path": "apps/koolss/koolss-ssup",
-                "Sha256": "688372adb3784b00fea42671df1774601236724a1745f9abf2fcfc96158f7096",
+                "Sha256": "260742f8ea23b93aa8503f5261b5c535fc75149f95c0ea4bfc0a2a83cd8b4319",
                 "Mode": "0755"
             },
             {
                 "Name": "koolss-ssrule",
                 "Path": "apps/koolss/koolss-ssrule",
-                "Sha256": "4e765ab7f8bde47b145b53394ef9a152b0e55ad04b891ab17b33ba0642083b41",
+                "Sha256": "f8fe1f6a230f389af344bb9f07f39be79dc2a11271fe612e110b09afd84617c6",
                 "Mode": "0755"
             },
             {
@@ -743,7 +743,7 @@
         "Id": "webssh",
         "Name": "WebSSH",
         "Type": "Shell Script",
-        "Version": "2.5.7",
+        "Version": "2.5.8",
         "Description": "浏览器版 SSH 客户端（GoWebSSH），支持多会话、SFTP 与文件管理。",
         "Icon": "terminal-square",
         "StartCommand": "/data/softcenter/bin/webssh start",
@@ -764,7 +764,7 @@
             {
                 "Name": "webssh-dl",
                 "Path": "apps/webssh/webssh-dl",
-                "Sha256": "d0d1aaccaf82673ad845e96d2412fe13c0d2cac640694c88ae4e95cb69edb188",
+                "Sha256": "8f1d89aa06a38889aacbcd216a391857f7b89366b37636c60ed2852e3c20b9d3",
                 "Mode": "0755"
             }
         ],
@@ -1303,7 +1303,7 @@
         "Id": "fakehttp",
         "Name": "FakeHTTP",
         "Type": "Binary Core",
-        "Version": "1.0.6",
+        "Version": "1.0.7",
         "Description": "将 TCP 连接伪装为 HTTP/HTTPS 以规避 DPI（基于 nftables/NFQUEUE）。",
         "Icon": "shield",
         "StartCommand": "/data/softcenter/bin/fakehttp start",
@@ -1324,7 +1324,7 @@
             {
                 "Name": "fakehttp-dl",
                 "Path": "apps/fakehttp/fakehttp-dl",
-                "Sha256": "4883a0eda7888ceb48e0a9c318f24c6c0ff5b20050b09b3fd7447570ab49ef19",
+                "Sha256": "05c4023ee0b1c76e58f846ef289890e5416f6e9f52199eb48bee182683e62515",
                 "Mode": "0755"
             }
         ],
@@ -1419,7 +1419,7 @@
         "Id": "fakesip",
         "Name": "FakeSIP",
         "Type": "Binary Core",
-        "Version": "1.0.6",
+        "Version": "1.0.7",
         "Description": "将 UDP 流量伪装为 SIP 以规避 DPI（基于 nftables/NFQUEUE）。",
         "Icon": "radio",
         "StartCommand": "/data/softcenter/bin/fakesip start",
@@ -1440,7 +1440,7 @@
             {
                 "Name": "fakesip-dl",
                 "Path": "apps/fakesip/fakesip-dl",
-                "Sha256": "f84a9127785d0053a9cc2966f65fbee26dea6df6bf2637072dbb4f9c40d24e25",
+                "Sha256": "565cadf163065be9e47f2fca2d778e3e4d7d22a37f86503d13249cca0c64e58d",
                 "Mode": "0755"
             }
         ],
