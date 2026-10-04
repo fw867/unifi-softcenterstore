@@ -34,13 +34,47 @@ FORCE_DOWNLOAD="${FORCE_DOWNLOAD:-0}"
 NO_RESTART="${NO_RESTART:-0}"
 
 # ================= 代理设置 =================
+# 优先级：软件中心「全局更新代理」→ XWall 自带 SOCKS5 入口 → 直连
+# 注意：socks5:// 由 curl 在本地解析域名，被污染的域名（如 GitHub）照样连不上，
+#       所以统一升成 socks5h://，让域名交给代理侧解析
+XWALL_CONF="/data/softcenter/config/xwall.env"
+[ -f "$XWALL_CONF" ] && . "$XWALL_CONF"
+XWALL_SOCKS_ENABLE="${XWALL_SOCKS_ENABLE:-0}"
+XWALL_SOCKS_PORT="${XWALL_SOCKS_PORT:-1283}"
+XWALL_SOCKS_AUTH="${XWALL_SOCKS_AUTH:-0}"
+XWALL_SOCKS_USER="${XWALL_SOCKS_USER:-}"
+XWALL_SOCKS_PASS="${XWALL_SOCKS_PASS:-}"
+
 SC_PROXY=$(sed -n 's/.*"LocalProxy"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' /data/softcenter/config.json 2>/dev/null | head -n1)
-CURL_OPT=""
+PROXY_URL=""
+PROXY_FROM=""
 if [ -n "$SC_PROXY" ]; then
-    CURL_OPT="-x $SC_PROXY"
-    echo_date "规则更新代理 (全局设置): $SC_PROXY"
+    case "$SC_PROXY" in
+        socks5://*) PROXY_URL="socks5h://${SC_PROXY#socks5://}" ;;
+        socks4://*) PROXY_URL="socks4a://${SC_PROXY#socks4://}" ;;
+        *://*)      PROXY_URL="$SC_PROXY" ;;
+        *)
+            PROXY_URL="http://$SC_PROXY"
+            echo_date "⚠ 全局更新代理没写协议头，按 HTTP 代理处理：$SC_PROXY（若这是 SOCKS5 端口，请改成 socks5h://$SC_PROXY）"
+            ;;
+    esac
+    PROXY_FROM="软件中心「全局更新代理」"
+elif [ "$XWALL_SOCKS_ENABLE" = "1" ] && pgrep -x xwall-xray >/dev/null 2>&1; then
+    PROXY_URL="socks5h://127.0.0.1:$XWALL_SOCKS_PORT"
+    PROXY_FROM="XWall 自带 SOCKS5 入口"
+fi
+
+CURL_OPT=""
+if [ -n "$PROXY_URL" ]; then
+    CURL_OPT="-x $PROXY_URL"
+    if [ "$PROXY_FROM" = "XWall 自带 SOCKS5 入口" ] && [ "$XWALL_SOCKS_AUTH" = "1" ] && [ -n "$XWALL_SOCKS_USER" ]; then
+        CURL_OPT="$CURL_OPT -U $XWALL_SOCKS_USER:$XWALL_SOCKS_PASS"
+    fi
+    echo_date "规则更新代理：$PROXY_URL（来源：$PROXY_FROM）"
+elif [ "$XWALL_SOCKS_ENABLE" = "1" ]; then
+    echo_date "未配置全局更新代理，且 XWall 未运行（自带 SOCKS5 不可用），本次直连 GitHub"
 else
-    echo_date "未配置更新代理，直连 GitHub"
+    echo_date "未配置更新代理（全局未设置、插件 SOCKS5 未启用），直连 GitHub"
 fi
 
 human_size() {
@@ -94,7 +128,7 @@ get_latest_version() {
     CURL_RC=$?
     
     if [ "$CURL_RC" != "0" ] || [ -z "$LATEST_INFO" ]; then
-        echo_date "❌ 获取版本信息失败 (curl exit=${CURL_RC})，请检查网络！"
+        echo_date "❌ 获取版本信息失败 (curl exit=${CURL_RC})，请检查网络！当前代理：${PROXY_URL:-直连}"
         exit 1
     fi
 
@@ -178,7 +212,8 @@ rm -rf "$TMP_DIR"
 mkdir -p "$TMP_DIR" && cd "$TMP_DIR"
 
 if ! download_and_verify "geoip.dat" || ! download_and_verify "geosite.dat"; then
-    echo_date "❌ 规则下载或校验失败，已中止。本地文件未受影响。"
+    echo_date "❌ 规则下载或校验失败，已中止。本地文件未受影响。当前代理：${PROXY_URL:-直连}"
+    cd /
     rm -rf "$TMP_DIR"
     exit 1
 fi
@@ -190,6 +225,8 @@ mv -f geosite.dat "$XWALL_DIR/geosite.dat"
 # 更新版本记录
 echo "$XVERSION" > "$VERSION_FILE"
 
+# 先离开临时目录再删除：否则当前工作目录被删掉，后面拉起的子进程会 getcwd() 失败
+cd /
 rm -rf "$TMP_DIR"
 echo_date "🎉 规则库更新完成！最新版本号: $XVERSION"
 
