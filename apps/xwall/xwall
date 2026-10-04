@@ -71,6 +71,8 @@ XWALL_IPV6_ENABLE="${XWALL_IPV6_ENABLE:-0}"
 XWALL_RULES_AUTO_UPDATE="${XWALL_RULES_AUTO_UPDATE:-0}"
 XWALL_RULES_UPDATE_TIME="${XWALL_RULES_UPDATE_TIME:-07:00}"
 XWALL_WATCHDOG_ENABLE="${XWALL_WATCHDOG_ENABLE:-0}"
+XWALL_BLOCK_ADS="${XWALL_BLOCK_ADS:-0}"
+XWALL_BITTORRENT_DIRECT="${XWALL_BITTORRENT_DIRECT:-0}"
 WATCHDOG_STATE="/tmp/xwall_watchdog.miss"
 
 log_date() {
@@ -267,6 +269,8 @@ build_xray_config() {
        --arg blackDomains "$black_domains" \
        --arg blackIps "$black_ips" \
        --argjson localDomains "$DNS_LOCAL_DOMAINS" \
+       --arg blockAds "$XWALL_BLOCK_ADS" \
+       --arg btDirect "$XWALL_BITTORRENT_DIRECT" \
        --arg fakePool "$fake_pool" \
        --arg logLevel "$XRAY_LOG_LEVEL" \
        --arg logFile "$XRAY_LOG" \
@@ -369,6 +373,10 @@ build_xray_config() {
             {"type": "field", "domain": $blackDomRule, "outboundTag": "proxy"}
           ] else [] end) + (if ($blackIpRule | length) > 0 then [
             {"type": "field", "ip": $blackIpRule, "outboundTag": "proxy"}
+          ] else [] end) + (if $btDirect == "1" then [
+            {"type": "field", "outboundTag": "direct", "protocol": ["bittorrent"]}
+          ] else [] end) + (if $blockAds == "1" then [
+            {"type": "field", "outboundTag": "block", "domain": ["geosite:category-ads-all"]}
           ] else [] end) + [
             {"type": "field", "ip": [$fakePool], "outboundTag": "proxy"}
           ] + $baseRules
@@ -401,7 +409,9 @@ build_xray_config() {
     fi
 
     mv -f "$XRAY_JSON.tmp" "$XRAY_JSON"
-    log_date "Xray 运行配置生成成功（代理模式=$PROXY_MODE $mode_name，底层联动: $msg）"
+    [ "$XWALL_BLOCK_ADS" = "1" ] && ads_msg="广告与隐私拦截=开" || ads_msg="广告与隐私拦截=关"
+    [ "$XWALL_BITTORRENT_DIRECT" = "1" ] && bt_msg="BT/PT 直连=开" || bt_msg="BT/PT 直连=关"
+    log_date "Xray 运行配置生成成功（代理模式=$PROXY_MODE $mode_name，底层联动: $msg，$ads_msg，$bt_msg）"
 }
 
 run_config_test() {

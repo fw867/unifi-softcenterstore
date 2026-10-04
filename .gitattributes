@@ -20,6 +20,10 @@ apps/**/wechat text eol=lf
 apps/**/xwall text eol=lf
 apps/**/xwall-ssup text eol=lf
 apps/**/xwall-rules text eol=lf
+apps/**/fakehttp text eol=lf
+apps/**/fakehttp-dl text eol=lf
+apps/**/fakesip text eol=lf
+apps/**/fakesip-dl text eol=lf
 
 # 二进制核心，禁止换行转换
 apps/ddnsto/ddnsto-core binary
