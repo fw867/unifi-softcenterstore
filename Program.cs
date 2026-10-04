@@ -123,6 +123,7 @@ string? DeviceModelCache = null;
 // 检查更新的缓存（服务端查一次，30 分钟内复用）
 string UpdateCheckJson = "";
 long UpdateCheckAt = 0;
+long UpdateCheckTtl = 0;   // 本次缓存有效期（成功 10 分钟 / 失败 1 分钟）
 if (!File.Exists(bootLock))
 {
     try
@@ -1229,12 +1230,15 @@ app.MapPost("/api/system/upgrade", () => {
 });
 
 // 检查更新放到服务端做：浏览器/客户端那侧不一定能连上 GitHub，而路由器这里配了全局更新代理。
-// 结果缓存 30 分钟，避免每次打开页面都去打一次 GitHub（这也是"检查更新偶尔卡"的一个来源）。
-app.MapGet("/api/system/update-check", () =>
+// 缓存策略：成功结果缓存 10 分钟、失败只缓存 1 分钟；带 ?force=1（手动"检查更新"）则永远重新查，
+// 避免刚发布新版本时手动检查也被旧缓存挡住。
+app.MapGet("/api/system/update-check", (HttpRequest request, HttpResponse response) =>
 {
+    response.Headers.CacheControl = "no-store";   // 别让浏览器/中间层再缓存一层
+    var force = request.Query.TryGetValue("force", out var f) && (f == "1" || f == "true");
     var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
-    if (UpdateCheckJson.Length > 0 && now - UpdateCheckAt < 1800)
-        return Results.Text(UpdateCheckJson, "application/json");
+    if (!force && UpdateCheckJson.Length > 0 && now - UpdateCheckAt < UpdateCheckTtl)
+        return Results.Text(UpdateCheckJson.Replace("\"cached\":false", "\"cached\":true"), "application/json");
 
     var proxy = NormalizeProxy(sysConfig.LocalProxy);
     var proxyArg = string.IsNullOrEmpty(proxy) ? "" : $"-x {proxy} ";
@@ -1251,7 +1255,8 @@ app.MapGet("/api/system/update-check", () =>
     }
     // 手工拼 JSON：这个项目是裁剪发布，新增 record 需要注册序列化上下文，这里避开
     static string Esc(string value) => value.Replace("\\", "").Replace("\"", "'");
-    UpdateCheckJson = $"{{\"tag_name\":\"{Esc(tag)}\",\"error\":\"{Esc(error)}\",\"checkedAt\":{now}}}";
+    UpdateCheckTtl = string.IsNullOrEmpty(tag) ? 60 : 600;
+    UpdateCheckJson = $"{{\"tag_name\":\"{Esc(tag)}\",\"error\":\"{Esc(error)}\",\"checkedAt\":{now},\"cached\":false}}";
     UpdateCheckAt = now;
     return Results.Text(UpdateCheckJson, "application/json");
 });
