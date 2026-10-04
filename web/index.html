@@ -212,11 +212,24 @@
                             sysInfo.Uptime }}</div>
                     </div>
                 </div>
-                <div class="flex items-center bg-gray-100/80 rounded-xl px-3 py-2 border border-gray-200">
-                    <i data-lucide="key" class="w-4 h-4 text-gray-400 mr-2 shrink-0"></i>
-                    <input :type="tokenInputType" v-model="token" name="sc_token" autocomplete="off" placeholder="访问令牌"
-                        @focus="tokenInputType = 'text'" @blur="handleTokenSubmit" @keyup.enter="handleTokenSubmit"
-                        class="bg-transparent border-none text-xs focus:outline-none w-full">
+                <!-- 负载与内存（与移动端状态页同一份数据） -->
+                <div class="grid grid-cols-2 gap-1.5">
+                    <div class="bg-white/60 border border-gray-200 rounded-xl px-2.5 py-2" title="系统负载（1 / 5 / 15 分钟）">
+                        <div class="flex items-center gap-1.5 text-[10px] text-gray-500">
+                            <i data-lucide="gauge" class="w-3.5 h-3.5 text-purple-500"></i> 负载
+                        </div>
+                        <div class="text-[10px] font-mono text-gray-700 mt-1 whitespace-nowrap">
+                            {{ loadParts.one }} / {{ loadParts.five }} / {{ loadParts.fifteen }}
+                        </div>
+                    </div>
+                    <div class="bg-white/60 border border-gray-200 rounded-xl px-2.5 py-2" title="内存占用">
+                        <div class="flex items-center gap-1.5 text-[10px] text-gray-500">
+                            <i data-lucide="memory-stick" class="w-3.5 h-3.5 text-teal-600"></i> 内存
+                        </div>
+                        <div class="text-[10px] font-mono text-gray-700 mt-1 whitespace-nowrap leading-tight">{{
+                            memoryParts.value }}</div>
+                        <div class="text-[9px] font-mono text-gray-400 leading-tight">{{ memoryParts.percent }}</div>
+                    </div>
                 </div>
                 <button @click="goToRouterAdmin"
                     class="w-full flex items-center justify-center space-x-1.5 text-xs font-medium text-gray-600 bg-white/70 border border-gray-200 rounded-xl py-2 hover:bg-white transition-colors">
@@ -1137,7 +1150,6 @@
         createApp({
             setup() {
                 const token = ref(localStorage.getItem('sc_token') || '');
-                const tokenInputType = ref('password');
 
                 const sysInfo = ref({ Version: '0.0.0', Runtime: '', Device: '', CpuTemp: '--', SfpTemp: '--', Uptime: '--', Memory: '--', Load: '--' });
                 const apps = ref([]);
@@ -1154,6 +1166,16 @@
                 // 移动端把「系统设置」换成「运行状态」：手机上主要看温度/内存/运行时间，
                 // 改端口换令牌这类动配置的操作留给电脑端（同一个页面，只是导航不同）
                 const statusNavItem = { id: 'status', label: '运行状态', short: '状态', icon: 'activity' };
+                // 内存："612/2048 MB (30%)" 在侧边栏窄卡片里会折行，拆成数值 + 百分比两行
+                const memoryParts = computed(() => {
+                    const raw = String(sysInfo.value.Memory || '').trim();
+                    const match = raw.match(/^([\d.]+)\/([\d.]+)\s*(\S+)\s*(?:\((\d+)%\))?$/);
+                    if (!match) return { value: raw || '--', percent: '' };
+                    return {
+                        value: match[1] + '/' + match[2] + ' ' + match[3],
+                        percent: match[4] ? '(' + match[4] + '%)' : ''
+                    };
+                });
                 // 负载：/proc/loadavg 给的是 "1 分钟 5 分钟 15 分钟"，整串放卡片里会折行，
                 // 所以拆开显示——大字给 1 分钟，另两个放小字
                 const loadParts = computed(() => {
@@ -1370,7 +1392,6 @@
                 };
 
                 const handleTokenSubmit = () => {
-                    tokenInputType.value = 'password';
                     // 侧边栏状态需要系统信息；其余按当前 Tab 加载
                     loadSystemInfo();
                     goPage(activePage.value);
@@ -2343,7 +2364,7 @@
                 });
 
                 return {
-                    token, tokenInputType, handleTokenSubmit, loadParts, gateVisible, gateToken, gateError, gateBusy, gateInputType, checkToken, sysInfo, apps, cronJobs, activeApp, appConfig,
+                    token, handleTokenSubmit, loadParts, memoryParts, gateVisible, gateToken, gateError, gateBusy, gateInputType, checkToken, sysInfo, apps, cronJobs, activeApp, appConfig,
                     activePage, navItems, mobileNavItems, currentNavLabel, goPage, sysLogContent, loadSystemLogsInline,
                     configMode, configSchema, configValues, configErrors, collapsedSections, isSavingConfig,
                     activeConfigTab, schemaTabNames, visibleSchemaSections, allSchemaFields,
