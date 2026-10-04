@@ -216,13 +216,22 @@ _ = Task.Run(async () => {
 app.Use(async (context, next) => {
     if (context.Request.Path.StartsWithSegments("/api"))
     {
-        if (!context.Request.Headers.TryGetValue("Authorization", out var auth) || auth != sysConfig.AdminToken)
+        if (!context.Request.Headers.TryGetValue("Authorization", out var auth) || !TokenMatches(auth.ToString(), sysConfig.AdminToken))
         {
             context.Response.StatusCode = 401; return;
         }
     }
     await next();
 });
+
+// 固定时间比较，避免用 != 逐字符比较令牌带来的时序侧信道
+static bool TokenMatches(string? provided, string? expected)
+{
+    if (string.IsNullOrEmpty(provided) || string.IsNullOrEmpty(expected)) return false;
+    var a = Encoding.UTF8.GetBytes(provided);
+    var b = Encoding.UTF8.GetBytes(expected);
+    return a.Length == b.Length && CryptographicOperations.FixedTimeEquals(a, b);
+}
 
 var fileProvider = new PhysicalFileProvider($"{BaseDir}/web");
 app.UseDefaultFiles(new DefaultFilesOptions { FileProvider = fileProvider });

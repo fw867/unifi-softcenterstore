@@ -4,6 +4,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <!-- 相对路径的图标：被反代到子路径下时也能取到（否则浏览器会去请求站点根目录的 /favicon.ico） -->
+    <link rel="icon" href="favicon.ico">
     <title>UniFi SoftCenter - 安全管理中心</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdn.jsdelivr.net/npm/vue@3.4.21/dist/vue.global.min.js"></script>
@@ -1014,6 +1016,17 @@
     <script>
         const { createApp, ref, reactive, onMounted, nextTick, computed, watch } = Vue;
 
+        // ── 接口基址（相对当前页面目录）──────────────────────────────────────
+        // 直接访问 http://<路由器>:9958/ 时，PAGE_DIR 就是 http://<路由器>:9958/，
+        // apiUrl('/api/apps') 与原来的绝对路径 '/api/apps' 完全等价 → 现有用法零变化。
+        // 挂在反向代理的前缀下（例如 https://<NAS>/plugin/<用户>/rtrcenter/）时，
+        // 请求会变成 <前缀>/api/apps，由代理转回本服务的 /api/apps，因此同一份页面
+        // 既能直连、也能被反代，不需要改任何后端代码。
+        const PAGE_DIR = new URL('.', document.baseURI).href;
+        const apiUrl = (path) => new URL(String(path).replace(/^\/+/, ''), PAGE_DIR).href;
+        // 被插件页以 iframe 嵌入时带 ?embed=1，用来关掉那些"假设自己直连路由器"的行为
+        const EMBEDDED = new URLSearchParams(window.location.search).get('embed') === '1';
+
         createApp({
             setup() {
                 const token = ref(localStorage.getItem('sc_token') || '');
@@ -1216,7 +1229,7 @@
                     if (!token.value) return null;
                     localStorage.setItem('sc_token', token.value);
                     try {
-                        const res = await fetch(url, { method, headers: { 'Authorization': token.value, 'Content-Type': 'application/json' }, body: body ? JSON.stringify(body) : null });
+                        const res = await fetch(apiUrl(url), { method, headers: { 'Authorization': token.value, 'Content-Type': 'application/json' }, body: body ? JSON.stringify(body) : null });
                         if (res.status === 401) throw new Error('令牌错误');
                         const text = await res.text();
                         if (!text) return { success: true };
@@ -1256,7 +1269,10 @@
                     if (res !== null) {
                         localStorage.setItem('sc_token', sysConfigForm.value.adminToken);
                         token.value = sysConfigForm.value.adminToken;
-                        setTimeout(() => { window.location.href = `http://${window.location.hostname}:${sysConfigForm.value.port}`; }, 2500);
+                        // 直连时按新端口跳转；被反代嵌进插件页时不跳（hostname 是 NAS，跳过去是错的）
+                        if (!EMBEDDED) {
+                            setTimeout(() => { window.location.href = `http://${window.location.hostname}:${sysConfigForm.value.port}`; }, 2500);
+                        }
                     }
                     isSavingSettings.value = false;
                 };
@@ -1322,7 +1338,7 @@
                             const controller = new AbortController();
                             const timeoutId = setTimeout(() => controller.abort(), 2000);
 
-                            const res = await fetch('/api/system/upgrade/log?_t=' + Date.now(), {
+                            const res = await fetch(apiUrl('/api/system/upgrade/log?_t=' + Date.now()), {
                                 headers: { 'Authorization': token.value },
                                 signal: controller.signal, cache: 'no-store'
                             });
@@ -1357,7 +1373,7 @@
 
                                 let retryTimer = setInterval(async () => {
                                     try {
-                                        const res = await fetch('/api/system/info?_t=' + Date.now(), {
+                                        const res = await fetch(apiUrl('/api/system/info?_t=' + Date.now()), {
                                             headers: { 'Authorization': token.value }, cache: 'no-store'
                                         });
                                         if (res.ok) {
@@ -2127,6 +2143,11 @@
                 };
 
                 const goToRouterAdmin = () => {
+                    if (EMBEDDED) {
+                        // 嵌在插件页里时 hostname 是 NAS，不能拿它拼路由器地址
+                        alert('请在与路由器同网的浏览器里打开 https://<路由器地址> 进入 UniFi 控制台。');
+                        return;
+                    }
                     window.open(`https://${window.location.hostname}`, '_blank');
                 };
 
