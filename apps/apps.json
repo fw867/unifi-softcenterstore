@@ -340,7 +340,7 @@
         "Id": "xwall",
         "Name": "XWall",
         "Type": "Binary Core",
-        "Version": "1.0.5",
+        "Version": "1.0.6",
         "Description": "全流量交给 Xray，由 Xray 规则集自动分流（国内直连 / 国外代理）。",
         "Icon": "shield-check",
         "StartCommand": "/data/softcenter/bin/xwall start",
@@ -355,7 +355,7 @@
             {
                 "Name": "xwall",
                 "Path": "apps/xwall/xwall",
-                "Sha256": "671ed32f00b0624547786ab052d5d63103ac4247561452efb97d590d603f0645",
+                "Sha256": "a7ed192e6e8cc058547957c224fd0fddc3bf26c8684be7be118121ae846519e0",
                 "Mode": "0755"
             },
             {
