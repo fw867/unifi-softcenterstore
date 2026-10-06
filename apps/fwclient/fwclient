@@ -1,0 +1,145 @@
+#!/bin/sh
+
+# UniFi SoftCenter · FWClient 内网穿透客户端
+#
+# 面板配置：/data/softcenter/config/fwclient.env
+#   FWCLIENT_GATEWAY   穿透服务（网关）域名
+#   FWCLIENT_TOKEN     令牌（tk_ 开头）
+#
+# 二进制：/data/softcenter/bin/fwclient-core（静态链接 arm64）
+# 原生参数：-s 网关域名 -t 令牌 -d（后台守护）｜-k 规范关闭｜-u 检查升级｜-v 版本｜-h 帮助
+#
+# 本脚本封装成面板需要的形式：
+#   start   校验配置 → -s/-t/-d 启动守护进程 → 确认进程并在 /var/run/fwclient.pid 记下 PID
+#   stop    优先用 -k 通知服务端断开；若 10 秒内没退出，回退 SIGTERM → SIGKILL
+#   status  输出 running pid=xxx / stopped（面板据此显示运行状态）
+#
+# 注意：脚本运行在路由器的 /bin/sh（busybox ash），只能用 POSIX 语法。
+
+PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+export PATH
+
+CONFIG="/data/softcenter/config/fwclient.env"
+[ -f "$CONFIG" ] && . "$CONFIG"
+
+FWCLIENT_GATEWAY="${FWCLIENT_GATEWAY:-}"
+FWCLIENT_TOKEN="${FWCLIENT_TOKEN:-}"
+BIN="/data/softcenter/bin/fwclient-core"
+PIDFILE="/var/run/fwclient.pid"
+LOG="/var/log/fwclient.log"
+
+log_date() {
+	echo "【$(date '+%Y年%m月%d日 %X')】: $1" >> "$LOG"
+}
+
+# 进程是否在跑（返回 0/1）
+is_running() {
+	pid=$(pgrep -f "$BIN" 2>/dev/null | head -n 1)
+	[ -n "$pid" ]
+}
+
+start_fwclient() {
+	if [ -z "$FWCLIENT_GATEWAY" ] || [ -z "$FWCLIENT_TOKEN" ]; then
+		echo "错误：请先在软件中心里填写「网关域名」和「令牌」"
+		log_date "启动失败：网关域名或令牌未配置"
+		exit 1
+	fi
+
+	if [ ! -x "$BIN" ]; then
+		echo "错误：未找到可执行文件 $BIN"
+		log_date "启动失败：未找到 $BIN"
+		exit 1
+	fi
+
+	if is_running; then
+		echo "fwclient 已在运行（PID $pid）"
+		return 0
+	fi
+
+	log_date "启动 fwclient：网关 $FWCLIENT_GATEWAY"
+	# -d 让客户端自己转入后台守护
+	"$BIN" -s "$FWCLIENT_GATEWAY" -t "$FWCLIENT_TOKEN" -d >> "$LOG" 2>&1
+
+	# 等进程出现（最多 8 秒）
+	i=0
+	while [ "$i" -lt 8 ]; do
+		pid=$(pgrep -f "$BIN" 2>/dev/null | head -n 1)
+		if [ -n "$pid" ]; then
+			echo "$pid" > "$PIDFILE"
+			log_date "fwclient 启动成功 PID=$pid"
+			echo "fwclient 已启动（PID $pid）"
+			return 0
+		fi
+		sleep 1
+		i=$((i + 1))
+	done
+
+	log_date "启动失败：进程未出现，详见 $LOG"
+	echo "启动失败，请查看 $LOG"
+	exit 1
+}
+
+stop_fwclient() {
+	if ! is_running; then
+		rm -f "$PIDFILE"
+		echo "fwclient 未在运行"
+		return 0
+	fi
+
+	log_date "关闭 fwclient（-k 通知服务端断开）"
+	# 规范关闭：让客户端先通知服务端，再自行退出
+	"$BIN" -k >> "$LOG" 2>&1
+
+	i=0
+	while [ "$i" -lt 10 ]; do
+		is_running || break
+		sleep 1
+		i=$((i + 1))
+	done
+
+	if is_running; then
+		log_date "-k 未退出，回退为 SIGTERM"
+		kill "$pid" 2>/dev/null
+		sleep 2
+	fi
+	if is_running; then
+		log_date "仍未退出，强制结束"
+		pkill -9 -f "$BIN" 2>/dev/null
+	fi
+
+	rm -f "$PIDFILE"
+	log_date "fwclient 已停止"
+	echo "fwclient 已停止"
+}
+
+status_fwclient() {
+	if is_running; then
+		saved=$(cat "$PIDFILE" 2>/dev/null)
+		[ -n "$saved" ] && pid="$saved"
+		echo "running pid=${pid:-unknown}"
+		exit 0
+	fi
+	echo "stopped"
+	exit 1
+}
+
+case "${1:-}" in
+start)
+	start_fwclient
+	;;
+stop)
+	stop_fwclient
+	;;
+restart)
+	stop_fwclient
+	sleep 1
+	start_fwclient
+	;;
+status)
+	status_fwclient
+	;;
+*)
+	echo "Usage: $0 {start|stop|restart|status}"
+	exit 1
+	;;
+esac

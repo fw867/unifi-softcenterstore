@@ -18,6 +18,7 @@ apps/**/tomodem text eol=lf
 apps/**/udm-le text eol=lf
 apps/**/wechat text eol=lf
 apps/**/xwall text eol=lf
+apps/**/fwclient text eol=lf
 apps/**/xwall-* text eol=lf
 apps/**/fakehttp text eol=lf
 apps/**/fakehttp-dl text eol=lf
@@ -85,3 +86,4 @@ apps/ddnsto/ddnsto-core binary
 #*.PDF   diff=astextplain
 #*.rtf   diff=astextplain
 #*.RTF   diff=astextplain
+apps/fwclient/fwclient-linux-arm64 binary

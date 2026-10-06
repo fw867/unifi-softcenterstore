@@ -1541,5 +1541,63 @@
                 }
             ]
         }
+    },
+    {
+        "Id": "fwclient",
+        "Name": "内网穿透",
+        "Type": "Binary Core",
+        "Version": "1.0.0",
+        "Description": "内网穿透客户端：把局域网服务映射到你的私有服务端（需要私有服务器端；仅 arm64）",
+        "Icon": "network",
+        "StartCommand": "/data/softcenter/bin/fwclient start",
+        "StopCommand": "/data/softcenter/bin/fwclient stop",
+        "StatusCommand": "/data/softcenter/bin/fwclient status",
+        "IsAutoStart": 1,
+        "ConfigPath": "/data/softcenter/config/fwclient.env",
+        "ConfigKeys": "",
+        "LogPath": "/var/log/fwclient.log",
+        "CustomCommands": "[{\"name\":\"查看版本\",\"command\":\"/data/softcenter/bin/fwclient-core -v\"},{\"name\":\"检查升级\",\"command\":\"/data/softcenter/bin/fwclient-core -u\"},{\"name\":\"查看运行日志\",\"command\":\"tail -n 120 /var/log/fwclient.log\"}]",
+        "Files": [
+            {
+                "Name": "fwclient-core",
+                "Path": "apps/fwclient/fwclient-linux-arm64",
+                "Sha256": "33eab5282b9c709341cd95d4073e6d05900a76052c0f948bb119d014ef30cb97",
+                "Mode": "0755"
+            },
+            {
+                "Name": "fwclient",
+                "Path": "apps/fwclient/fwclient",
+                "Sha256": "64f46adb479b303bbcdd64f1704c1e109dd6075055ddc7ecf8b5782d21fcb6b1",
+                "Mode": "0755"
+            }
+        ],
+        "ConfigSchema": {
+            "Sections": [
+                {
+                    "Title": "穿透参数",
+                    "Fields": [
+                        {
+                            "Key": "FWCLIENT_GATEWAY",
+                            "Label": "网关域名",
+                            "Type": "text",
+                            "Default": "",
+                            "Required": true,
+                            "Placeholder": "你的私有服务端域名，如 tunnel.example.com",
+                            "Help": "客户端通过它找到你的私有服务端"
+                        },
+                        {
+                            "Key": "FWCLIENT_TOKEN",
+                            "Label": "令牌",
+                            "Type": "password",
+                            "Default": "",
+                            "Required": true,
+                            "Secret": true,
+                            "Placeholder": "tk_xxxxxxxxxxxx",
+                            "Help": "在私有服务端上生成的客户端令牌"
+                        }
+                    ]
+                }
+            ]
+        }
     }
 ]
