@@ -1546,7 +1546,7 @@
         "Id": "fwclient",
         "Name": "内网穿透",
         "Type": "Binary Core",
-        "Version": "1.0.1",
+        "Version": "1.0.2",
         "Description": "内网穿透客户端：把局域网服务映射到你的私有服务端（需要私有服务器端；仅 arm64）",
         "Icon": "network",
         "StartCommand": "/data/softcenter/bin/fwclient start",
@@ -1573,7 +1573,7 @@
             {
                 "Name": "fwclient-status",
                 "Path": "apps/fwclient/fwclient-status",
-                "Sha256": "a07458af33363062f1f342b033c7c3890f61cd06e3eedfdc9a774dd555b0be37",
+                "Sha256": "f8d5bc7e15d0fb3d72c787700c64aed14a811f8c264460394e34345715888ca1",
                 "Mode": "0755"
             }
         ],
