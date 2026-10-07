@@ -281,6 +281,43 @@ static string NormalizeProxy(string raw)
     return "http://" + value;
 }
 
+// 上面那套是给 curl 用的写法，.NET 认的是另一套：
+//   socks5h:// / socks:// → socks5://（.NET 的 socks5 同样把域名交给代理解析，等价）
+//   http:// 、socks4a:// 直接用
+static string DotnetProxyUri(string raw)
+{
+    var value = NormalizeProxy(raw);
+    if (value.Length == 0) return "";
+    if (value.StartsWith("socks5h://", StringComparison.OrdinalIgnoreCase))
+        return "socks5://" + value.Substring("socks5h://".Length);
+    if (value.StartsWith("socks://", StringComparison.OrdinalIgnoreCase))
+        return "socks5://" + value.Substring("socks://".Length);
+    return value;
+}
+
+// 下载 GitHub 资源（插件安装/升级、云端商店清单）统一用这个客户端：
+// 面板设置里填了「全局更新代理」就走代理，空着直连。
+HttpClient CreateGitHubClient(out string proxyUsed)
+{
+    proxyUsed = "";
+    var uri = DotnetProxyUri(sysConfig.LocalProxy);
+    var handler = new HttpClientHandler();
+    if (uri.Length > 0)
+    {
+        try
+        {
+            handler.Proxy = new WebProxy(uri);
+            handler.UseProxy = true;
+            proxyUsed = uri;
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException($"全局更新代理格式不正确（{sysConfig.LocalProxy}）：{ex.Message}");
+        }
+    }
+    return new HttpClient(handler) { Timeout = TimeSpan.FromMinutes(5) };
+}
+
 static string AppEnvDir() => $"{BaseDir}/config";
 static string AppEnvPath(string appId) => $"{AppEnvDir()}/{appId}.env";
 
@@ -562,6 +599,28 @@ app.MapGet("/api/apps", () => {
     return apps;
 });
 
+// 云端商店清单：由服务端去取，这样路由器上的「全局更新代理」能派上用场，
+// 浏览器/手机直连 GitHub 不畅时也能正常打开应用市场
+app.MapGet("/api/store/apps", async () => {
+    string proxyUsed;
+    try
+    {
+        using var http = CreateGitHubClient(out proxyUsed);
+        using var resp = await http.GetAsync(RepoRawBase + "apps/apps.json?_t=" + DateTimeOffset.Now.ToUnixTimeMilliseconds());
+        resp.EnsureSuccessStatusCode();
+        var json = await resp.Content.ReadAsStringAsync();
+        if (json.TrimStart().StartsWith('[') == false) return Results.Problem("云端应用库返回的内容不是应用清单");
+        return Results.Text(json, "application/json");
+    }
+    catch (Exception ex)
+    {
+        var hint = string.IsNullOrWhiteSpace(sysConfig.LocalProxy)
+            ? "（当前为直连，可在「设置 → 全局更新代理」里填代理）"
+            : $"（已经过代理 {NormalizeProxy(sysConfig.LocalProxy)}）";
+        return Results.Problem($"获取云端应用库失败：{ex.Message}{hint}");
+    }
+});
+
 app.MapPost("/api/apps", (AppEntity a) => {
     using var conn = new SqliteConnection(DbPath); conn.Open();
     // 排序只由"拖动排序"接口（PUT /api/apps/order）修改。
@@ -701,10 +760,19 @@ app.MapPost("/api/apps/{id}/install", async (string id) => {
 
     Directory.CreateDirectory(BinDir);
     var logs = new List<string>();
-    var handler = new HttpClientHandler();
-    if (!string.IsNullOrWhiteSpace(sysConfig.LocalProxy))
-        handler.Proxy = new WebProxy(sysConfig.LocalProxy);
-    using var http = new HttpClient(handler) { Timeout = TimeSpan.FromMinutes(5) };
+    string proxyUsed;
+    HttpClient http;
+    try
+    {
+        http = CreateGitHubClient(out proxyUsed);
+    }
+    catch (Exception ex)
+    {
+        SetInstallProgress(id, new InstallProgress(id, "error", 0, files.Count, "", 0, null, ex.Message, true, false));
+        return Results.BadRequest(new InstallResult(false, logs, ex.Message));
+    }
+    using var httpDispose = http;
+    var proxyNote = proxyUsed.Length > 0 ? $"（经代理 {proxyUsed}）" : "";
 
     InstallProgress Fail(string phase, string msg, int idx = 0, string name = "")
     {
@@ -725,7 +793,7 @@ app.MapPost("/api/apps/{id}/install", async (string id) => {
         }
 
         var url = RepoRawBase + f.Path.TrimStart('/');
-        SetInstallProgress(id, new InstallProgress(id, "downloading", i + 1, files.Count, f.Name, 0, null, $"正在下载 {f.Name}", false, false));
+        SetInstallProgress(id, new InstallProgress(id, "downloading", i + 1, files.Count, f.Name, 0, null, $"正在下载 {f.Name}{proxyNote}", false, false));
 
         byte[] bytes;
         try
@@ -747,7 +815,7 @@ app.MapPost("/api/apps/{id}/install", async (string id) => {
                 if (now - lastTick >= 200)
                 {
                     lastTick = now;
-                    SetInstallProgress(id, new InstallProgress(id, "downloading", i + 1, files.Count, f.Name, received, total, $"正在下载 {f.Name}", false, false));
+                    SetInstallProgress(id, new InstallProgress(id, "downloading", i + 1, files.Count, f.Name, received, total, $"正在下载 {f.Name}{proxyNote}", false, false));
                 }
             }
             bytes = ms.ToArray();
@@ -755,8 +823,11 @@ app.MapPost("/api/apps/{id}/install", async (string id) => {
         }
         catch (Exception ex)
         {
-            Fail("error", $"下载失败 {f.Name}: {ex.Message}，已中止，未替换任何文件", i + 1, f.Name);
-            return Results.BadRequest(new InstallResult(false, logs, $"下载失败 {f.Name}: {ex.Message}，已中止，未替换任何文件"));
+            var hint = proxyUsed.Length > 0
+                ? $"（已尝试经代理 {proxyUsed}，可在「设置 → 全局更新代理」里检查）"
+                : "（当前为直连，若本机访问 GitHub 不畅，可在「设置 → 全局更新代理」里填代理）";
+            Fail("error", $"下载失败 {f.Name}: {ex.Message}{hint}，已中止，未替换任何文件", i + 1, f.Name);
+            return Results.BadRequest(new InstallResult(false, logs, $"下载失败 {f.Name}: {ex.Message}{hint}，已中止，未替换任何文件"));
         }
 
         string hash;

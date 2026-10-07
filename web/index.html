@@ -1976,11 +1976,24 @@
                     updateTimer = setInterval(checkUpdate, 300000);
                 };
 
+                // 商店清单：优先让服务端去取（路由器上的「全局更新代理」能连 GitHub），
+                // 服务端取不到时再退回浏览器直连（浏览器网络好、路由器不好的场景）
+                const fetchStoreApps = async () => {
+                    try {
+                        const r = await fetch(apiUrl('/api/store/apps'), { headers: { 'Authorization': token.value || '' } });
+                        if (r.ok) {
+                            const data = await r.json();
+                            if (Array.isArray(data) && data.length) return data;
+                        }
+                    } catch (e) { }
+                    const res = await fetch('https://raw.githubusercontent.com/fw867/unifi-softcenterstore/master/apps/apps.json?_t=' + Date.now(), { cache: 'no-store' });
+                    return await res.json();
+                };
+
                 const fetchOnlineStore = async () => {
                     isFetchingStore.value = true;
                     try {
-                        const res = await fetch('https://raw.githubusercontent.com/fw867/unifi-softcenterstore/master/apps/apps.json?_t=' + Date.now());
-                        onlineStore.value = await res.json();
+                        onlineStore.value = await fetchStoreApps();
                     } catch (e) { } finally {
                         isFetchingStore.value = false;
                         // 列表整段重绘后必须重跑 createIcons（双 nextTick 等 DOM patch 完成）
@@ -2003,9 +2016,7 @@
                     if (!confirm(`确定要从云端获取 "${app.name}" 的最新系统配置参数并覆盖本地吗？\n(注意：这只会更新系统运行参数，不会改变您的开机自启状态)`)) return;
 
                     try {
-                        const res = await fetch('https://raw.githubusercontent.com/fw867/unifi-softcenterstore/master/apps/apps.json?_t=' + Date.now(), { cache: 'no-store' });
-                        if (!res.ok) throw new Error('Network Error');
-                        const storeApps = await res.json();
+                        const storeApps = await fetchStoreApps();
 
                         const onlineApp = storeApps.find(a => (a.Id || a.id) === app.id);
                         if (!onlineApp) { alert(`云端库中未找到 "${app.name}" 的配置，可能已被移除或更名。`); return; }
