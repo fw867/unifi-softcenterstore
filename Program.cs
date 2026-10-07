@@ -925,19 +925,26 @@ app.MapGet("/api/apps/{id}/status_json", async (string id) => {
 
     if (!declared) return Results.NotFound(new { error = $"该插件未提供 {expected} 状态脚本" });
 
+    // 文件不存在/没执行权限时给出可操作的提示，别只丢一个 500
+    var statusScript = $"/data/softcenter/bin/{expected}";
+    if (!File.Exists(statusScript))
+        return Results.Problem(
+            $"状态脚本未安装：{statusScript}。请在应用商店里更新该插件（或点「从云端获取最新配置」重新同步）",
+            statusCode: 500);
+
     var stderr = "";
     string output;
     try {
         using var p = new Process {
             StartInfo = new ProcessStartInfo {
-                FileName = $"/data/softcenter/bin/{expected}",
+                FileName = statusScript,
                 Arguments = "--json",
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
                 UseShellExecute = false
             }
         };
-        if (!p.Start()) return Results.Problem("状态脚本启动失败");
+        if (!p.Start()) return Results.Problem("状态脚本启动失败（可能没有执行权限，应为 0755）");
         var stdoutTask = p.StandardOutput.ReadToEndAsync();
         var stderrTask = p.StandardError.ReadToEndAsync();
         var finished = await Task.WhenAny(p.WaitForExitAsync(), Task.Delay(20000));
@@ -948,11 +955,14 @@ app.MapGet("/api/apps/{id}/status_json", async (string id) => {
         output = (await stdoutTask).Trim();
         stderr = (await stderrTask).Trim();
     } catch (Exception ex) {
-        return Results.Problem($"状态脚本执行失败：{ex.Message}");
+        return Results.Problem($"状态脚本执行失败：{ex.Message}（确认 {statusScript} 存在且权限为 0755）");
     }
 
-    if (output.Length == 0 || output[0] != '{')
-        return Results.Problem("状态脚本没有返回 JSON" + (stderr.Length > 0 ? "：" + stderr : ""));
+    if (output.Length == 0 || output[0] != '{') {
+        var head = output.Length > 120 ? output.Substring(0, 120) : output;
+        return Results.Problem("状态脚本没有返回 JSON"
+            + (stderr.Length > 0 ? "：stderr=" + stderr : "：stdout=" + head));
+    }
 
     return Results.Text(output, "application/json");
 });
