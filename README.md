@@ -218,6 +218,22 @@ systemd 服务可用 `EnvironmentFile=/data/softcenter/config/<id>.env`。
 }
 ```
 
+#### `Files[]` 的可选字段 `InstallOnce`
+
+`Files` 的每一项都可以加 **`"InstallOnce": true`**（默认 `false`）：表示这个文件**装上过一次之后就不再覆盖**。
+
+适用场景是**自带升级通道的内核**（例如客户端能自己 `-u` 升级的二进制）：首次安装/首次更新正常下载，之后商店里的「更新」只会刷新脚本与配置，不会把客户端自己升上去的内核顶回仓库里的旧版本。若确实需要换内核，卸载后重装（或手工删掉该文件）即可——下一次安装发现文件不存在，会重新下载并校验。
+
+```jsonc
+{
+    "Name": "myapp-core",
+    "Path": "apps/myapp/myapp-linux-arm64",
+    "Sha256": "……",
+    "Mode": "0755",
+    "InstallOnce": true      // 只在文件不存在时安装，之后不再覆盖
+}
+```
+
 #### JSON 格式
 
 脚本 `--json` 时**只输出 JSON**（不要夹日志），下面每个字段都可省略，前端会补默认值：

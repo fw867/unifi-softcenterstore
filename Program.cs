@@ -783,6 +783,7 @@ app.MapPost("/api/apps/{id}/install", async (string id) => {
 
     // 阶段 1：全部下载 + SHA256 校验，任一失败则不写入任何文件
     var pending = new List<(AppFileItem File, byte[] Bytes, string Hash)>();
+    var skipped = 0;
     for (int i = 0; i < files.Count; i++)
     {
         var f = files[i];
@@ -790,6 +791,17 @@ app.MapPost("/api/apps/{id}/install", async (string id) => {
         {
             Fail("error", $"文件清单不完整: {f.Name}，已中止，未替换任何文件", i, f.Name);
             return Results.BadRequest(new InstallResult(false, logs, $"文件清单不完整: {f.Name}，已中止，未替换任何文件"));
+        }
+
+        // InstallOnce：自带升级通道的内核文件，装上过一次就不再覆盖，
+        // 免得商店更新把客户端自己升上去的版本顶回仓库里的旧版本
+        var destPath = Path.Combine(BinDir, f.Name.Replace('\\', '/'));
+        if (f.InstallOnce && File.Exists(destPath) && new FileInfo(destPath).Length > 0)
+        {
+            skipped++;
+            logs.Add($"跳过 {f.Name}：已存在，首次安装后不再覆盖");
+            SetInstallProgress(id, new InstallProgress(id, "downloading", i + 1, files.Count, f.Name, 0, null, $"{f.Name} 已存在，跳过（不再覆盖）", false, false));
+            continue;
         }
 
         var url = RepoRawBase + f.Path.TrimStart('/');
@@ -907,10 +919,10 @@ app.MapPost("/api/apps/{id}/install", async (string id) => {
         logs.Add($"已安装 {f.Name} → {dest}");
     }
 
-    if (pending.Count != files.Count)
+    if (pending.Count + skipped != files.Count)
     {
-        Fail("error", $"文件数量不完整（{pending.Count}/{files.Count}）");
-        return Results.BadRequest(new InstallResult(false, logs, $"文件数量不完整（{pending.Count}/{files.Count}）"));
+        Fail("error", $"文件数量不完整（{pending.Count + skipped}/{files.Count}）");
+        return Results.BadRequest(new InstallResult(false, logs, $"文件数量不完整（{pending.Count + skipped}/{files.Count}）"));
     }
 
     // 更新前在运行的插件，替换成功后拉回原状态
@@ -933,11 +945,13 @@ app.MapPost("/api/apps/{id}/install", async (string id) => {
         logs.Add("已按更新前状态重新启动插件");
     }
 
-    logs.Add($"全部 {pending.Count} 个文件下载、校验并替换成功");
-    var doneMsg = wasRunning
-        ? $"全部 {pending.Count} 个文件安装成功，已恢复运行"
-        : $"全部 {pending.Count} 个文件安装成功";
-    SetInstallProgress(id, new InstallProgress(id, "done", pending.Count, pending.Count, "", 0, null, doneMsg, true, true));
+    logs.Add($"处理完成：新装/替换 {pending.Count} 个，跳过 {skipped} 个（共 {files.Count} 个）");
+    var doneMsg = skipped > 0
+        ? $"安装成功：更新 {pending.Count} 个文件，跳过 {skipped} 个已存在的内核文件"
+        : (wasRunning
+            ? $"全部 {pending.Count} 个文件安装成功，已恢复运行"
+            : $"全部 {pending.Count} 个文件安装成功");
+    SetInstallProgress(id, new InstallProgress(id, "done", files.Count, files.Count, "", 0, null, doneMsg, true, true));
     return Results.Ok(new InstallResult(true, logs, null));
 });
 
@@ -1368,7 +1382,7 @@ app.Run($"http://0.0.0.0:{sysConfig.Port}");
 
 public record AppConfig { public int Port { get; set; } = 9958; public string AdminToken { get; set; } = "Your_Secret_Token_Here"; public string LocalProxy { get; set; } = ""; }
 public record AppEntity(string Id, string Name, string Type, string Icon, string StartCommand, string StopCommand, string StatusCommand, int IsAutoStart, bool IsRunning, string ConfigPath, string ConfigKeys, string LogPath, int SortOrder, string Version, string Description, string CustomCommands, string ConfigSchema = "", string Files = "[]");
-public record AppFileItem(string Name, string Path, string Sha256, string Mode = "0755");
+public record AppFileItem(string Name, string Path, string Sha256, string Mode = "0755", bool InstallOnce = false);
 public record InstallResult(bool Success, List<string>? Logs, string? Error);
 public record InstallProgress(string AppId, string Phase, int FileIndex, int FileCount, string FileName, long BytesReceived, long? TotalBytes, string? Message, bool Done, bool Success);
 public record SimpleSuccess(bool Success);
