@@ -355,7 +355,7 @@
             {
                 "Name": "xwall",
                 "Path": "apps/xwall/xwall",
-                "Sha256": "95a3e9ecffed48e59eee60a674a569a6743657a36e1a5557f86e407e46b3b925",
+                "Sha256": "c6b482d3d9be798221b41a5b574ddb161764cad60ec98b343180a4feb66a955c",
                 "Mode": "0755"
             },
             {
