@@ -19,6 +19,7 @@ apps/**/udm-le text eol=lf
 apps/**/wechat text eol=lf
 apps/**/xwall text eol=lf
 apps/**/fwclient text eol=lf
+apps/**/fwclient-status text eol=lf
 apps/**/xwall-* text eol=lf
 apps/**/fakehttp text eol=lf
 apps/**/fakehttp-dl text eol=lf
@@ -27,6 +28,7 @@ apps/**/fakesip-dl text eol=lf
 
 # 二进制核心，禁止换行转换
 apps/ddnsto/ddnsto-core binary
+apps/fwclient/fwclient-linux-arm64 binary
 
 ###############################################################################
 # Set default behavior for command prompt diff.

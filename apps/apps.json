@@ -1546,7 +1546,7 @@
         "Id": "fwclient",
         "Name": "内网穿透",
         "Type": "Binary Core",
-        "Version": "1.0.0",
+        "Version": "1.0.1",
         "Description": "内网穿透客户端：把局域网服务映射到你的私有服务端（需要私有服务器端；仅 arm64）",
         "Icon": "network",
         "StartCommand": "/data/softcenter/bin/fwclient start",
@@ -1555,8 +1555,8 @@
         "IsAutoStart": 1,
         "ConfigPath": "/data/softcenter/config/fwclient.env",
         "ConfigKeys": "",
-        "LogPath": "/var/log/fwclient.log",
-        "CustomCommands": "[{\"name\":\"查看版本\",\"command\":\"/data/softcenter/bin/fwclient-core -v\"},{\"name\":\"检查升级\",\"command\":\"/data/softcenter/bin/fwclient-core -u\"},{\"name\":\"查看运行日志\",\"command\":\"tail -n 120 /var/log/fwclient.log\"}]",
+        "LogPath": "/var/log/fwclient/fwclient.log",
+        "CustomCommands": "[{\"name\":\"查看版本\",\"command\":\"/data/softcenter/bin/fwclient-core -v\"},{\"name\":\"检查升级\",\"command\":\"/data/softcenter/bin/fwclient-core -u\"}]",
         "Files": [
             {
                 "Name": "fwclient-core",
@@ -1567,7 +1567,13 @@
             {
                 "Name": "fwclient",
                 "Path": "apps/fwclient/fwclient",
-                "Sha256": "64f46adb479b303bbcdd64f1704c1e109dd6075055ddc7ecf8b5782d21fcb6b1",
+                "Sha256": "005a47defb7ff34b4de23feae6048a6e9c8d7e749759a2ab118411d162d1c0f8",
+                "Mode": "0755"
+            },
+            {
+                "Name": "fwclient-status",
+                "Path": "apps/fwclient/fwclient-status",
+                "Sha256": "a07458af33363062f1f342b033c7c3890f61cd06e3eedfdc9a774dd555b0be37",
                 "Mode": "0755"
             }
         ],

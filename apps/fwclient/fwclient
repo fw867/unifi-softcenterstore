@@ -8,9 +8,10 @@
 #
 # 二进制：/data/softcenter/bin/fwclient-core（静态链接 arm64）
 # 原生参数：-s 网关域名 -t 令牌 -d（后台守护）｜-k 规范关闭｜-u 检查升级｜-v 版本｜-h 帮助
+# 二进制默认落盘位置：PID /run/fwclient/fwclient.pid，日志 /var/log/fwclient/fwclient.log
 #
 # 本脚本封装成面板需要的形式：
-#   start   校验配置 → -s/-t/-d 启动守护进程 → 确认进程并在 /var/run/fwclient.pid 记下 PID
+#   start   校验配置 → -s/-t/-d 启动守护进程 → 确认进程并记下 PID
 #   stop    优先用 -k 通知服务端断开；若 10 秒内没退出，回退 SIGTERM → SIGKILL
 #   status  输出 running pid=xxx / stopped（面板据此显示运行状态）
 #
@@ -25,15 +26,25 @@ CONFIG="/data/softcenter/config/fwclient.env"
 FWCLIENT_GATEWAY="${FWCLIENT_GATEWAY:-}"
 FWCLIENT_TOKEN="${FWCLIENT_TOKEN:-}"
 BIN="/data/softcenter/bin/fwclient-core"
-PIDFILE="/var/run/fwclient.pid"
-LOG="/var/log/fwclient.log"
+PIDFILE="/run/fwclient/fwclient.pid"
+LOG="/var/log/fwclient/fwclient.log"
+LOG_DIR="/var/log/fwclient"
+RUN_DIR="/run/fwclient"
 
 log_date() {
+	[ -d "$LOG_DIR" ] || mkdir -p "$LOG_DIR" 2>/dev/null
 	echo "【$(date '+%Y年%m月%d日 %X')】: $1" >> "$LOG"
 }
 
 # 进程是否在跑（返回 0/1）
+# 先认二进制自己写的 pid 文件：确认进程还在、且确实是本插件（防 pid 被复用）；
+# 再退回按可执行文件路径匹配，覆盖升级替换后 exe 变成 "xxx (deleted)" 的情况
 is_running() {
+	pid=$(cat "$PIDFILE" 2>/dev/null)
+	if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null \
+		&& [ "$(readlink "/proc/$pid/exe" 2>/dev/null)" = "$BIN" ]; then
+		return 0
+	fi
 	pid=$(pgrep -f "$BIN" 2>/dev/null | head -n 1)
 	[ -n "$pid" ]
 }
@@ -65,6 +76,7 @@ start_fwclient() {
 	while [ "$i" -lt 8 ]; do
 		pid=$(pgrep -f "$BIN" 2>/dev/null | head -n 1)
 		if [ -n "$pid" ]; then
+			[ -d "$RUN_DIR" ] || mkdir -p "$RUN_DIR" 2>/dev/null
 			echo "$pid" > "$PIDFILE"
 			log_date "fwclient 启动成功 PID=$pid"
 			echo "fwclient 已启动（PID $pid）"
