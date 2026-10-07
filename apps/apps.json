@@ -1561,7 +1561,7 @@
             {
                 "Name": "fwclient-core",
                 "Path": "apps/fwclient/fwclient-linux-arm64",
-                "Sha256": "33eab5282b9c709341cd95d4073e6d05900a76052c0f948bb119d014ef30cb97",
+                "Sha256": "e186ce35cbeb95ef81a16ca8e0a0b85cf89cdf35c9aa5991151e528d4ec49c0d",
                 "Mode": "0755"
             },
             {
