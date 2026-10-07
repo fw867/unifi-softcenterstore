@@ -181,6 +181,10 @@ build_xray_config() {
         1)
             proxy_domains='[
                 "geosite:gfw",
+                "geosite:openai",
+                "geosite:anthropic",
+                "geosite:github",
+                "geosite:bing",
                 "geosite:telegram",
                 "geosite:google",
                 "geosite:facebook",
