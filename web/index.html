@@ -528,7 +528,7 @@
                         <div v-else-if="onlineStore.length === 0"
                             class="glass rounded-3xl p-12 text-center text-gray-400">暂无云端应用，请检查网络或稍后刷新</div>
                         <div v-else class="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                            <div v-for="pkg in onlineStore" :key="pkg.id || pkg.Id"
+                            <div v-for="pkg in storeGroups.all" :key="pkg.id || pkg.Id"
                                 class="glass rounded-3xl p-5 flex items-center justify-between gap-4">
                                 <div class="flex items-start space-x-4 min-w-0">
                                     <div
@@ -1487,7 +1487,8 @@
                         await loadSystemInfo();
                         if (onlineStore.value.length === 0) fetchOnlineStore();
                     } else if (id === 'store') {
-                        if (onlineStore.value.length === 0) await fetchOnlineStore();
+                        // 每次切到应用商店都拉一次最新列表（正在拉取时跳过，避免重复请求）
+                        await fetchOnlineStore();
                     } else if (id === 'cron') {
                         await loadCronJobs();
                     } else if (id === 'settings') {
@@ -1591,6 +1592,16 @@
                 };
 
                 const getLocalApp = (id) => apps.value.find(a => a.id === id);
+
+                // 应用商店列表：未安装的排在最上面，已安装的接在后面（两组内部保持云端顺序）
+                const storeGroups = computed(() => {
+                    const notInstalled = [];
+                    const installed = [];
+                    for (const pkg of (onlineStore.value || [])) {
+                        (getLocalApp(pkg.id || pkg.Id) ? installed : notInstalled).push(pkg);
+                    }
+                    return { notInstalled, installed, all: notInstalled.concat(installed) };
+                });
 
                 // 基于 Pointer Events 的排序，避免 HTML5 DnD 在不同浏览器下的中断问题
                 const onHandlePointerDown = (e, index) => {
@@ -1991,6 +2002,7 @@
                 };
 
                 const fetchOnlineStore = async () => {
+                    if (isFetchingStore.value) return;   // 已有请求在飞，不重复拉
                     isFetchingStore.value = true;
                     try {
                         onlineStore.value = await fetchStoreApps();
@@ -2803,7 +2815,7 @@
                     schemaSections, fieldKey, fieldLabel, fieldType, fieldHelp, fieldPlaceholder, fieldRequired,
                     fieldMin, fieldMax, fieldRows, fieldMonospace, fieldOptions, isTruthy, switchLabel,
                     isFieldVisible, toggleSection, toggleSwitchField, multiSelected, toggleMulti, toggleAutoStartInModal,
-                    addTab, isFetchingStore, onlineStore, fetchOnlineStore, onNewAppIdChange, submitManualApp,
+                    addTab, isFetchingStore, onlineStore, storeGroups, fetchOnlineStore, onNewAppIdChange, submitManualApp,
                     newApp, logModalApp, logContent, isLoadingLogs, cronModalApp, newCronReq, hasUpdate, latestVersion, isUpgrading, upgradeLog, doUpgrade,
                     searchQuery, filteredApps, isDragging, dragFromIndex, dragOverIndex, ghostX, ghostY, dragGhostApp, onHandlePointerDown, getLocalApp, isNewerVersion, appUpdates, appHasUpdate, cloudVersionOf, deleteApp, toggleApp, restartApp, restartingAppId, saveAutoStart,
                     installApp, updateAppConfigFromCloud, updateAllApps, isUpdatingAll, updateAllProgress, installUi, installPercent, installPhaseLabel, formatBytes, showSystemLogs, showLogModal, refreshLogs, runCustomCommand, loadCronJobs, openConfig, saveAppConfig, showCronModal, submitCron, deleteCron,
