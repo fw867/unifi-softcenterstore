@@ -1,0 +1,764 @@
+#!/bin/sh
+
+# UniFi SoftCenter · SSH 管理
+#
+# 目标设备实测环境（UCG-Fiber / UniFi OS 5.x）：
+#   OpenSSH：/usr/sbin/sshd，服务 ssh.service
+#   /etc/ssh/sshd_config 第一行是：Include /etc/ssh/sshd_config.d/*.conf
+#     → 只写我们自己的 drop-in（99-softcenter-ssh.conf），不动 UniFi 的主配置；
+#       sshd 对同一选项取"先出现"的值，而 Include 在最前面，所以我们的设置能覆盖后面的主配置。
+#   主配置里没有 Port 行 → 写入一个 Port 就是替换默认 22（不会变成同时监听两个端口）。
+#   ⚠️ UsePAM yes 时，只关 PasswordAuthentication 并不能禁掉密码登录：
+#      必须同时关掉 KbdInteractiveAuthentication / ChallengeResponseAuthentication，
+#      所以"仅证书登录"会两个一起关。
+#
+# 面板配置：/data/softcenter/config/sshmanage.env
+#   SSH_PORT               登录端口（默认 22）
+#   SSH_AUTH_MODE          认证方式：password | password+key | key-only
+#   SSH_PASSWORD           登录密码（留空 = 不修改现有密码）
+#   SSH_AUTHORIZED_KEYS    公钥（每行一个；留空 = 不改动现有公钥）
+#   SSH_ALLOW_WAN          1/0 是否允许外网连接（自动放行防火墙）
+#   SSH_ALLOW_WAN_FROM     可选：只允许该来源 IP/网段（留空 = 任意来源）
+#   SSH_WATCH              1/0 是否启用重放守护（UniFi 会重建配置/防火墙）
+#
+# 动作：
+#   start        应用配置（探测 → 备份 → 写公钥/drop-in → sshd -t → 改密码 → 重启 → 验证监听 → 失败自动还原）
+#   stop         恢复 UniFi 默认（删 drop-in、删外网规则、重启 ssh）；绝不清空密码/公钥
+#   status       面板用：running/stopped（看 ssh.service 与端口监听）
+#   check        只读自检：探测环境、语法、护栏风险
+#   info         只读现状：端口、认证方式、公钥数、外网规则、重放守护
+#   rollback     手动恢复上一份备份
+#   restart-ssh  仅重启 SSH 服务
+#   watch-once   重放一次（供 systemd timer 调用）
+#
+# 注意：路由器 /bin/sh 是 busybox ash，只能用 POSIX 语法（不用 local / 数组 / [[ ]] / ${v//}）。
+
+PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+export PATH
+
+CONFIG="/data/softcenter/config/sshmanage.env"
+[ -f "$CONFIG" ] && . "$CONFIG"
+
+# 面板写 env 时含空格的值会加单引号、多行值存 b64:，这里都兼容；手写的未加引号值也能读
+raw_env_value() {
+	[ -f "$CONFIG" ] || return 0
+	sed -n "s/^$1=//p" "$CONFIG" 2>/dev/null | head -n 1 \
+		| sed -e "s/^'//" -e "s/'$//" -e 's/^"//' -e 's/"$//'
+}
+
+decode_b64() {
+	case "$1" in
+	b64:*) printf '%s' "${1#b64:}" | base64 -d 2>/dev/null ;;
+	*) printf '%s' "$1" ;;
+	esac
+}
+
+cfg() {
+	eval "v=\${$1:-}"
+	[ -n "$v" ] || v="$(raw_env_value "$1")"
+	[ -n "$v" ] || v="$2"
+	decode_b64 "$v"
+}
+
+SSH_PORT="$(cfg SSH_PORT 22)"
+SSH_AUTH_MODE="$(cfg SSH_AUTH_MODE password+key)"
+SSH_PASSWORD="$(cfg SSH_PASSWORD '')"
+SSH_AUTHORIZED_KEYS="$(cfg SSH_AUTHORIZED_KEYS '')"
+SSH_ALLOW_WAN="$(cfg SSH_ALLOW_WAN 0)"
+SSH_ALLOW_WAN_FROM="$(cfg SSH_ALLOW_WAN_FROM '')"
+SSH_WATCH="$(cfg SSH_WATCH 1)"
+
+BASE="/data/softcenter/sshmanage"
+BACKUP_DIR="$BASE/backup"
+RUN_DIR="/run/sshmanage"
+DROPIN="/etc/ssh/sshd_config.d/99-softcenter-ssh.conf"
+AUTHKEYS="/root/.ssh/authorized_keys"
+LOG="/var/log/sshmanage.log"
+UNIT="ssh.service"
+WATCH_SVC="/etc/systemd/system/sshmanage-watch.service"
+WATCH_TIMER="/etc/systemd/system/sshmanage-watch.timer"
+MARK="softcenter-sshmanage"
+KBD_KEY="KbdInteractiveAuthentication"
+
+log_date() {
+	echo "【$(date '+%Y年%m月%d日 %X')】: $1" >> "$LOG"
+}
+
+# ---------------- 基础探测 ----------------
+sshd_bin() {
+	if [ -x /usr/sbin/sshd ]; then
+		echo /usr/sbin/sshd
+	else
+		command -v sshd 2>/dev/null
+	fi
+}
+
+# sshd -T 输出生效配置（键名小写）；失败则返回非 0
+sshd_eff() {
+	bin="$(sshd_bin)"
+	[ -n "$bin" ] || return 1
+	"$bin" -T 2>/dev/null
+}
+
+eff_value() {
+	sshd_eff | awk -v k="$1" '$1==k {print $2; exit}'
+}
+
+eff_port() {
+	p="$(eff_value port)"
+	[ -n "$p" ] || p="22"
+	echo "$p"
+}
+
+# 只判断 root 口令是"已设置"还是"空/锁定"，不输出任何哈希内容
+root_hash_state() {
+	awk -F: '$1=="root"{ if ($2=="" || $2 ~ /^[!*]/) print "locked"; else print "set"; exit }' /etc/shadow 2>/dev/null
+}
+
+# ---------------- 公钥 ----------------
+count_keys() {
+	[ -f "$AUTHKEYS" ] || { echo 0; return; }
+	n="$(grep -cE '^(ssh-(rsa|ed25519|dss)|ecdsa-sha2-[^ ]+|sk-(ssh-ed25519|ecdsa-sha2-nistp256)@openssh\.com) ' "$AUTHKEYS" 2>/dev/null)"
+	[ -n "$n" ] || n=0
+	echo "$n"
+}
+
+# 传入文本里的合法公钥条数（用于"仅证书"护栏，避免写入前就算错）
+count_keys_in_text() {
+	[ -n "$SSH_AUTHORIZED_KEYS" ] || { echo 0; return; }
+	mkdir -p "$RUN_DIR" 2>/dev/null
+	printf '%s\n' "$SSH_AUTHORIZED_KEYS" > "$RUN_DIR/keys.in" 2>/dev/null || { echo "$SSH_AUTHORIZED_KEYS" | grep -cE '^(ssh-|ecdsa-|sk-)' 2>/dev/null; return 0; }
+	n=0
+	while IFS= read -r line; do
+		line="$(printf '%s' "$line" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+		[ -n "$line" ] || continue
+		case "$line" in \#*) continue ;; esac
+		case "$line" in
+		ssh-*|ecdsa-*|sk-*) n=$((n + 1)) ;;
+		esac
+	done < "$RUN_DIR/keys.in"
+	rm -f "$RUN_DIR/keys.in"
+	echo "$n"
+}
+
+# 写入公钥：留空表示不改动；逐行校验，只接受合法公钥行
+write_keys() {
+	[ -n "$SSH_AUTHORIZED_KEYS" ] || {
+		echo "公钥留空：保持现有公钥不变（当前 $(count_keys) 个）"
+		return 0
+	}
+	mkdir -p /root/.ssh || return 1
+	chmod 700 /root/.ssh 2>/dev/null
+
+	printf '%s\n' "$SSH_AUTHORIZED_KEYS" > "$RUN_DIR/keys.in" || return 1
+	tmp="$AUTHKEYS.tmp.$$"
+	: > "$tmp"
+	skip=0
+	while IFS= read -r line; do
+		line="$(printf '%s' "$line" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+		[ -n "$line" ] || continue
+		case "$line" in \#*) continue ;; esac
+		case "$line" in
+		ssh-*|ecdsa-*|sk-*) printf '%s\n' "$line" >> "$tmp" ;;
+		*) skip=$((skip + 1)) ;;
+		esac
+	done < "$RUN_DIR/keys.in"
+	rm -f "$RUN_DIR/keys.in"
+
+	if [ "$skip" -gt 0 ]; then
+		log_date "忽略了 $skip 行不合法的公钥"
+		echo "提示：忽略了 $skip 行不合法的公钥（只接受 ssh-* / ecdsa-* / sk-* 开头的行）"
+	fi
+	chmod 600 "$tmp" 2>/dev/null
+	chown root:root "$tmp" 2>/dev/null
+	mv "$tmp" "$AUTHKEYS" || return 1
+	echo "已写入公钥：$(count_keys) 个"
+}
+
+# ---------------- drop-in 配置 ----------------
+dropin_text() {
+	printf '# 由 SoftCenter「SSH 管理」维护；手工改动会被重放覆盖\n'
+	printf 'Port %s\n' "$SSH_PORT"
+	printf 'PermitRootLogin yes\n'
+	printf 'PubkeyAuthentication yes\n'
+	case "$SSH_AUTH_MODE" in
+	password)
+		printf 'PasswordAuthentication yes\n'
+		printf '%s yes\n' "$KBD_KEY"
+		;;
+	key-only)
+		printf 'PasswordAuthentication no\n'
+		printf '%s no\n' "$KBD_KEY"
+		;;
+	*)
+		printf 'PasswordAuthentication yes\n'
+		printf '%s yes\n' "$KBD_KEY"
+		;;
+	esac
+}
+
+# 写入并校验：sshd -t 不认新键名（老版本）时自动回退到 ChallengeResponseAuthentication
+write_dropin_checked() {
+	mkdir -p "$(dirname "$DROPIN")" 2>/dev/null
+	for k in KbdInteractiveAuthentication ChallengeResponseAuthentication; do
+		KBD_KEY="$k"
+		dropin_text > "$DROPIN" || return 1
+		out="$("$(sshd_bin)" -t 2>&1)"
+		if [ -z "$out" ]; then
+			KBD_KEY="$k"
+			return 0
+		fi
+		case "$out" in
+		*"Bad configuration option"*|*"Unsupported option"*) continue ;;
+		*)
+			printf '%s\n' "$out"
+			return 1
+			;;
+		esac
+	done
+	return 1
+}
+
+# 期望的认证生效值（want_pw / want_kbd）
+auth_want() {
+	case "$SSH_AUTH_MODE" in
+	key-only) want_pw=no; want_kbd=no ;;
+	*) want_pw=yes; want_kbd=yes ;;
+	esac
+}
+
+# 当前生效的认证值（auth_pw / auth_kbd；老版本 sshd 只有 ChallengeResponse 名字）
+auth_now() {
+	auth_pw="$(eff_value passwordauthentication)"
+	auth_kbd="$(eff_value kbdinteractiveauthentication)"
+	[ -n "$auth_kbd" ] || auth_kbd="$(eff_value challengeresponseauthentication)"
+}
+
+# 生效状态是否已经是目标状态
+auth_matches() {
+	auth_want
+	auth_now
+	[ "$auth_pw" = "$want_pw" ] && [ "$auth_kbd" = "$want_kbd" ]
+}
+
+# ---------------- 备份 / 还原 ----------------
+backup_now() {
+	mkdir -p "$BACKUP_DIR" "$RUN_DIR" || return 1
+	ts="$(date '+%Y%m%d-%H%M%S')"
+	dir="$BACKUP_DIR/$ts"
+	mkdir -p "$dir" || return 1
+	if [ -f "$DROPIN" ]; then
+		cp -p "$DROPIN" "$dir/dropin.conf" 2>/dev/null
+		echo present > "$dir/dropin.state"
+	else
+		echo absent > "$dir/dropin.state"
+	fi
+	[ -f "$AUTHKEYS" ] && cp -p "$AUTHKEYS" "$dir/authorized_keys" 2>/dev/null
+	[ -f /etc/ssh/sshd_config ] && cp -p /etc/ssh/sshd_config "$dir/sshd_config" 2>/dev/null
+	eff_port > "$dir/port" 2>/dev/null
+	printf '%s\n' "$dir" > "$RUN_DIR/last_backup"
+	echo "$dir"
+}
+
+last_backup_dir() {
+	cat "$RUN_DIR/last_backup" 2>/dev/null
+}
+
+restore_latest() {
+	dir="$(last_backup_dir)"
+	[ -n "$dir" ] && [ -d "$dir" ] || {
+		echo "没有可用备份"
+		return 1
+	}
+	if [ "$(cat "$dir/dropin.state" 2>/dev/null)" = "present" ]; then
+		cp -p "$dir/dropin.conf" "$DROPIN" 2>/dev/null
+	else
+		rm -f "$DROPIN"
+	fi
+	if [ -f "$dir/authorized_keys" ]; then
+		cp -p "$dir/authorized_keys" "$AUTHKEYS" 2>/dev/null
+		chmod 600 "$AUTHKEYS" 2>/dev/null
+	fi
+	if ! "$(sshd_bin)" -t 2>/dev/null; then
+		log_date "还原后 sshd -t 仍不通过，请人工检查 $dir"
+		echo "还原后配置校验仍不通过，详见 $LOG"
+		return 1
+	fi
+	echo "已恢复上一份配置：$dir"
+	log_date "已恢复上一份配置：$dir"
+}
+
+# ---------------- 密码 ----------------
+set_password() {
+	[ -n "$SSH_PASSWORD" ] || {
+		echo "密码留空：保持现有密码不变"
+		return 0
+	}
+	case "$SSH_PASSWORD" in
+	*:*)
+		echo "密码不能包含冒号（chpasswd 分隔符）"
+		return 1
+		;;
+	esac
+	if ! printf '%s:%s\n' root "$SSH_PASSWORD" | chpasswd 2>/dev/null; then
+		echo "设置密码失败（chpasswd 返回错误）"
+		return 1
+	fi
+	echo "已更新 root 登录密码"
+	log_date "已更新 root 登录密码（内容不记录）"
+	if [ "$(root_hash_state)" != "set" ]; then
+		echo "警告：写入后仍未检测到已设置的口令，请用当前会话确认"
+		log_date "警告：写入后 root 口令状态仍非 set"
+		return 1
+	fi
+}
+
+# ---------------- 防火墙（外网放行） ----------------
+wan_line() {
+	iptables -L INPUT -n --line-numbers 2>/dev/null | awk '/UBIOS_INPUT_JUMP/{print $1; exit}'
+}
+
+wan_open() {
+	port="$(eff_port)"
+	wan_close >/dev/null 2>&1
+	idx="$(wan_line)"
+	src=""
+	[ -n "$SSH_ALLOW_WAN_FROM" ] && src="-s $SSH_ALLOW_WAN_FROM"
+	if [ -n "$idx" ]; then
+		if ! iptables -I INPUT "$idx" -p tcp --dport "$port" $src -m comment --comment "$MARK" -j ACCEPT 2>/dev/null; then
+			# 内核没有 comment 模块时退回不带标记（删除时按规则原文匹配）
+			iptables -I INPUT "$idx" -p tcp --dport "$port" $src -j ACCEPT 2>/dev/null || {
+				echo "放行失败：无法插入 INPUT 规则"
+				return 1
+			}
+		fi
+	else
+		iptables -A INPUT -p tcp --dport "$port" $src -m comment --comment "$MARK" -j ACCEPT 2>/dev/null \
+			|| iptables -A INPUT -p tcp --dport "$port" $src -j ACCEPT 2>/dev/null \
+			|| { echo "放行失败：无法追加 INPUT 规则"; return 1; }
+	fi
+	echo "已放行外网访问 tcp/$port${SSH_ALLOW_WAN_FROM:+（仅来源 $SSH_ALLOW_WAN_FROM）}"
+	log_date "已放行外网 tcp/$port${SSH_ALLOW_WAN_FROM:+ 来源 $SSH_ALLOW_WAN_FROM}"
+}
+
+wan_close() {
+	port="$(eff_port)"
+	for spec in "-m comment --comment $MARK" ""; do
+		while iptables -D INPUT -p tcp --dport "$port" $spec -j ACCEPT 2>/dev/null; do :; done
+		[ -n "$SSH_ALLOW_WAN_FROM" ] && while iptables -D INPUT -p tcp --dport "$port" -s "$SSH_ALLOW_WAN_FROM" $spec -j ACCEPT 2>/dev/null; do :; done
+	done
+	return 0
+}
+
+wan_state() {
+	port="$(eff_port)"
+	if iptables -S INPUT 2>/dev/null | grep -q -- "--dport $port .*ACCEPT"; then echo on; else echo off; fi
+}
+
+# ---------------- 监听 / 服务 ----------------
+port_listening() {
+	[ -n "$1" ] || return 1
+	if command -v ss >/dev/null 2>&1; then
+		ss -ltn 2>/dev/null | awk -v p=":$1" '$1=="LISTEN" && $4 ~ p"$" {found=1} END {exit !found}'
+	elif command -v netstat >/dev/null 2>&1; then
+		netstat -ltn 2>/dev/null | awk -v p=":$1" '$1=="tcp" && $4 ~ p"$" {found=1} END {exit !found}'
+	else
+		return 0   # 没有工具就不阻塞流程
+	fi
+}
+
+ssh_restart() {
+	systemctl restart "$UNIT" 2>/dev/null || {
+		log_date "systemctl restart $UNIT 失败"
+		return 1
+	}
+	sleep 2
+	return 0
+}
+
+# ---------------- 重放守护 ----------------
+install_watch() {
+	cat > "$WATCH_SVC" <<EOF
+[Unit]
+Description=SoftCenter SSH 管理·重放守护（UniFi 会重建 ssh 配置与防火墙）
+
+[Service]
+Type=oneshot
+ExecStart=/data/softcenter/bin/sshmanage watch-once
+EOF
+	cat > "$WATCH_TIMER" <<EOF
+[Unit]
+Description=SoftCenter SSH 管理·重放定时器
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=2min
+
+[Install]
+WantedBy=timers.target
+EOF
+	systemctl daemon-reload 2>/dev/null
+	systemctl enable --now sshmanage-watch.timer >/dev/null 2>&1
+	echo "已启用重放守护（每 2 分钟核对一次配置与防火墙规则）"
+}
+
+remove_watch() {
+	systemctl disable --now sshmanage-watch.timer >/dev/null 2>&1
+	rm -f "$WATCH_SVC" "$WATCH_TIMER"
+	systemctl daemon-reload 2>/dev/null
+	return 0
+}
+
+watch_once() {
+	changed=0
+	if [ -f "$DROPIN" ]; then
+		if ! write_dropin_checked >/dev/null 2>&1; then
+			log_date "重放：drop-in 写入/校验失败"
+		elif [ "$(eff_port)" != "$SSH_PORT" ] || ! port_listening "$(eff_port)"; then
+			changed=1
+		fi
+	fi
+	# 配置被 UniFi 重建（drop-in 消失）时也重新写回
+	if [ ! -f "$DROPIN" ] && [ "$(eff_port)" != "$SSH_PORT" ]; then
+		write_dropin_checked >/dev/null 2>&1 && changed=1
+	fi
+	if [ "$changed" = "1" ]; then
+		log_date "重放：检测到配置被改，重新应用并重启 ssh"
+		ssh_restart >/dev/null 2>&1
+	fi
+	if [ "$SSH_ALLOW_WAN" = "1" ] && [ "$(wan_state)" = "off" ]; then
+		wan_open >/dev/null 2>&1 && log_date "重放：外网放行规则被清，已补回"
+	fi
+	return 0
+}
+
+# ---------------- 只读自检 / 现状 ----------------
+check_all() {
+	rc=0
+	echo "SSH 管理·只读自检"
+	echo "----------------------------------------"
+	if [ "$(id -u)" = "0" ]; then
+		echo "  [ OK ] 以 root 运行"
+	else
+		echo "  [FAIL] 需要 root 才能读写 /etc/ssh 与防火墙"
+		rc=1
+	fi
+	bin="$(sshd_bin)"
+	if [ -n "$bin" ] && [ -x "$bin" ]; then
+		echo "  [ OK ] 找到 sshd：$bin"
+	else
+		echo "  [FAIL] 没找到 sshd（本插件只支持 UniFi OS 的 OpenSSH）"
+		rc=1
+	fi
+	if [ -d /etc/ssh/sshd_config.d ]; then
+		echo "  [ OK ] 支持 drop-in：/etc/ssh/sshd_config.d（已有 $(ls -1 /etc/ssh/sshd_config.d/*.conf 2>/dev/null | wc -l | tr -d ' ') 个 .conf）"
+	else
+		echo "  [warn] 没有 /etc/ssh/sshd_config.d，将直接改主配置（风险更高）"
+	fi
+	if [ -n "$bin" ]; then
+		out="$("$bin" -t 2>&1)"
+		[ -z "$out" ] && echo "  [ OK ] 当前配置语法通过（sshd -t）" || { echo "  [FAIL] 当前配置语法不通过："; printf '%s\n' "$out" | head -n 3; rc=1; }
+		echo "  [info] 生效端口：$(eff_port)"
+		echo "  [info] 生效 PasswordAuthentication：$(eff_value passwordauthentication)"
+		echo "  [info] 生效 KbdInteractiveAuthentication：$(eff_value kbdinteractiveauthentication)"
+		echo "  [info] 生效 ChallengeResponseAuthentication：$(eff_value challengeresponseauthentication)"
+	fi
+	if [ -f "$DROPIN" ]; then
+		echo "  [info] 已存在我们的 drop-in：$DROPIN"
+	else
+		echo "  [info] 尚未写入 drop-in（未接管）"
+	fi
+	echo "  [info] 现有公钥：$(count_keys) 个（$AUTHKEYS）"
+	[ "$(count_keys)" = "0" ] && echo "  [warn] 目前没有任何公钥：切到「仅证书登录」会被拒绝（这是故意的护栏）"
+	if command -v chpasswd >/dev/null 2>&1; then
+		echo "  [ OK ] chpasswd 可用（改密码用）"
+	else
+		echo "  [FAIL] 没有 chpasswd，无法改密码"
+		rc=1
+	fi
+	if command -v iptables >/dev/null 2>&1; then
+		echo "  [ OK ] iptables 可用；INPUT 结构："
+		iptables -L INPUT -n --line-numbers 2>/dev/null | head -n 6 | sed 's/^/         /'
+	else
+		echo "  [warn] 没有 iptables：外网开关无法生效"
+	fi
+	echo "  [info] root 口令状态：$(root_hash_state)"
+	echo "----------------------------------------"
+	[ "$rc" = "0" ] && echo "结果：可以接管" || echo "结果：存在问题，见上面 [FAIL]"
+	return "$rc"
+}
+
+info() {
+	echo "SSH 管理·现状"
+	echo "----------------------------------------"
+	echo "服务状态    : $(systemctl is-active "$UNIT" 2>/dev/null)"
+	echo "生效端口    : $(eff_port)"
+	echo "监听检查    : $(port_listening "$(eff_port)" && echo 在监听 || echo 未在监听)"
+	echo "PasswordAuth: $(eff_value passwordauthentication)"
+	echo "KbdInteractive: $(eff_value kbdinteractiveauthentication)"
+	echo "ChallengeResp : $(eff_value challengeresponseauthentication)"
+	echo "PubkeyAuth  : $(eff_value pubkeyauthentication)"
+	echo "公钥数量    : $(count_keys) 个"
+	echo "外网放行    : $(wan_state)"
+	echo "重放守护    : $(systemctl is-active sshmanage-watch.timer 2>/dev/null)"
+	echo "drop-in     : $([ -f "$DROPIN" ] && echo 已写入 || echo 无)"
+	echo "最近备份    : $(last_backup_dir)"
+	echo "----------------------------------------"
+	echo "[提示] 改端口/重启 ssh 不会踢掉已建立的会话；操作时留住当前会话即可随时改回。"
+}
+
+# ---------------- 主流程 ----------------
+validate_inputs() {
+	case "$SSH_PORT" in
+	''|*[!0-9]*) echo "端口必须是数字：$SSH_PORT"; return 1 ;;
+	esac
+	if [ "$SSH_PORT" -lt 1 ] || [ "$SSH_PORT" -gt 65535 ]; then
+		echo "端口必须在 1-65535：$SSH_PORT"
+		return 1
+	fi
+	case "$SSH_AUTH_MODE" in
+	password|password+key|key-only) ;;
+	*) echo "认证方式无效：$SSH_AUTH_MODE（应为 password / password+key / key-only）"; return 1 ;;
+	esac
+	return 0
+}
+
+start_service() {
+	[ "$(id -u)" = "0" ] || { echo "需要 root 权限"; exit 1; }
+	[ -n "$(sshd_bin)" ] || { echo "没找到 sshd：本插件只支持 UniFi OS 的 OpenSSH"; exit 1; }
+	mkdir -p "$RUN_DIR" "$BACKUP_DIR" 2>/dev/null
+	validate_inputs || exit 1
+
+	# 护栏 1：仅证书登录必须有公钥（本次传入的，或已存在的）
+	if [ "$SSH_AUTH_MODE" = "key-only" ]; then
+		if [ -n "$SSH_AUTHORIZED_KEYS" ]; then
+			k="$(count_keys_in_text)"
+		else
+			k="$(count_keys)"
+		fi
+		if [ "$k" -lt 1 ] 2>/dev/null || [ "$k" = "0" ]; then
+			echo
+			echo "拒绝应用：认证方式选了「仅证书登录」，但没有任何可用公钥。"
+			echo "  请先在「公钥」里粘贴至少一个公钥（cat ~/.ssh/id_ed25519.pub），再点保存并重启服务。"
+			echo "  —— 这是防止你把 SSH 彻底锁死的护栏。"
+			log_date "拒绝应用：仅证书登录但公钥数为 0"
+			exit 1
+		fi
+	fi
+
+	# 护栏 2：要开密码登录，但系统口令是空/锁定，且本次没给新密码
+	if [ "$SSH_AUTH_MODE" != "key-only" ] && [ -z "$SSH_PASSWORD" ] && [ "$(root_hash_state)" = "locked" ]; then
+		echo
+		echo "拒绝应用：要开启密码登录，但系统里 root 口令是空/锁定状态，而本次没有填写新密码。"
+		echo "  请在「登录密码」里填一个密码，或改用「密码+证书 / 仅证书」。"
+		log_date "拒绝应用：口令锁定且未提供新密码"
+		exit 1
+	fi
+
+	echo "备份当前配置..."
+	backup_now >/dev/null || { echo "备份失败，已中止（不改动任何东西）"; exit 1; }
+
+	echo "写入公钥..."
+	write_keys || { echo "写入公钥失败，已中止"; exit 1; }
+
+	# 幂等：drop-in 已是目标内容、端口与四项认证生效值都已对得上 → 不写文件也不重启
+	# （开机自启、重复点"保存并重启服务"时避免无谓断开）
+	skip_apply=0
+	KBD_KEY="KbdInteractiveAuthentication"
+	dropin_text > "$RUN_DIR/dropin.new" 2>/dev/null
+	if [ -f "$DROPIN" ] && cmp -s "$DROPIN" "$RUN_DIR/dropin.new" && [ -z "$SSH_PASSWORD" ] \
+		&& [ "$(eff_port)" = "$SSH_PORT" ] && auth_matches; then
+		skip_apply=1
+		echo "配置已经是目标状态：跳过写入与重启（仅核对防火墙与守护）"
+	fi
+
+	if [ "$skip_apply" = "0" ]; then
+	echo "写入 SSH 配置（drop-in）并校验..."
+	if ! write_dropin_checked; then
+		echo "配置校验失败，正在还原上一份配置..."
+		restore_latest
+		log_date "drop-in 校验失败，已还原"
+		exit 1
+	fi
+
+	if ! set_password; then
+		echo "设置密码失败，正在还原上一份配置..."
+		restore_latest
+		systemctl restart "$UNIT" >/dev/null 2>&1
+		log_date "设置密码失败，已还原"
+		exit 1
+	fi
+
+	fi
+
+	old_port="$(eff_port)"
+	if [ "$skip_apply" = "1" ]; then
+		new_port="$old_port"
+	else
+	echo "重启 SSH 服务（已建立的会话不会断开）..."
+	if ! ssh_restart; then
+		echo "重启失败，正在还原..."
+		restore_latest
+		systemctl restart "$UNIT" >/dev/null 2>&1
+		exit 1
+	fi
+
+	new_port="$(eff_port)"
+	[ -n "$new_port" ] || new_port="$SSH_PORT"
+	if ! port_listening "$new_port"; then
+		echo
+		echo "新端口 $new_port 没有在监听，正在自动还原上一份配置..."
+		restore_latest
+		systemctl restart "$UNIT" >/dev/null 2>&1
+		sleep 2
+		if port_listening "$old_port"; then
+			echo "已恢复原状（端口 $old_port）。请用当前会话检查后再试。"
+			log_date "新端口未监听，已还原到 $old_port"
+		else
+			echo "⚠️ 还原后 $old_port 也未见监听：请立刻在当前 SSH 会话里执行 systemctl status $UNIT 检查"
+			log_date "⚠️ 还原后仍未监听"
+		fi
+		exit 1
+	fi
+
+	# 核对生效的认证值：sshd 对同一选项取"先出现"的值，若没被我们的 drop-in 覆盖就会与预期不符。
+	# 不符时必须回滚——否则可能出现"以为开了密码登录、其实没开"（又没公钥）的锁死局面。
+	auth_pw="$(eff_value passwordauthentication)"
+	auth_kbd="$(eff_value kbdinteractiveauthentication)"
+	[ -n "$auth_kbd" ] || auth_kbd="$(eff_value challengeresponseauthentication)"
+	case "$SSH_AUTH_MODE" in
+	key-only) want_pw=no; want_kbd=no ;;
+	*) want_pw=yes; want_kbd=yes ;;
+	esac
+	if [ "$auth_pw" != "$want_pw" ] || [ "$auth_kbd" != "$want_kbd" ]; then
+		echo
+		echo "生效认证与预期不一致，正在自动还原："
+		echo "  期望 PasswordAuthentication=$want_pw / KbdInteractive=$want_kbd"
+		echo "  实际 PasswordAuthentication=$auth_pw / KbdInteractive=$auth_kbd"
+		restore_latest
+		systemctl restart "$UNIT" >/dev/null 2>&1
+		log_date "认证生效值与预期不符（期望 $want_pw/$want_kbd，实际 $auth_pw/$auth_kbd），已还原"
+		exit 1
+	fi
+
+	fi
+
+	if [ "$SSH_ALLOW_WAN" = "1" ]; then
+		wan_open || echo "警告：外网放行失败（SSH 本身已生效）"
+	else
+		wan_close
+		echo "外网连接：已关闭（如需外网登录请打开开关）"
+	fi
+
+	if [ "$SSH_WATCH" = "1" ]; then
+		install_watch
+	else
+		remove_watch
+		echo "重放守护：已关闭"
+	fi
+
+	echo
+	echo "应用完成："
+	echo "  端口      : $new_port（原 $old_port）"
+	echo "  认证方式  : $SSH_AUTH_MODE（生效 PasswordAuth=$auth_pw / KbdInteractive=$auth_kbd）"
+	echo "  公钥数量  : $(count_keys) 个"
+	echo "  外网放行  : $(wan_state)"
+	echo "  重放守护  : $(systemctl is-active sshmanage-watch.timer 2>/dev/null)"
+	echo
+	echo "提示：请立刻用新端口开一个新会话验证（例如 ssh -p $new_port root@<网关IP>）；"
+	echo "      当前这个会话不要关，验证通过再关。"
+	log_date "应用完成：端口=$new_port 认证=$SSH_AUTH_MODE 公钥=$(count_keys) 外网=$(wan_state)"
+}
+
+stop_service() {
+	[ "$(id -u)" = "0" ] || { echo "需要 root 权限"; exit 1; }
+	echo "恢复 UniFi 默认 SSH 配置（密码与公钥都会保留）..."
+	backup_now >/dev/null 2>&1
+	remove_watch
+	wan_close
+	rm -f "$DROPIN"
+	if ! "$(sshd_bin)" -t 2>/dev/null; then
+		echo "移除配置后语法不通过，正在还原..."
+		restore_latest
+		systemctl restart "$UNIT" >/dev/null 2>&1
+		exit 1
+	fi
+	systemctl restart "$UNIT" >/dev/null 2>&1
+	sleep 2
+	port="$(eff_port)"
+	[ -n "$port" ] || port=22
+	if port_listening "$port"; then
+		echo "已恢复 UniFi 默认：端口 $port，认证回到系统默认（密码与公钥未清空）"
+		log_date "已恢复默认：端口=$port"
+	else
+		echo "⚠️ 恢复后端口 $port 未监听，请用当前会话检查 systemctl status $UNIT"
+		log_date "⚠️ 恢复默认后未监听"
+		exit 1
+	fi
+}
+
+status_service() {
+	if systemctl is-active --quiet "$UNIT" 2>/dev/null; then
+		p="$(eff_port)"
+		if port_listening "$p"; then
+			echo "running port=$p"
+			exit 0
+		fi
+		echo "running but not listening on $p"
+		exit 1
+	fi
+	echo "stopped"
+	exit 1
+}
+
+rollback_service() {
+	[ "$(id -u)" = "0" ] || { echo "需要 root 权限"; exit 1; }
+	restore_latest || exit 1
+	systemctl restart "$UNIT" >/dev/null 2>&1
+	sleep 2
+	port="$(eff_port)"
+	if port_listening "$port"; then
+		echo "回滚后端口 $port 正常监听"
+	else
+		echo "⚠️ 回滚后端口 $port 未监听，请用当前会话检查"
+		exit 1
+	fi
+}
+
+case "${1:-}" in
+start)
+	start_service
+	;;
+stop)
+	stop_service
+	;;
+restart)
+	stop_service
+	sleep 1
+	start_service
+	;;
+status)
+	status_service
+	;;
+check)
+	check_all
+	;;
+info)
+	info
+	;;
+rollback)
+	rollback_service
+	;;
+restart-ssh)
+	ssh_restart && echo "SSH 服务已重启（端口 $(eff_port)）"
+	;;
+watch-once)
+	watch_once
+	;;
+*)
+	echo "Usage: $0 {start|stop|restart|status|check|info|rollback|restart-ssh|watch-once}"
+	echo "  start  应用面板配置    stop  恢复 UniFi 默认"
+	echo "  check  只读自检        info  只读现状     rollback  恢复上一份备份"
+	exit 1
+	;;
+esac

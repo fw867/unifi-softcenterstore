@@ -2059,5 +2059,103 @@
             ]
         },
         "CustomCommands": "[{\"name\":\"查看状态\",\"command\":\"/data/unifi-blocklist/blocklist.sh status\"},{\"name\":\"立即更新列表\",\"command\":\"systemctl start --no-block unifi-blocklist-update.service; echo 已触发更新，约 1 分钟后点「查看状态」确认\"},{\"name\":\"兼容性自检\",\"command\":\"/data/unifi-blocklist/blocklist.sh check\"},{\"name\":\"查看分类\",\"command\":\"/data/unifi-blocklist/blocklist.sh categories\"},{\"name\":\"查看版本\",\"command\":\"/data/unifi-blocklist/blocklist.sh version\"},{\"name\":\"升级上游脚本\",\"command\":\"/data/unifi-blocklist/blocklist.sh upgrade\"},{\"name\":\"查看日志\",\"command\":\"journalctl -u unifi-blocklist-update.service -n 40 --no-pager; tail -n 20 /var/log/unifi-blocklist.log\"}]"
+    },
+    {
+        "Id": "sshmanage",
+        "Name": "SSH 管理",
+        "Type": "Shell Script",
+        "Version": "1.0.0",
+        "Description": "管理网关 SSH：改端口、密码/证书认证、外网放行（含护栏与失败自动还原）",
+        "Icon": "terminal-square",
+        "StartCommand": "/data/softcenter/bin/sshmanage start",
+        "StopCommand": "/data/softcenter/bin/sshmanage stop",
+        "StatusCommand": "/data/softcenter/bin/sshmanage status",
+        "IsAutoStart": 1,
+        "ConfigPath": "/data/softcenter/config/sshmanage.env",
+        "ConfigKeys": "",
+        "LogPath": "/var/log/sshmanage.log",
+        "Files": [
+            {
+                "Name": "sshmanage",
+                "Path": "apps/sshmanage/sshmanage",
+                "Sha256": "21805b58d7de0d9888cd2b97d93958991bc1baa7b1f6dc553c822bd916e4db4d",
+                "Mode": "0755"
+            }
+        ],
+        "ConfigSchema": {
+            "Sections": [
+                {
+                    "Title": "SSH 设置",
+                    "Fields": [
+                        {
+                            "Key": "SSH_PORT",
+                            "Label": "SSH 端口",
+                            "Type": "port",
+                            "Default": "22",
+                            "Help": "改完会自动重启 SSH 并按新端口放行；面板会核对生效端口，起不来会自动还原。改之前请留一个已建立的 SSH 会话别关，那是你的退路"
+                        },
+                        {
+                            "Key": "SSH_AUTH_MODE",
+                            "Label": "认证方式",
+                            "Type": "select",
+                            "Default": "password+key",
+                            "Options": [
+                                {
+                                    "Label": "仅密码",
+                                    "Value": "password"
+                                },
+                                {
+                                    "Label": "密码 + 证书（推荐）",
+                                    "Value": "password+key"
+                                },
+                                {
+                                    "Label": "仅证书（公钥，需先装好公钥）",
+                                    "Value": "key-only"
+                                }
+                            ],
+                            "Help": "注意：本机 sshd 是 UsePAM 模式，只关 PasswordAuthentication 挡不住密码登录；选「仅证书」时插件会同时关掉 KbdInteractive/ChallengeResponse，并在公钥数为 0 时拒绝应用"
+                        },
+                        {
+                            "Key": "SSH_PASSWORD",
+                            "Label": "登录密码",
+                            "Type": "password",
+                            "Default": "",
+                            "Help": "留空 = 不修改现有密码。写入走 chpasswd（只改系统口令），内容不会写进日志或配置；建议装好后立刻换掉在别处暴露过的旧密码"
+                        },
+                        {
+                            "Key": "SSH_AUTHORIZED_KEYS",
+                            "Label": "登录公钥",
+                            "Type": "textarea",
+                            "Default": "",
+                            "Rows": 4,
+                            "Help": "每行一个公钥（ssh-ed25519 / ssh-rsa / ecdsa-* 开头），写入 /root/.ssh/authorized_keys（权限 700/600）；留空 = 不改动现有公钥。本地公钥用 cat ~/.ssh/id_ed25519.pub 查看"
+                        },
+                        {
+                            "Key": "SSH_ALLOW_WAN",
+                            "Label": "允许外网连接",
+                            "Type": "switch",
+                            "Default": "0",
+                            "Help": "开启后在防火墙 INPUT 的 UBIOS 链之前插入放行规则（不绕过 UniFi 的 ALIEN/TOR 拦截），只删自己插的那条。光猫/上层路由若有 NAT，还需在那边做端口映射"
+                        },
+                        {
+                            "Key": "SSH_ALLOW_WAN_FROM",
+                            "Label": "仅允许来源（可选）",
+                            "Type": "text",
+                            "Default": "",
+                            "Placeholder": "1.2.3.4 或 1.2.3.0/24",
+                            "Help": "留空 = 任意来源都能连；填了就只放行这个 IP/网段（更安全，建议填）"
+                        },
+                        {
+                            "Key": "SSH_WATCH",
+                            "Label": "配置重放守护",
+                            "Type": "switch",
+                            "Default": "1",
+                            "Help": "UniFi 会按自己的模板重建 ssh 配置与防火墙规则；开启后每 2 分钟核对一次并把我们的设置补回去"
+                        }
+                    ]
+                }
+            ]
+        },
+        "CustomCommands": "[{\"name\":\"查看 SSH 现状\",\"command\":\"/data/softcenter/bin/sshmanage info\"},{\"name\":\"兼容性自检\",\"command\":\"/data/softcenter/bin/sshmanage check\"},{\"name\":\"重启 SSH 服务\",\"command\":\"/data/softcenter/bin/sshmanage restart-ssh\"},{\"name\":\"恢复上一份配置\",\"command\":\"/data/softcenter/bin/sshmanage rollback\"},{\"name\":\"查看日志\",\"command\":\"tail -n 60 /var/log/sshmanage.log\"}]"
     }
 ]
