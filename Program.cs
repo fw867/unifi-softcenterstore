@@ -515,6 +515,32 @@ static string? ValidateConfigValue(JsonElement field, string value)
     return null;
 }
 
+// multi-select 规范化：按逗号/空白拆分，只保留 Options 里声明过的选项，去重后统一用逗号连接
+static string NormalizeMultiSelect(JsonElement field, string value)
+{
+    var allowed = new List<string>();
+    if (field.TryGetProperty("Options", out var options) || field.TryGetProperty("options", out options))
+    {
+        if (options.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var opt in options.EnumerateArray())
+            {
+                var ov = JsonGetString(opt, "Value");
+                if (string.IsNullOrEmpty(ov)) ov = JsonGetString(opt, "value");
+                if (!string.IsNullOrEmpty(ov)) allowed.Add(ov);
+            }
+        }
+    }
+    var kept = new List<string>();
+    foreach (var part in (value ?? "").Split(new[] { ',', ' ', '\t', '\n', '\r' },
+        StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+    {
+        if (allowed.Count > 0 && !allowed.Contains(part)) continue;   // 未声明的选项直接丢掉，不再判为非法
+        if (!kept.Contains(part)) kept.Add(part);
+    }
+    return string.Join(",", kept);
+}
+
 static string EnvQuote(string value)
 {
     if (string.IsNullOrEmpty(value)) return "";
@@ -1160,6 +1186,9 @@ app.MapPost("/api/apps/{id}/config", async (string id, Dictionary<string, string
                 payload.TryGetValue(key, out var raw);
                 var value = raw ?? JsonGetString(field, "Default");
                 if (type == "switch") value = NormalizeSwitch(value);
+                // multi-select 的历史值可能是空格分隔、或含已下线的选项（例如选项被拆到别的字段）：
+                // 先规范化成"只含合法选项、逗号分隔"，再校验，避免旧配置直接存不进去
+                if (type == "multi-select") value = NormalizeMultiSelect(field, value);
                 var err = ValidateConfigValue(field, value);
                 if (err != null) errors[key] = err;
                 else normalized[key] = value;

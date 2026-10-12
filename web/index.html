@@ -2558,6 +2558,33 @@
                             ? String(vals[k])
                             : (def !== undefined && def !== null ? String(def) : '');
                         if (fieldType(f) === 'switch') merged[k] = isTruthy(merged[k]) ? '1' : '0';
+
+                    }
+
+                    // 兼容旧配置：多选字段的历史值可能是空格分隔，甚至带着已经拆到别的字段的选项；
+                    // 这里统一成"只含合法选项、逗号分隔"，并把掉出来的值迁移到同名 select（它还是默认值时）
+                    for (const f of allSchemaFields.value) {
+                        if (fieldType(f) !== 'multi-select') continue;
+                        const k = fieldKey(f);
+                        const opts = fieldOptions(f).map(o => o.value);
+                        const keep = [];
+                        const drop = [];
+                        for (const part of String(merged[k] || '').split(/[\s,]+/).filter(Boolean)) {
+                            (opts.includes(part) ? keep : drop).push(part);
+                        }
+                        merged[k] = [...new Set(keep)].join(',');
+                        for (const d of drop) {
+                            for (const other of allSchemaFields.value) {
+                                if (fieldType(other) !== 'select') continue;
+                                const ok = fieldKey(other);
+                                const otherOpts = fieldOptions(other).map(o => o.value);
+                                const def = String(pick(other, 'Default', 'default') ?? '');
+                                if (!otherOpts.includes(d)) continue;
+                                if (String(merged[ok] ?? '') !== def) continue;
+                                merged[ok] = d;
+                                break;
+                            }
+                        }
                     }
                     for (const k in vals) {
                         if (merged[k] === undefined) merged[k] = String(vals[k]);
