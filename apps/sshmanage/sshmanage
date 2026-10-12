@@ -71,13 +71,19 @@ SSH_WATCH="$(cfg SSH_WATCH 1)"
 BASE="/data/softcenter/sshmanage"
 BACKUP_DIR="$BASE/backup"
 RUN_DIR="/run/sshmanage"
-DROPIN="/etc/ssh/sshd_config.d/99-softcenter-ssh.conf"
+DROPIN="/etc/ssh/sshd_config.d/00-softcenter-ssh.conf"      # 00-：万一以后目录里有别人的文件，我们排最前
+DROPIN_OLD="/etc/ssh/sshd_config.d/99-softcenter-ssh.conf"  # 旧命名，启动时清理（只删带我校验标记的）
+DROPIN_DIR="/etc/ssh/sshd_config.d"
+SSHD_CONF="/etc/ssh/sshd_config"                            # 主配置（真机实测：布尔项必须改这里才生效）
+MAIN_EDITS="$BASE/state/main_edits"                         # 记录改过的主配置行，供 stop 精确撤销
+MARK_COMMENT="softcenter-sshmanage"                         # 行尾标记
 AUTHKEYS="/root/.ssh/authorized_keys"
 LOG="/var/log/sshmanage.log"
 UNIT="ssh.service"
 WATCH_SVC="/etc/systemd/system/sshmanage-watch.service"
 WATCH_TIMER="/etc/systemd/system/sshmanage-watch.timer"
 MARK="softcenter-sshmanage"
+DROPIN_MARK="由 SoftCenter「SSH 管理」维护"
 KBD_KEY="KbdInteractiveAuthentication"
 
 log_date() {
@@ -241,6 +247,101 @@ auth_matches() {
 	[ "$auth_pw" = "$want_pw" ] && [ "$auth_kbd" = "$want_kbd" ]
 }
 
+# ---------------- 主配置编辑（真机实测：drop-in 的布尔项会被主配置里已有的同名项压住）----------------
+# 记录一条改动：只记最早的原值，便于精确撤销
+record_edit() {
+	mkdir -p "$(dirname "$MAIN_EDITS")" 2>/dev/null
+	[ -f "$MAIN_EDITS" ] || : > "$MAIN_EDITS"
+	if grep -q "^$1	" "$MAIN_EDITS" 2>/dev/null; then
+		return 0
+	fi
+	old="$(grep -E "^[[:space:]]*$1[[:space:]]" "$SSHD_CONF" 2>/dev/null | head -n 1)"
+	printf '%s	%s
+' "$1" "$old" >> "$MAIN_EDITS"
+}
+
+# 设置主配置里某键的值：有活动行就替换，没有就插到 Include 之后（带我们的标记）
+set_main_key() {
+	key="$1"; val="$2"
+	[ -f "$SSHD_CONF" ] || return 1
+	record_edit "$key"
+	inc="$(grep -nE '^[[:space:]]*Include[[:space:]]' "$SSHD_CONF" 2>/dev/null | head -n 1 | cut -d: -f1)"
+	[ -n "$inc" ] || inc=1
+	tmp="$SSHD_CONF.tmp.$$"
+	if grep -qE "^[[:space:]]*$key[[:space:]]" "$SSHD_CONF" 2>/dev/null; then
+		awk -v k="$key" -v v="$val" -v m="$MARK_COMMENT" '
+			$1 == k { print k " " v "  # " m; next }
+			{ print }' "$SSHD_CONF" > "$tmp" || return 1
+	else
+		awk -v k="$key" -v v="$val" -v m="$MARK_COMMENT" -v inc="$inc" '
+			{ print }
+			NR == inc { print k " " v "  # " m }' "$SSHD_CONF" > "$tmp" || return 1
+	fi
+	mv "$tmp" "$SSHD_CONF"
+}
+
+# 精确撤销：删掉带标记的行 + 把记录的原值还原（只动我们改过的行）
+restore_main_edits() {
+	[ -f "$MAIN_EDITS" ] || return 0
+	if grep -q "# $MARK_COMMENT" "$SSHD_CONF" 2>/dev/null; then
+		grep -v "# $MARK_COMMENT" "$SSHD_CONF" > "$SSHD_CONF.tmp.$$" && mv "$SSHD_CONF.tmp.$$" "$SSHD_CONF"
+	fi
+	while IFS="$(printf '	')" read -r key old; do
+		[ -n "$key" ] || continue
+		[ -n "$old" ] || continue
+		inc="$(grep -nE '^[[:space:]]*Include[[:space:]]' "$SSHD_CONF" 2>/dev/null | head -n 1 | cut -d: -f1)"
+		[ -n "$inc" ] || inc=1
+		if grep -qE "^[[:space:]]*$key[[:space:]]" "$SSHD_CONF" 2>/dev/null; then
+			awk -v k="$key" -v line="$old" '
+				$1 == k { print line; next }
+				{ print }' "$SSHD_CONF" > "$SSHD_CONF.tmp.$$" && mv "$SSHD_CONF.tmp.$$" "$SSHD_CONF"
+		else
+			awk -v line="$old" -v inc="$inc" '
+				{ print }
+				NR == inc { print line }' "$SSHD_CONF" > "$SSHD_CONF.tmp.$$" && mv "$SSHD_CONF.tmp.$$" "$SSHD_CONF"
+		fi
+	done < "$MAIN_EDITS"
+	rm -f "$MAIN_EDITS"
+	log_date "已撤销主配置改动（只还原我们改过的行）"
+}
+
+# 按认证方式把三个键写进主配置（值与我们 drop-in 里的完全一致）
+apply_main_auth() {
+	case "$SSH_AUTH_MODE" in
+	key-only) want=no ;;
+	*) want=yes ;;
+	esac
+	set_main_key PasswordAuthentication "$want"
+	set_main_key KbdInteractiveAuthentication "$want"
+	# 老名字（8.7 之前/兼容写法）：存在就一起改，避免它把生效值拉回去
+	if grep -qE '^[[:space:]]*ChallengeResponseAuthentication[[:space:]]' "$SSHD_CONF" 2>/dev/null; then
+		set_main_key ChallengeResponseAuthentication "$want"
+	fi
+}
+
+# 别的 drop-in 会不会抢我们的设置
+scan_conflicts() {
+	found=0
+	for f in "$DROPIN_DIR"/*.conf; do
+		[ -f "$f" ] || continue
+		case "$f" in "$DROPIN"|"$DROPIN_OLD") continue ;; esac
+		found=$((found + 1))
+		echo "  [warn] 存在其它 drop-in：$f"
+		grep -nE '^[[:space:]]*(Port|PasswordAuthentication|KbdInteractiveAuthentication|ChallengeResponseAuthentication|PubkeyAuthentication)[[:space:]]' "$f" 2>/dev/null | sed 's/^/         /'
+	done
+	[ "$found" = "0" ] && echo "  [info] drop-in 目录里没有其它 .conf"
+	return 0
+}
+
+cleanup_old_dropin() {
+	if [ -f "$DROPIN_OLD" ] && grep -q "$DROPIN_MARK" "$DROPIN_OLD" 2>/dev/null; then
+		rm -f "$DROPIN_OLD"
+		log_date "已删除旧命名 drop-in：$DROPIN_OLD"
+		echo "已清理旧命名文件 $DROPIN_OLD"
+	fi
+	return 0
+}
+
 # ---------------- 备份 / 还原 ----------------
 backup_now() {
 	mkdir -p "$BACKUP_DIR" "$RUN_DIR" || return 1
@@ -254,7 +355,8 @@ backup_now() {
 		echo absent > "$dir/dropin.state"
 	fi
 	[ -f "$AUTHKEYS" ] && cp -p "$AUTHKEYS" "$dir/authorized_keys" 2>/dev/null
-	[ -f /etc/ssh/sshd_config ] && cp -p /etc/ssh/sshd_config "$dir/sshd_config" 2>/dev/null
+	[ -f "$SSHD_CONF" ] && cp -p "$SSHD_CONF" "$dir/sshd_config" 2>/dev/null
+	[ -f "$MAIN_EDITS" ] && cp -p "$MAIN_EDITS" "$dir/main_edits" 2>/dev/null
 	eff_port > "$dir/port" 2>/dev/null
 	printf '%s\n' "$dir" > "$RUN_DIR/last_backup"
 	echo "$dir"
@@ -278,6 +380,11 @@ restore_latest() {
 	if [ -f "$dir/authorized_keys" ]; then
 		cp -p "$dir/authorized_keys" "$AUTHKEYS" 2>/dev/null
 		chmod 600 "$AUTHKEYS" 2>/dev/null
+	fi
+	# 回滚时直接把主配置还原成备份（apply 后几秒内发生，不会覆盖 UniFi 的后续改动）
+	if [ -f "$dir/sshd_config" ]; then
+		cp -p "$dir/sshd_config" "$SSHD_CONF" 2>/dev/null
+		[ -f "$dir/main_edits" ] && cp -p "$dir/main_edits" "$MAIN_EDITS" 2>/dev/null
 	fi
 	if ! "$(sshd_bin)" -t 2>/dev/null; then
 		log_date "还原后 sshd -t 仍不通过，请人工检查 $dir"
@@ -356,15 +463,37 @@ wan_state() {
 }
 
 # ---------------- 监听 / 服务 ----------------
-port_listening() {
+# 谁在监听这个端口（取一行原始输出；带 -p 才能看到进程名）
+port_holder() {
 	[ -n "$1" ] || return 1
 	if command -v ss >/dev/null 2>&1; then
-		ss -ltn 2>/dev/null | awk -v p=":$1" '$1=="LISTEN" && $4 ~ p"$" {found=1} END {exit !found}'
+		ss -ltnp 2>/dev/null | awk -v p=":$1" '$4 ~ p"$" {print; exit}'
 	elif command -v netstat >/dev/null 2>&1; then
-		netstat -ltn 2>/dev/null | awk -v p=":$1" '$1=="tcp" && $4 ~ p"$" {found=1} END {exit !found}'
-	else
-		return 0   # 没有工具就不阻塞流程
+		netstat -ltnp 2>/dev/null | awk -v p=":$1" '$4 ~ p"$" {print; exit}'
 	fi
+}
+
+# 端口是否由 sshd 监听（真机上被别的进程"顶包"过一次：utmdaemon 占着 2222，
+# 旧版只判断"有人在听"，结果误判应用成功）
+port_listening() {
+	[ -n "$1" ] || return 1
+	line="$(port_holder "$1")"
+	[ -n "$line" ] || return 1
+	case "$line" in
+	*"users:("*|*"pid="*)
+		case "$line" in *sshd*) return 0 ;; *) return 1 ;; esac
+		;;
+	*)
+		return 0   # 拿不到进程信息（无 -p 支持）时退回宽松判断，不误拦
+		;;
+	esac
+}
+
+# 目标端口是否被别的进程占用（用于应用前预检）
+port_conflict() {
+	line="$(port_holder "$1")"
+	[ -n "$line" ] || return 1
+	case "$line" in *sshd*) return 1 ;; *) echo "$line"; return 0 ;; esac
 }
 
 ssh_restart() {
@@ -411,19 +540,23 @@ remove_watch() {
 
 watch_once() {
 	changed=0
-	if [ -f "$DROPIN" ]; then
-		if ! write_dropin_checked >/dev/null 2>&1; then
-			log_date "重放：drop-in 写入/校验失败"
-		elif [ "$(eff_port)" != "$SSH_PORT" ] || ! port_listening "$(eff_port)"; then
-			changed=1
-		fi
-	fi
-	# 配置被 UniFi 重建（drop-in 消失）时也重新写回
-	if [ ! -f "$DROPIN" ] && [ "$(eff_port)" != "$SSH_PORT" ]; then
+	# 端口漂移（UniFi 重建 drop-in / 主配置）→ 重写 drop-in
+	if [ "$(eff_port)" != "$SSH_PORT" ]; then
 		write_dropin_checked >/dev/null 2>&1 && changed=1
 	fi
+	# 认证漂移（UniFi 重建主配置最常发生）→ 主配置 + drop-in 一起补回
+	if ! auth_matches; then
+		apply_main_auth
+		write_dropin_checked >/dev/null 2>&1
+		if "$(sshd_bin)" -t 2>/dev/null; then
+			changed=1
+		else
+			log_date "重放：补写后 sshd -t 失败，撤销本次主配置改动"
+			restore_main_edits
+		fi
+	fi
 	if [ "$changed" = "1" ]; then
-		log_date "重放：检测到配置被改，重新应用并重启 ssh"
+		log_date "重放：检测到配置被改（端口/认证漂移），重新应用并重启 ssh"
 		ssh_restart >/dev/null 2>&1
 	fi
 	if [ "$SSH_ALLOW_WAN" = "1" ] && [ "$(wan_state)" = "off" ]; then
@@ -465,8 +598,21 @@ check_all() {
 	fi
 	if [ -f "$DROPIN" ]; then
 		echo "  [info] 已存在我们的 drop-in：$DROPIN"
-	else
-		echo "  [info] 尚未写入 drop-in（未接管）"
+	fi
+	if [ -f "$DROPIN_OLD" ]; then
+		echo "  [warn] 发现旧命名文件（下次启动会清理）：$DROPIN_OLD"
+	fi
+	echo "  [info] 主配置 $SSHD_CONF 里的认证活动行："
+	grep -nE '^[[:space:]]*(PasswordAuthentication|KbdInteractiveAuthentication|ChallengeResponseAuthentication|PubkeyAuthentication|Port)[[:space:]]' "$SSHD_CONF" 2>/dev/null | sed 's/^/         /'
+	echo "  [note] 这台 sshd 上 drop-in 的布尔项会被主配置里已有的同名项压住，所以插件会同时改主配置"
+	if [ -f "$MAIN_EDITS" ]; then
+		echo "  [info] 待撤销的主配置改动记录（$MAIN_EDITS）："
+		sed 's/^/         /' "$MAIN_EDITS"
+	fi
+	echo "  [info] drop-in 冲突："
+	scan_conflicts | sed 's/^/       /'
+	if [ -f "$DROPIN" ]; then
+		echo "  [info] 未接管" > /dev/null
 	fi
 	echo "  [info] 现有公钥：$(count_keys) 个（$AUTHKEYS）"
 	[ "$(count_keys)" = "0" ] && echo "  [warn] 目前没有任何公钥：切到「仅证书登录」会被拒绝（这是故意的护栏）"
@@ -504,6 +650,8 @@ info() {
 	echo "drop-in     : $([ -f "$DROPIN" ] && echo 已写入 || echo 无)"
 	echo "最近备份    : $(last_backup_dir)"
 	echo "----------------------------------------"
+	echo "drop-in 冲突  :"
+	scan_conflicts | sed 's/^/                 /'
 	echo "[提示] 改端口/重启 ssh 不会踢掉已建立的会话；操作时留住当前会话即可随时改回。"
 }
 
@@ -528,6 +676,20 @@ start_service() {
 	[ -n "$(sshd_bin)" ] || { echo "没找到 sshd：本插件只支持 UniFi OS 的 OpenSSH"; exit 1; }
 	mkdir -p "$RUN_DIR" "$BACKUP_DIR" 2>/dev/null
 	validate_inputs || exit 1
+
+	# 端口预检：目标端口已被别的进程占用时直接拒绝（真机踩过：utmdaemon 占着 2222，
+	# 旧版只看"有人在听"，把别的进程当成 sshd，误判改端口成功）
+	if [ "$SSH_PORT" != "$(eff_port)" ]; then
+		holder="$(port_conflict "$SSH_PORT")"
+		if [ -n "$holder" ]; then
+			echo
+			echo "拒绝应用：端口 $SSH_PORT 已被其它进程占用，sshd 无法绑定："
+			echo "  $holder"
+			echo "  请换一个空闲端口（例如 22022），或先停掉占用它的服务。"
+			log_date "拒绝应用：端口 $SSH_PORT 被占用 → $holder"
+			exit 1
+		fi
+	fi
 
 	# 护栏 1：仅证书登录必须有公钥（本次传入的，或已存在的）
 	if [ "$SSH_AUTH_MODE" = "key-only" ]; then
@@ -557,6 +719,7 @@ start_service() {
 
 	echo "备份当前配置..."
 	backup_now >/dev/null || { echo "备份失败，已中止（不改动任何东西）"; exit 1; }
+	cleanup_old_dropin
 
 	echo "写入公钥..."
 	write_keys || { echo "写入公钥失败，已中止"; exit 1; }
@@ -580,6 +743,21 @@ start_service() {
 		log_date "drop-in 校验失败，已还原"
 		exit 1
 	fi
+
+	# 真机实测：这台 sshd 上 drop-in 的布尔项会被主配置里已有的同名项压住，
+	# 所以认证项必须同时写进主配置（已有行就地改，缺失行插到 Include 之后并带标记）
+	echo "同步写入主配置 $SSHD_CONF（会记录原值，便于精确撤销）..."
+	apply_main_auth
+	if ! "$(sshd_bin)" -t 2>/dev/null; then
+		echo "写入主配置后语法校验失败，正在还原..."
+		restore_latest
+		restore_main_edits
+		log_date "主配置写入后 sshd -t 失败，已还原"
+		exit 1
+	fi
+	# 把写入内容记进日志（不含任何密钥/密码），方便日后排查
+	log_date "drop-in 内容："
+	sed 's/^/    /' "$DROPIN" >> "$LOG" 2>/dev/null
 
 	if ! set_password; then
 		echo "设置密码失败，正在还原上一份配置..."
@@ -643,6 +821,17 @@ start_service() {
 
 	fi
 
+	# 端口断言：sshd -T 报的端口必须就是我们要的（不能只看"有人在听"）
+	if [ "$(eff_port)" != "$SSH_PORT" ]; then
+		echo
+		echo "生效端口是 $(eff_port)，不是配置的 $SSH_PORT，正在还原..."
+		restore_latest
+		restore_main_edits
+		systemctl restart "$UNIT" >/dev/null 2>&1
+		log_date "生效端口不符（期望 $SSH_PORT，实际 $(eff_port)），已还原"
+		exit 1
+	fi
+
 	if [ "$SSH_ALLOW_WAN" = "1" ]; then
 		wan_open || echo "警告：外网放行失败（SSH 本身已生效）"
 	else
@@ -656,6 +845,10 @@ start_service() {
 		remove_watch
 		echo "重放守护：已关闭"
 	fi
+
+	echo
+	echo "drop-in 目录冲突检查："
+	scan_conflicts
 
 	echo
 	echo "应用完成："
@@ -676,7 +869,8 @@ stop_service() {
 	backup_now >/dev/null 2>&1
 	remove_watch
 	wan_close
-	rm -f "$DROPIN"
+	rm -f "$DROPIN" "$DROPIN_OLD"
+	restore_main_edits
 	if ! "$(sshd_bin)" -t 2>/dev/null; then
 		echo "移除配置后语法不通过，正在还原..."
 		restore_latest

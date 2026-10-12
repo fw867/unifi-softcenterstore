@@ -2064,7 +2064,7 @@
         "Id": "sshmanage",
         "Name": "SSH 管理",
         "Type": "Shell Script",
-        "Version": "1.0.0",
+        "Version": "1.0.1",
         "Description": "管理网关 SSH：改端口、密码/证书认证、外网放行（含护栏与失败自动还原）",
         "Icon": "terminal-square",
         "StartCommand": "/data/softcenter/bin/sshmanage start",
@@ -2078,7 +2078,7 @@
             {
                 "Name": "sshmanage",
                 "Path": "apps/sshmanage/sshmanage",
-                "Sha256": "21805b58d7de0d9888cd2b97d93958991bc1baa7b1f6dc553c822bd916e4db4d",
+                "Sha256": "493f80d82c95efb6afd1d2193fa4852f1c97d60dc7da51fdb654a1695606ada0",
                 "Mode": "0755"
             }
         ],
