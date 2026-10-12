@@ -58,6 +58,15 @@ unit_result() { systemctl show "$1" -p Result --value 2>/dev/null | head -n 1; }
 installed=0
 [ -x "$BL" ] && installed=1
 
+# UniFi 把「要过滤的网络」放进 ipset dnsfilter；它是空的 = 内容过滤器/Ad Block 还没对该网络生效
+dnsfilter_known=0
+dnsfilter_n=0
+if command -v ipset >/dev/null 2>&1 && ipset list dnsfilter >/dev/null 2>&1; then
+	dnsfilter_known=1
+	dnsfilter_n="$(ipset list dnsfilter 2>/dev/null | grep -cE '^[0-9a-fA-F:.]+(/[0-9]+)?$')"
+	[ -n "$dnsfilter_n" ] || dnsfilter_n=0
+fi
+
 watcher_state="unknown"
 [ "$installed" = "1" ] && watcher_state="$(unit_active "$WATCH_UNIT")"
 running=0
@@ -76,6 +85,101 @@ case "$version_raw" in
 	notice="${notice%)}"
 	;;
 esac
+
+adblock_key="$(grep -E '^ADS_' "$ENABLED" 2>/dev/null | head -n 1)"
+case "$adblock_key" in
+ADS_LIGHT) adblock_label='轻量 Light' ;;
+ADS_NORMAL) adblock_label='普通 Normal' ;;
+ADS_PRO) adblock_label='专业 Pro' ;;
+ADS_PROPLUS) adblock_label='专业+ Pro++' ;;
+ADS_ULTIMATE) adblock_label='终极 Ultimate' ;;
+*) adblock_label='关闭' ;;
+esac
+
+key_info() {
+	case "$1" in
+	BOTNETS) echo '安全防护|僵尸网络' ;;
+	MALWARE) echo '安全防护|恶意软件' ;;
+	PHISHING) echo '安全防护|钓鱼网站' ;;
+	SPYWARE) echo '安全防护|间谍软件' ;;
+	HACKING) echo '安全防护|黑客 / 破解站' ;;
+	COUNTERFEIT_BRANDS) echo '安全防护|假冒品牌' ;;
+	DECEPTIVE_ADS) echo '安全防护|欺诈广告' ;;
+	ANONYMIZERS) echo '安全防护|匿名代理 / VPN / DoH 绕过' ;;
+	DNS_TUNNELING) echo '安全防护|DNS 隧道' ;;
+	SPAM) echo '安全防护|垃圾信息' ;;
+	DGA_DOMAINS) echo '安全防护|DGA 域名' ;;
+	NEWLY_REGISTERED_DOMAINS) echo '新注册与风险域名|新注册域名' ;;
+	NEWLY_DISCOVERED_DOMAINS) echo '新注册与风险域名|新发现域名' ;;
+	DYNAMIC_DNS) echo '新注册与风险域名|动态 DNS' ;;
+	BADWARE_HOSTERS) echo '新注册与风险域名|恶意软件宿主' ;;
+	PARKED_DOMAINS) echo '新注册与风险域名|停放域名' ;;
+	REDIRECTORS) echo '网络设施|短链接跳转' ;;
+	PORNOGRAPHY) echo '成人敏感内容|色情' ;;
+	NUDITY) echo '成人敏感内容|裸露' ;;
+	ADULT) echo '成人敏感内容|成人主题' ;;
+	GAMBLING) echo '成人敏感内容|赌博' ;;
+	DRUGS) echo '成人敏感内容|毒品' ;;
+	ALCOHOL) echo '成人敏感内容|酒类' ;;
+	TOBACCO) echo '成人敏感内容|烟草' ;;
+	VIOLENCE) echo '成人敏感内容|暴力' ;;
+	WEAPONS) echo '成人敏感内容|武器' ;;
+	HATE_SPEECH_AND_EXTREMISM) echo '成人敏感内容|仇恨与极端主义' ;;
+	SEX_EDUCATION) echo '成人敏感内容|性教育' ;;
+	SOCIAL_NETWORKS) echo '社交通讯|社交网络' ;;
+	CHAT) echo '社交通讯|聊天' ;;
+	INSTANT_MESSENGERS) echo '社交通讯|即时通讯' ;;
+	MESSAGING) echo '社交通讯|消息服务' ;;
+	WEBMAIL) echo '社交通讯|网页邮箱' ;;
+	FILE_SHARING) echo '社交通讯|文件分享（含 BT）' ;;
+	PEER_TO_PEER) echo '社交通讯|P2P 下载' ;;
+	VIDEO_STREAMING) echo '社交通讯|视频流媒体' ;;
+	AUDIO_STREAMING) echo '社交通讯|音频流' ;;
+	RADIO) echo '社交通讯|网络电台' ;;
+	NEWS_AND_MEDIA) echo '商务资讯|新闻媒体' ;;
+	ECONOMY_AND_FINANCE) echo '商务资讯|经济金融' ;;
+	JOB_SEARCH_AND_CAREERS) echo '商务资讯|招聘求职' ;;
+	SHOPPING) echo '消费娱乐|购物' ;;
+	ECOMMERCE) echo '消费娱乐|电商' ;;
+	AUCTIONS_AND_MARKETPLACES) echo '消费娱乐|拍卖 / 交易平台' ;;
+	DATING_AND_RELATIONSHIPS) echo '消费娱乐|交友婚恋' ;;
+	GAMING) echo '消费娱乐|游戏' ;;
+	SPORTS) echo '消费娱乐|体育' ;;
+	MOVIES) echo '消费娱乐|影视' ;;
+	MUSIC) echo '消费娱乐|音乐' ;;
+	BLOGS) echo '消费娱乐|博客' ;;
+	FORUMS) echo '消费娱乐|论坛' ;;
+	ASTROLOGY) echo '消费娱乐|占星 / 玄学' ;;
+	RELIGION) echo '消费娱乐|宗教' ;;
+	FOOD_AND_DRINK) echo '消费娱乐|饮食' ;;
+	CARTOONS_AND_ANIME) echo '消费娱乐|动漫' ;;
+	COMIC_BOOKS) echo '消费娱乐|漫画' ;;
+	ARTIFICIAL_INTELLIGENCE) echo 'AI 与加密货币|人工智能' ;;
+	CRYPTOCURRENCY) echo 'AI 与加密货币|加密货币' ;;
+	CRYPTOMINING) echo 'AI 与加密货币|挖矿' ;;
+	TRACK_APPLE) echo '设备遥测（HaGeZi）|苹果设备遥测' ;;
+	TRACK_AMAZON) echo '设备遥测（HaGeZi）|亚马逊 / Alexa' ;;
+	TRACK_SAMSUNG) echo '设备遥测（HaGeZi）|三星' ;;
+	TRACK_XIAOMI) echo '设备遥测（HaGeZi）|小米' ;;
+	TRACK_HUAWEI) echo '设备遥测（HaGeZi）|华为' ;;
+	TRACK_WINDOWS) echo '设备遥测（HaGeZi）|Windows / Office' ;;
+	TRACK_LGWEBOS) echo '设备遥测（HaGeZi）|LG 电视' ;;
+	TRACK_ROKU) echo '设备遥测（HaGeZi）|Roku' ;;
+	TRACK_TIKTOK) echo '设备遥测（HaGeZi）|TikTok（增强）' ;;
+	esac
+}
+
+# 已启用分类的中文名（按分组，顺序与面板一致）
+categories_cn=""
+if [ -f "$ENABLED" ]; then
+	while IFS= read -r key; do
+		case "$key" in ADS_*) continue ;; esac
+		info="$(key_info "$key")"
+		[ -n "$info" ] || continue
+		label="${info#*|}"
+		[ -z "$categories_cn" ] && categories_cn="$label" || categories_cn="$categories_cn、$label"
+	done < "$ENABLED"
+fi
 
 categories_count=0
 if [ -f "$ENABLED" ]; then
@@ -128,6 +232,9 @@ now="$(date '+%Y-%m-%d %H:%M:%S')"
 if [ "$installed" != "1" ]; then
 	verdict_level="info"
 	verdict_text="尚未安装：请在卡片上打开开关，脚本会从上游拉取运行文件并做兼容性自检。"
+elif [ "$dnsfilter_known" = "1" ] && [ "$dnsfilter_n" = "0" ]; then
+	verdict_level="warn"
+	verdict_text="内容过滤器看起来没生效：ipset dnsfilter 里没有任何网络。请到 UniFi Network → 设置 → CyberSecure → 内容过滤器，给要过滤的网络打开「Ad Block」，等 1 分钟后把卡片开关关掉再打开。"
 elif [ "$running" != "1" ]; then
 	verdict_level="warn"
 	verdict_text="watcher 未在运行（状态 $watcher_state）：屏蔽清单可能已被 UniFi 重建覆盖，点卡片开关重启即可。"
@@ -157,16 +264,22 @@ fi
 if [ "$JSON" = "0" ]; then
 	echo "屏蔽清单（unifi-blocklist）状态"
 	echo "----------------------------------------"
+	echo "Ad Block    : $adblock_label"
 	echo "上游版本    : ${version:-未知}"
 	echo "已启用分类  : $categories_count 个"
+	[ -n "$categories_cn" ] && echo "过滤类别    : $categories_cn"
 	echo "屏蔽域名    : $domains"
 	echo "应用状态    : $applied"
+	echo "内容过滤器  : $([ "$dnsfilter_known" = "1" ] && echo "dnsfilter 覆盖 $dnsfilter_n 个网络" || echo 未知)"
 	echo "CoreDNS     : ${coredns_raw:-未知}"
 	echo "Watcher     : $watcher_state"
 	echo "定时器      : $timer_state"
 	echo "上次更新    : ${last_update:-未知}"
 	echo "下次更新    : ${next_update:-未知}"
-	echo "可用内存    : ${mem_avail} MB"
+	case "$mem_avail" in
+	''|*[!0-9]*) ;;
+	*) echo "可用内存    : ${mem_avail} MB" ;;
+	esac
 	[ -n "$note_text" ] && echo "提示        : $note_text"
 	echo "----------------------------------------"
 	echo "[$verdict_level] $verdict_text"
@@ -207,10 +320,34 @@ case "$mem_avail" in
 esac
 [ "$categories_count" -gt 0 ] && add_metric "启用分类" "$categories_count 个" "来自 categories.enabled"
 
+add_chip "Ad Block" "$adblock_label"
+if [ -f "$ENABLED" ] && [ -n "$categories_cn" ]; then
+	for g in '安全防护' '新注册与风险域名' '网络设施' '成人敏感内容' '社交通讯' '商务资讯' '消费娱乐' 'AI 与加密货币' '设备遥测（HaGeZi）'; do
+		glabels=""
+		while IFS= read -r key; do
+			case "$key" in ADS_*) continue ;; esac
+			info="$(key_info "$key")"
+			[ -n "$info" ] || continue
+			[ "${info%%|*}" = "$g" ] || continue
+			label="${info#*|}"
+			[ -z "$glabels" ] && glabels="$label" || glabels="$glabels、$label"
+		done < "$ENABLED"
+		[ -n "$glabels" ] && add_chip "$g" "$glabels"
+	done
+fi
 add_chip "上游版本" "${version:-未知}"
 add_chip "应用状态" "$applied"
 [ -n "$last_update" ] && add_chip "上次更新" "$last_update"
 [ -n "$next_update" ] && add_chip "下次更新" "$next_update"
+
+# dnsfilter 为空是最常见的"不生效"原因（UniFi 里该网络没开 Ad Block）
+if [ "$dnsfilter_known" = "1" ]; then
+	if [ "$dnsfilter_n" -gt 0 ]; then
+		add_check "内容过滤器(dnsfilter)" "已覆盖 $dnsfilter_n 个网络" "ok"
+	else
+		add_check "内容过滤器(dnsfilter)" "为空（该网络未开启）" "bad"
+	fi
+fi
 
 check_state() {
 	case "$1" in

@@ -8,7 +8,9 @@
 #       —— 依赖 UniFi 未公开的内部机制，固件升级后可能失效；关闭开关会还原 UniFi 自己的列表。
 #
 # 面板配置：/data/softcenter/config/unifi-blocklist.env
-#   UNIFI_BLOCKLIST_CATEGORIES    启用分类（空格或逗号分隔，默认 ADS_PRO BOTNETS MALWARE PHISHING）
+#   UNIFI_BLOCKLIST_ADBLOCK_LEVEL   Ad Block 级别（仅一档）：ADS_LIGHT/ADS_NORMAL/ADS_PRO/ADS_PROPLUS/ADS_ULTIMATE，其它值=关闭
+#   UNIFI_BLOCKLIST_CATEGORIES     勾选的其它分类（逗号或空格分隔的分类键，如 BOTNETS,MALWARE,PHISHING）
+#   UNIFI_BLOCKLIST_EXTRA_CATEGORIES 高级：直接追加分类键（逗号或空格分隔，可留空）
 #   UNIFI_BLOCKLIST_AUTO_UPDATE   1/0，是否启用 12 小时定时更新
 #   UNIFI_BLOCKLIST_EXTRA_LISTS   附加列表 URL（空格分隔，可留空）
 #   UNIFI_BLOCKLIST_MAX_ENTRIES   合并后域名数上限（超过则不应用，保护内存）
@@ -52,7 +54,9 @@ cfg() {
 	decode_b64 "$v"
 }
 
-UNIFI_BLOCKLIST_CATEGORIES="$(cfg UNIFI_BLOCKLIST_CATEGORIES 'ADS_PRO BOTNETS MALWARE PHISHING')"
+UNIFI_BLOCKLIST_ADBLOCK_LEVEL="$(cfg UNIFI_BLOCKLIST_ADBLOCK_LEVEL ADS_PRO)"
+UNIFI_BLOCKLIST_CATEGORIES="$(cfg UNIFI_BLOCKLIST_CATEGORIES 'BOTNETS MALWARE PHISHING')"
+UNIFI_BLOCKLIST_EXTRA_CATEGORIES="$(cfg UNIFI_BLOCKLIST_EXTRA_CATEGORIES '')"
 UNIFI_BLOCKLIST_AUTO_UPDATE="$(cfg UNIFI_BLOCKLIST_AUTO_UPDATE 1)"
 UNIFI_BLOCKLIST_EXTRA_LISTS="$(cfg UNIFI_BLOCKLIST_EXTRA_LISTS '')"
 UNIFI_BLOCKLIST_MAX_ENTRIES="$(cfg UNIFI_BLOCKLIST_MAX_ENTRIES 1500000)"
@@ -170,17 +174,75 @@ fetch_upstream() {
 	echo "上游运行文件已就绪（${tag:-$branch}）"
 }
 
-# ---- 写配置：分类清单 ----
+# ---- Ad Block 级别（只能一档：上游档次是包含关系，同时启用会互相覆盖）----
+adblock_key() {
+	k="$(printf '%s' "$UNIFI_BLOCKLIST_ADBLOCK_LEVEL" | tr '[:lower:]' '[:upper:]')"
+	case "$k" in
+	ADS_LIGHT|ADS_NORMAL|ADS_PRO|ADS_PROPLUS|ADS_ULTIMATE) printf '%s' "$k" ;;
+	esac
+}
+
+adblock_label() {
+	case "$1" in
+	ADS_LIGHT) echo '轻量 Light' ;;
+	ADS_NORMAL) echo '普通 Normal' ;;
+	ADS_PRO) echo '专业 Pro' ;;
+	ADS_PROPLUS) echo '专业+ Pro++' ;;
+	ADS_ULTIMATE) echo '终极 Ultimate' ;;
+	*) echo '关闭' ;;
+	esac
+}
+
+# 分类键是否在上游分类表里（表不存在时跳过校验）
+valid_key() {
+	[ -f "$BASE/categories.list" ] || return 0
+	grep -q "^C|[^|]*|$1|" "$BASE/categories.list" 2>/dev/null
+}
+
+# ---- 写配置：分类清单 = 级别键 + 勾选分类 + 高级追加；ADS_* 一律以「级别」为准 ----
 write_enabled() {
-	printf '%s' "$UNIFI_BLOCKLIST_CATEGORIES" \
-		| tr ',' ' ' \
-		| tr '\t' ' ' \
-		| tr -s ' ' '\n' \
-		| tr '[:lower:]' '[:upper:]' \
-		| grep -v '^$' \
-		| sort -u > "$ENABLED"
-	n=$(wc -l < "$ENABLED" | tr -d ' ')
-	[ "$n" -gt 0 ] || { echo "启用分类不能为空"; exit 1; }
+	tmp="$ENABLED.tmp.$$"
+	raw_list="$tmp.raw"
+	{
+		printf '%s' "$UNIFI_BLOCKLIST_CATEGORIES"
+		printf ' '
+		printf '%s' "$UNIFI_BLOCKLIST_EXTRA_CATEGORIES"
+	} | tr ',\t' '  ' | tr -s ' ' '\n' | tr '[:lower:]' '[:upper:]' | grep -v '^$' | sort -u > "$raw_list"
+
+	level="$(adblock_key)"
+	: > "$tmp"
+	dropped=""
+	while IFS= read -r key; do
+		case "$key" in
+		ADS_*) continue ;;   # Ad Block 由级别单选决定
+		esac
+		if valid_key "$key"; then
+			printf '%s\n' "$key" >> "$tmp"
+		else
+			dropped="$dropped $key"
+		fi
+	done < "$raw_list"
+	rm -f "$raw_list"
+
+	if [ -n "$level" ]; then
+		{
+			printf '%s\n' "$level"
+			cat "$tmp"
+		} | sort -u > "$tmp.2"
+		mv "$tmp.2" "$tmp"
+	fi
+	mv "$tmp" "$ENABLED"
+
+	n=$(grep -c . "$ENABLED" 2>/dev/null)
+	[ -n "$n" ] || n=0
+	[ -n "$dropped" ] && {
+		log_date "忽略了无法识别的分类键：$dropped"
+		echo "提示：忽略了无法识别的分类键：$dropped"
+	}
+	if [ "$n" = "0" ]; then
+		log_date "警告：没有启用任何分类，只保留 UniFi 自己的屏蔽列表"
+		echo "警告：当前没有启用任何分类，屏蔽清单不会起作用（只保留 UniFi 自己的列表）"
+	fi
 }
 
 # ---- 写配置：blocklist.conf 里由面板管理的键 ----
@@ -238,7 +300,7 @@ start_service() {
 
 	fetch_upstream
 
-	log_date "开始启动：分类=$(printf '%s' "$UNIFI_BLOCKLIST_CATEGORIES" | tr '\n' ' ')，上限=$UNIFI_BLOCKLIST_MAX_ENTRIES，定时更新=$UNIFI_BLOCKLIST_AUTO_UPDATE"
+	log_date "开始启动：Ad Block 级别=$(adblock_label "$(adblock_key)")，分类=$(printf '%s' "$UNIFI_BLOCKLIST_CATEGORIES" | tr ',\n' ' ')，上限=$UNIFI_BLOCKLIST_MAX_ENTRIES，定时更新=$UNIFI_BLOCKLIST_AUTO_UPDATE"
 	write_conf
 	write_enabled
 	write_dropin
@@ -247,9 +309,21 @@ start_service() {
 	echo "兼容性自检（只读）..."
 	if ! "$BL" check; then
 		echo
-		echo "兼容性自检未通过，已中止：未安装 systemd 单元，也未改动 UniFi 的域名列表。"
-		echo "常见原因：该网络还没在 UniFi 里开启 Ad Block，或本机型/固件不是同一套过滤引擎。"
-		log_date "兼容性自检未通过，中止启动"
+		echo "兼容性自检未通过，已中止：没有安装 systemd 单元，也没有改动 UniFi 的域名列表。"
+		echo
+		echo "请按顺序检查这两步（第 1 条是最常见原因）："
+		echo "  1) 在 UniFi 界面里先开启内容过滤器 —— 这一步插件代替不了："
+		echo "     UniFi Network → 设置 → CyberSecure（安全防护）→ 内容过滤器 Content Filter"
+		echo "     选中要过滤的网络，把「Ad Block / 广告拦截」打开（Content filter 分类可留空）"
+		echo "     保存后等 1 分钟，回到本卡片把开关关掉再打开（或点扩展按钮「兼容性自检」重试）"
+		echo "  2) 看上面对应的 [FAIL] 行，它写明了缺什么："
+		echo "     - ipset dnsfilter 为空  → 就是第 1 条还没生效（该网络没开 Ad Block）"
+		echo "     - 缺少 curl/flock/sha256sum/systemctl/ipset/dig  → 工具缺失"
+		echo "     - CoreDNS 配置路径不同 → 本机型/固件与上游不是同一套过滤引擎"
+		echo
+		echo "自检是只读的：没通过就反复重试也不会改动你的任何配置。"
+		log_date "兼容性自检未通过，中止启动（最常见原因：UniFi 里对应网络未开启内容过滤器 / Ad Block）"
+		log_date "开启路径：UniFi Network → 设置 → CyberSecure → 内容过滤器，给该网络打开 Ad Block 后重试"
 		exit 1
 	fi
 

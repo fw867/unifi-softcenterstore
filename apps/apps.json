@@ -1605,8 +1605,8 @@
         "Id": "unifi-blocklist",
         "Name": "屏蔽清单",
         "Type": "Shell Script",
-        "Version": "1.0.0",
-        "Description": "用社区黑名单（HaGeZi/UT1 等）补齐 UniFi 内容过滤分类：把域名写进 UniFi 自己的屏蔽列表并重启 CoreDNS，屏蔽记录在 UniFi 界面可见、允许名单优先；需先在 UniFi 里给对应网络开启 Ad Block，且依赖未公开机制，固件升级后可能失效（关闭开关可一键还原）",
+        "Version": "1.0.1",
+        "Description": "用社区黑名单补齐 UniFi 内容过滤分类（需先在 UniFi 开启 Ad Block，固件升级后可能失效）",
         "Icon": "shield-check",
         "StartCommand": "/data/softcenter/bin/unifi-blocklist start",
         "StopCommand": "/data/softcenter/bin/unifi-blocklist stop",
@@ -1619,57 +1619,440 @@
             {
                 "Name": "unifi-blocklist",
                 "Path": "apps/unifi-blocklist/unifi-blocklist",
-                "Sha256": "6537d1478a699da1fdacfaccd02b3e4f73da04a70edbe5fd10c17ffb420df910",
+                "Sha256": "bb9779ee9a321c0477f621b49fdb82886c5c309979dd24666d7d5c79b6e95609",
                 "Mode": "0755"
             },
             {
                 "Name": "unifi-blocklist-status",
                 "Path": "apps/unifi-blocklist/unifi-blocklist-status",
-                "Sha256": "1ae24eacde70e2a4cf61784667e390e413d659c1eb32a4f1e09d78754d152df2",
+                "Sha256": "5f3a1b1837459377f2d794f7df030be9d0715b25934b7b4c15a19eaa16f62138",
                 "Mode": "0755"
             }
         ],
         "ConfigSchema": {
             "Sections": [
                 {
-                    "Title": "屏蔽清单",
+                    "Title": "屏蔽分类与更新",
                     "Fields": [
                         {
+                            "Key": "UNIFI_BLOCKLIST_ADBLOCK_LEVEL",
+                            "Label": "Ad Block 级别",
+                            "Type": "select",
+                            "Default": "ADS_PRO",
+                            "Options": [
+                                {
+                                    "Label": "关闭（只用下面的分类）",
+                                    "Value": "none"
+                                },
+                                {
+                                    "Label": "轻量 Light（约 5.7 万域名，最不容易误伤）",
+                                    "Value": "ADS_LIGHT"
+                                },
+                                {
+                                    "Label": "普通 Normal（约 16 万）",
+                                    "Value": "ADS_NORMAL"
+                                },
+                                {
+                                    "Label": "专业 Pro（约 19.9 万，推荐）",
+                                    "Value": "ADS_PRO"
+                                },
+                                {
+                                    "Label": "专业+ Pro++（约 21 万，可能误伤部分站点）",
+                                    "Value": "ADS_PROPLUS"
+                                },
+                                {
+                                    "Label": "终极 Ultimate（约 23 万，误伤较多）",
+                                    "Value": "ADS_ULTIMATE"
+                                }
+                            ],
+                            "Help": "广告/跟踪类域名专用，只能选一档（高档已包含低档域名）。默认「专业 Pro」与上游默认组合一致。误伤了某个网站就降一档，或把域名加进 UniFi 界面的允许名单（允许名单永远优先）"
+                        },
+                        {
                             "Key": "UNIFI_BLOCKLIST_CATEGORIES",
-                            "Label": "启用分类",
+                            "Label": "其它屏蔽分类",
+                            "Type": "multi-select",
+                            "Default": "BOTNETS,MALWARE,PHISHING",
+                            "Options": [
+                                {
+                                    "Label": "僵尸网络",
+                                    "Value": "BOTNETS",
+                                    "Group": "安全防护"
+                                },
+                                {
+                                    "Label": "恶意软件",
+                                    "Value": "MALWARE",
+                                    "Group": "安全防护"
+                                },
+                                {
+                                    "Label": "钓鱼网站",
+                                    "Value": "PHISHING",
+                                    "Group": "安全防护"
+                                },
+                                {
+                                    "Label": "间谍软件",
+                                    "Value": "SPYWARE",
+                                    "Group": "安全防护"
+                                },
+                                {
+                                    "Label": "黑客 / 破解站",
+                                    "Value": "HACKING",
+                                    "Group": "安全防护"
+                                },
+                                {
+                                    "Label": "假冒品牌",
+                                    "Value": "COUNTERFEIT_BRANDS",
+                                    "Group": "安全防护"
+                                },
+                                {
+                                    "Label": "欺诈广告",
+                                    "Value": "DECEPTIVE_ADS",
+                                    "Group": "安全防护"
+                                },
+                                {
+                                    "Label": "匿名代理 / VPN / DoH 绕过",
+                                    "Value": "ANONYMIZERS",
+                                    "Group": "安全防护"
+                                },
+                                {
+                                    "Label": "DNS 隧道",
+                                    "Value": "DNS_TUNNELING",
+                                    "Group": "安全防护"
+                                },
+                                {
+                                    "Label": "垃圾信息",
+                                    "Value": "SPAM",
+                                    "Group": "安全防护"
+                                },
+                                {
+                                    "Label": "DGA 域名（约 62 万，较吃内存）",
+                                    "Value": "DGA_DOMAINS",
+                                    "Group": "安全防护"
+                                },
+                                {
+                                    "Label": "新注册域名（约 320 万，超过上限会被拒）",
+                                    "Value": "NEWLY_REGISTERED_DOMAINS",
+                                    "Group": "新注册与风险域名"
+                                },
+                                {
+                                    "Label": "新发现域名",
+                                    "Value": "NEWLY_DISCOVERED_DOMAINS",
+                                    "Group": "新注册与风险域名"
+                                },
+                                {
+                                    "Label": "动态 DNS",
+                                    "Value": "DYNAMIC_DNS",
+                                    "Group": "新注册与风险域名"
+                                },
+                                {
+                                    "Label": "恶意软件宿主",
+                                    "Value": "BADWARE_HOSTERS",
+                                    "Group": "新注册与风险域名"
+                                },
+                                {
+                                    "Label": "停放域名",
+                                    "Value": "PARKED_DOMAINS",
+                                    "Group": "新注册与风险域名"
+                                },
+                                {
+                                    "Label": "短链接跳转",
+                                    "Value": "REDIRECTORS",
+                                    "Group": "网络设施"
+                                },
+                                {
+                                    "Label": "色情",
+                                    "Value": "PORNOGRAPHY",
+                                    "Group": "成人敏感内容"
+                                },
+                                {
+                                    "Label": "裸露",
+                                    "Value": "NUDITY",
+                                    "Group": "成人敏感内容"
+                                },
+                                {
+                                    "Label": "成人主题",
+                                    "Value": "ADULT",
+                                    "Group": "成人敏感内容"
+                                },
+                                {
+                                    "Label": "赌博（约 22 万）",
+                                    "Value": "GAMBLING",
+                                    "Group": "成人敏感内容"
+                                },
+                                {
+                                    "Label": "毒品",
+                                    "Value": "DRUGS",
+                                    "Group": "成人敏感内容"
+                                },
+                                {
+                                    "Label": "酒类",
+                                    "Value": "ALCOHOL",
+                                    "Group": "成人敏感内容"
+                                },
+                                {
+                                    "Label": "烟草",
+                                    "Value": "TOBACCO",
+                                    "Group": "成人敏感内容"
+                                },
+                                {
+                                    "Label": "暴力",
+                                    "Value": "VIOLENCE",
+                                    "Group": "成人敏感内容"
+                                },
+                                {
+                                    "Label": "武器",
+                                    "Value": "WEAPONS",
+                                    "Group": "成人敏感内容"
+                                },
+                                {
+                                    "Label": "仇恨与极端主义",
+                                    "Value": "HATE_SPEECH_AND_EXTREMISM",
+                                    "Group": "成人敏感内容"
+                                },
+                                {
+                                    "Label": "性教育",
+                                    "Value": "SEX_EDUCATION",
+                                    "Group": "成人敏感内容"
+                                },
+                                {
+                                    "Label": "社交网络",
+                                    "Value": "SOCIAL_NETWORKS",
+                                    "Group": "社交通讯"
+                                },
+                                {
+                                    "Label": "聊天",
+                                    "Value": "CHAT",
+                                    "Group": "社交通讯"
+                                },
+                                {
+                                    "Label": "即时通讯",
+                                    "Value": "INSTANT_MESSENGERS",
+                                    "Group": "社交通讯"
+                                },
+                                {
+                                    "Label": "消息服务",
+                                    "Value": "MESSAGING",
+                                    "Group": "社交通讯"
+                                },
+                                {
+                                    "Label": "网页邮箱",
+                                    "Value": "WEBMAIL",
+                                    "Group": "社交通讯"
+                                },
+                                {
+                                    "Label": "文件分享（含 BT）",
+                                    "Value": "FILE_SHARING",
+                                    "Group": "社交通讯"
+                                },
+                                {
+                                    "Label": "P2P 下载",
+                                    "Value": "PEER_TO_PEER",
+                                    "Group": "社交通讯"
+                                },
+                                {
+                                    "Label": "视频流媒体",
+                                    "Value": "VIDEO_STREAMING",
+                                    "Group": "社交通讯"
+                                },
+                                {
+                                    "Label": "音频流",
+                                    "Value": "AUDIO_STREAMING",
+                                    "Group": "社交通讯"
+                                },
+                                {
+                                    "Label": "网络电台",
+                                    "Value": "RADIO",
+                                    "Group": "社交通讯"
+                                },
+                                {
+                                    "Label": "新闻媒体",
+                                    "Value": "NEWS_AND_MEDIA",
+                                    "Group": "商务资讯"
+                                },
+                                {
+                                    "Label": "经济金融",
+                                    "Value": "ECONOMY_AND_FINANCE",
+                                    "Group": "商务资讯"
+                                },
+                                {
+                                    "Label": "招聘求职",
+                                    "Value": "JOB_SEARCH_AND_CAREERS",
+                                    "Group": "商务资讯"
+                                },
+                                {
+                                    "Label": "购物",
+                                    "Value": "SHOPPING",
+                                    "Group": "消费娱乐"
+                                },
+                                {
+                                    "Label": "电商",
+                                    "Value": "ECOMMERCE",
+                                    "Group": "消费娱乐"
+                                },
+                                {
+                                    "Label": "拍卖 / 交易平台",
+                                    "Value": "AUCTIONS_AND_MARKETPLACES",
+                                    "Group": "消费娱乐"
+                                },
+                                {
+                                    "Label": "交友婚恋",
+                                    "Value": "DATING_AND_RELATIONSHIPS",
+                                    "Group": "消费娱乐"
+                                },
+                                {
+                                    "Label": "游戏",
+                                    "Value": "GAMING",
+                                    "Group": "消费娱乐"
+                                },
+                                {
+                                    "Label": "体育",
+                                    "Value": "SPORTS",
+                                    "Group": "消费娱乐"
+                                },
+                                {
+                                    "Label": "影视",
+                                    "Value": "MOVIES",
+                                    "Group": "消费娱乐"
+                                },
+                                {
+                                    "Label": "音乐",
+                                    "Value": "MUSIC",
+                                    "Group": "消费娱乐"
+                                },
+                                {
+                                    "Label": "博客",
+                                    "Value": "BLOGS",
+                                    "Group": "消费娱乐"
+                                },
+                                {
+                                    "Label": "论坛",
+                                    "Value": "FORUMS",
+                                    "Group": "消费娱乐"
+                                },
+                                {
+                                    "Label": "占星 / 玄学",
+                                    "Value": "ASTROLOGY",
+                                    "Group": "消费娱乐"
+                                },
+                                {
+                                    "Label": "宗教",
+                                    "Value": "RELIGION",
+                                    "Group": "消费娱乐"
+                                },
+                                {
+                                    "Label": "饮食",
+                                    "Value": "FOOD_AND_DRINK",
+                                    "Group": "消费娱乐"
+                                },
+                                {
+                                    "Label": "动漫",
+                                    "Value": "CARTOONS_AND_ANIME",
+                                    "Group": "消费娱乐"
+                                },
+                                {
+                                    "Label": "漫画",
+                                    "Value": "COMIC_BOOKS",
+                                    "Group": "消费娱乐"
+                                },
+                                {
+                                    "Label": "人工智能",
+                                    "Value": "ARTIFICIAL_INTELLIGENCE",
+                                    "Group": "AI 与加密货币"
+                                },
+                                {
+                                    "Label": "加密货币",
+                                    "Value": "CRYPTOCURRENCY",
+                                    "Group": "AI 与加密货币"
+                                },
+                                {
+                                    "Label": "挖矿",
+                                    "Value": "CRYPTOMINING",
+                                    "Group": "AI 与加密货币"
+                                },
+                                {
+                                    "Label": "苹果设备遥测",
+                                    "Value": "TRACK_APPLE",
+                                    "Group": "设备遥测（HaGeZi）"
+                                },
+                                {
+                                    "Label": "亚马逊 / Alexa",
+                                    "Value": "TRACK_AMAZON",
+                                    "Group": "设备遥测（HaGeZi）"
+                                },
+                                {
+                                    "Label": "三星",
+                                    "Value": "TRACK_SAMSUNG",
+                                    "Group": "设备遥测（HaGeZi）"
+                                },
+                                {
+                                    "Label": "小米",
+                                    "Value": "TRACK_XIAOMI",
+                                    "Group": "设备遥测（HaGeZi）"
+                                },
+                                {
+                                    "Label": "华为",
+                                    "Value": "TRACK_HUAWEI",
+                                    "Group": "设备遥测（HaGeZi）"
+                                },
+                                {
+                                    "Label": "Windows / Office",
+                                    "Value": "TRACK_WINDOWS",
+                                    "Group": "设备遥测（HaGeZi）"
+                                },
+                                {
+                                    "Label": "LG 电视",
+                                    "Value": "TRACK_LGWEBOS",
+                                    "Group": "设备遥测（HaGeZi）"
+                                },
+                                {
+                                    "Label": "Roku",
+                                    "Value": "TRACK_ROKU",
+                                    "Group": "设备遥测（HaGeZi）"
+                                },
+                                {
+                                    "Label": "TikTok（增强）",
+                                    "Value": "TRACK_TIKTOK",
+                                    "Group": "设备遥测（HaGeZi）"
+                                }
+                            ],
+                            "Help": "勾选即启用，名称与 UniFi 界面里那些灰显分类一一对应（原名见括注）。默认「僵尸网络 + 恶意软件 + 钓鱼」来自 Threat Intel（约 51 万条），与上面的 Pro 档合计约 65 万条、占 CoreDNS 约 80MB。带「约 xx 万」的分类明显吃内存，注意别超过下面的域名上限"
+                        },
+                        {
+                            "Key": "UNIFI_BLOCKLIST_EXTRA_CATEGORIES",
+                            "Label": "追加分类键（高级）",
                             "Type": "text",
-                            "Default": "ADS_PRO BOTNETS MALWARE PHISHING",
-                            "Required": true,
-                            "Placeholder": "ADS_PRO BOTNETS MALWARE PHISHING",
-                            "Help": "空格或逗号分隔；用「查看分类」按钮看可用名字。默认 4 类约 65 万域名、占 CoreDNS 约 80MB"
+                            "Default": "",
+                            "Placeholder": "GAMBLING DGA_DOMAINS",
+                            "Help": "上面没列出的分类可以直接填键名（逗号或空格分隔），完整键名用扩展按钮「查看分类」查看；填错会被忽略并写进日志。留空即可"
                         },
                         {
                             "Key": "UNIFI_BLOCKLIST_AUTO_UPDATE",
                             "Label": "每 12 小时自动更新",
                             "Type": "switch",
                             "Default": "1",
-                            "Help": "关闭后只能点「立即更新列表」手动更新"
+                            "Help": "关闭后只能点扩展按钮「立即更新列表」手动更新（列表内容变化时 DNS 会中断约 10 秒）"
                         },
                         {
                             "Key": "UNIFI_BLOCKLIST_EXTRA_LISTS",
                             "Label": "附加列表 URL",
                             "Type": "textarea",
                             "Default": "",
-                            "Help": "每行一个地址（plain / hosts / adblock 格式均可），加在所选分类之上"
+                            "Rows": 3,
+                            "Help": "每行一个地址（plain / hosts / adblock 格式均可），加在上面所选分类之上。含引号或 $ 的地址会被跳过（该文件会被上游脚本 source 执行）"
                         },
                         {
                             "Key": "UNIFI_BLOCKLIST_MAX_ENTRIES",
                             "Label": "域名上限",
                             "Type": "number",
+                            "Min": 1000,
                             "Default": "1500000",
-                            "Help": "合并后超过这个数量就不应用，保护网关内存"
+                            "Help": "合并后超过这个数量就不应用，保护网关内存（约 20 万域名 ≈ 15MB、65 万 ≈ 80MB）；上一次生效的列表会保留"
                         },
                         {
                             "Key": "UNIFI_BLOCKLIST_UPDATE_CHECK",
                             "Label": "检查上游新版本",
                             "Type": "switch",
                             "Default": "1",
-                            "Help": "更新列表时顺带查一次上游 release，只提示不自动升级"
+                            "Help": "更新列表时顺带查一次上游 release，只在「运行状态」里提示，不自动升级"
                         }
                     ]
                 }

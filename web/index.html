@@ -1332,17 +1332,21 @@
                                             {{ opt.label }}</option>
                                     </select>
 
-                                    <!-- multi-select -->
+                                    <!-- multi-select（Options[].Group 会渲染成小组标题） -->
                                     <div v-else-if="fieldType(field) === 'multi-select'"
-                                        class="bg-white/60 border border-gray-200 rounded-xl px-3 py-3 shadow-sm space-y-2">
-                                        <label v-for="opt in fieldOptions(field)" :key="opt.value"
-                                            class="flex items-center space-x-2 cursor-pointer">
-                                            <input type="checkbox" :value="opt.value"
-                                                :checked="multiSelected(field).includes(opt.value)"
-                                                @change="toggleMulti(field, opt.value)"
-                                                class="accent-blue-600 w-4 h-4">
-                                            <span class="text-gray-700">{{ opt.label }}</span>
-                                        </label>
+                                        class="bg-white/60 border border-gray-200 rounded-xl px-3 py-3 shadow-sm grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1.5">
+                                        <template v-for="(opt, oi) in fieldOptions(field)" :key="opt.value">
+                                            <div v-if="opt.group && (oi === 0 || fieldOptions(field)[oi - 1].group !== opt.group)"
+                                                class="sm:col-span-2 text-[11px] font-medium text-gray-400 pt-2">
+                                                {{ opt.group }}</div>
+                                            <label class="flex items-center space-x-2 cursor-pointer">
+                                                <input type="checkbox" :value="opt.value"
+                                                    :checked="multiSelected(field).includes(opt.value)"
+                                                    @change="toggleMulti(field, opt.value)"
+                                                    class="accent-blue-600 w-4 h-4 shrink-0">
+                                                <span class="text-gray-700 text-xs">{{ opt.label }}</span>
+                                            </label>
+                                        </template>
                                     </div>
 
                                     <!-- textarea -->
@@ -1408,14 +1412,26 @@
                         class="text-center text-gray-400 py-4 text-xs">该应用未声明配置项</div>
                 </div>
 
-                <div class="flex space-x-3 pt-2 shrink-0">
-                    <button @click="activeApp = null"
-                        class="btn-apple flex-1 py-3 text-gray-500 font-medium border rounded-2xl hover:bg-gray-50">取消</button>
-                    <button @click="saveAppConfig" :disabled="isSavingConfig"
-                        class="btn-apple flex-1 bg-black text-white py-3 rounded-2xl font-medium shadow-lg hover:bg-gray-800 flex justify-center items-center disabled:opacity-60">
+                <div class="space-y-2 pt-2 shrink-0">
+                    <p v-if="configSavedHint"
+                        class="text-xs text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-xl px-3 py-2 leading-relaxed">
+                        {{ configSavedHint }}</p>
+                    <div class="flex space-x-2">
+                        <button @click="activeApp = null"
+                            class="btn-apple flex-1 py-3 text-gray-500 font-medium border rounded-2xl hover:bg-gray-50">取消</button>
+                        <button v-if="canSaveConfig" @click="saveAppConfig(false)" :disabled="isSavingConfig"
+                            class="btn-apple flex-1 py-3 rounded-2xl font-medium border border-gray-300 text-gray-700 hover:bg-gray-50 disabled:opacity-60"
+                            title="只写入配置文件，不重启服务；改动在下次启动或重启后生效">
+                            仅保存配置
+                        </button>
+                    </div>
+                    <button v-if="canSaveConfig" @click="saveAppConfig(true)" :disabled="isSavingConfig"
+                        class="btn-apple w-full bg-black text-white py-3 rounded-2xl font-medium shadow-lg hover:bg-gray-800 flex justify-center items-center disabled:opacity-60">
                         <i v-if="isSavingConfig" data-lucide="loader-2" class="w-4 h-4 mr-2 animate-spin"></i>
-                        <span>{{ (configMode === 'schema' || Object.keys(appConfig).length > 0) ? '保存并重启服务' : '完成' }}</span>
+                        <span>保存并重启服务</span>
                     </button>
+                    <button v-else @click="activeApp = null"
+                        class="btn-apple w-full bg-black text-white py-3 rounded-2xl font-medium shadow-lg hover:bg-gray-800">完成</button>
                 </div>
             </div>
         </div>
@@ -2413,7 +2429,9 @@
                     const opts = pick(f, 'Options', 'options') || [];
                     return opts.map(o => ({
                         label: pick(o, 'Label', 'label') || pick(o, 'Value', 'value') || '',
-                        value: String(pick(o, 'Value', 'value') ?? '')
+                        value: String(pick(o, 'Value', 'value') ?? ''),
+                        // 可选分组标题：选项多时按 Group 插一行小标题
+                        group: String(pick(o, 'Group', 'group') ?? '')
                     }));
                 };
 
@@ -2613,9 +2631,15 @@
                 };
 
                 // 保存配置
-                const saveAppConfig = async () => {
+                // 仅保存配置：写入 env 后不重启，改动留到下次启动/重启生效
+                const configSavedHint = ref('');
+                const canSaveConfig = computed(() =>
+                    configMode.value === 'schema' || Object.keys(appConfig.value || {}).length > 0);
+
+                const saveAppConfig = async (restart = true) => {
                     if (!activeApp.value) return;
                     isSavingConfig.value = true;
+                    configSavedHint.value = '';
                     try {
                         let payload = {};
                         if (configMode.value === 'schema') {
@@ -2639,12 +2663,17 @@
                         const res = await callApi(`/api/apps/${activeApp.value.id}/config`, 'POST', payload);
                         if (res && res.errors) {
                             configErrors.value = res.errors;
-                            isSavingConfig.value = false;
                             return;
                         }
                         if (res === null) {
                             alert('保存失败：网络错误或令牌无效');
-                            isSavingConfig.value = false;
+                            return;
+                        }
+                        if (restart === false) {
+                            // 仅保存：不动服务，留在弹窗里给明确回执
+                            const envPath = res.envPath || res.EnvPath
+                                || `/data/softcenter/config/${activeApp.value.id}.env`;
+                            configSavedHint.value = `已写入 ${envPath}（未重启服务，改动在下次启动/重启后生效）`;
                             return;
                         }
                         await callApi(`/api/apps/${activeApp.value.id}/control?action=restart`, 'POST');
@@ -2845,7 +2874,7 @@
                 return {
                     token, handleTokenSubmit, loadOne, gateVisible, gateToken, gateError, gateBusy, gateInputType, checkToken, sysInfo, apps, cronJobs, activeApp, appConfig,
                     activePage, navItems, mobileNavItems, currentNavLabel, goPage, sysLogContent, loadSystemLogsInline,
-                    configMode, configSchema, configValues, configErrors, collapsedSections, isSavingConfig,
+                    configMode, configSchema, configValues, configErrors, collapsedSections, isSavingConfig, configSavedHint, canSaveConfig,
                     activeConfigTab, schemaTabNames, visibleSchemaSections, allSchemaFields,
                     schemaSections, fieldKey, fieldLabel, fieldType, fieldHelp, fieldPlaceholder, fieldRequired,
                     fieldMin, fieldMax, fieldRows, fieldMonospace, fieldOptions, isTruthy, switchLabel,
