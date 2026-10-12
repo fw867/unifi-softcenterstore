@@ -1,0 +1,322 @@
+#!/bin/sh
+
+# UniFi SoftCenter · 屏蔽清单（unifi-blocklist）
+#
+# 上游项目：https://github.com/msaifuddin/unifi-blocklist （MIT，脚本会按需下载并安装到 /data/unifi-blocklist）
+# 原理：把社区黑名单（HaGeZi / UT1 等）写进 UniFi 自己生成的 /run/utm/domainlist_0.list，
+#       再重启 CoreDNS 让它加载；watcher 每 15 秒复核，被 UniFi 重建时自动补写。
+#       —— 依赖 UniFi 未公开的内部机制，固件升级后可能失效；关闭开关会还原 UniFi 自己的列表。
+#
+# 面板配置：/data/softcenter/config/unifi-blocklist.env
+#   UNIFI_BLOCKLIST_CATEGORIES    启用分类（空格或逗号分隔，默认 ADS_PRO BOTNETS MALWARE PHISHING）
+#   UNIFI_BLOCKLIST_AUTO_UPDATE   1/0，是否启用 12 小时定时更新
+#   UNIFI_BLOCKLIST_EXTRA_LISTS   附加列表 URL（空格分隔，可留空）
+#   UNIFI_BLOCKLIST_MAX_ENTRIES   合并后域名数上限（超过则不应用，保护内存）
+#   UNIFI_BLOCKLIST_UPDATE_CHECK  1/0，更新时是否检查上游新版本
+#
+# 面板动作 → 实际执行：
+#   start   写配置 → 缺文件时用「面板全局更新代理」拉取上游 → 兼容性自检（不通过就中止，不碰系统）
+#           → blocklist.sh install（装 systemd 单元、后台跑一次列表更新）→ 按开关启用/停用定时器
+#   stop    blocklist.sh uninstall（停单元 + 还原 UniFi 自己的屏蔽列表；/data 下文件保留）
+#   status  systemctl 判断 watcher 是否在跑 → running/stopped（面板只看退出码）
+#
+# 注意：脚本运行在路由器的 /bin/sh（busybox ash），只能用 POSIX 语法。
+
+PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+export PATH
+
+CONFIG="/data/softcenter/config/unifi-blocklist.env"
+[ -f "$CONFIG" ] && . "$CONFIG"
+
+# 面板写 env 时会给含空格的值加单引号、多行值存成 b64:，这里两种都兼容；
+# 手工在 SSH 里写成 KEY=带 空格 的值（未加引号，source 时会当成"赋值+命令"）也能用：
+# 先 source，取不到再从文件里按行取原始值（去掉一层引号）。
+raw_env_value() {
+	[ -f "$CONFIG" ] || return 0
+	sed -n "s/^$1=//p" "$CONFIG" 2>/dev/null | head -n 1 \
+		| sed -e "s/^'//" -e "s/'$//" -e 's/^"//' -e 's/"$//'
+}
+
+decode_b64() {
+	case "$1" in
+	b64:*) printf '%s' "${1#b64:}" | base64 -d 2>/dev/null ;;
+	*) printf '%s' "$1" ;;
+	esac
+}
+
+cfg() {
+	# $1 = 变量名，$2 = 默认值
+	eval "v=\${$1:-}"
+	[ -n "$v" ] || v="$(raw_env_value "$1")"
+	[ -n "$v" ] || v="$2"
+	decode_b64 "$v"
+}
+
+UNIFI_BLOCKLIST_CATEGORIES="$(cfg UNIFI_BLOCKLIST_CATEGORIES 'ADS_PRO BOTNETS MALWARE PHISHING')"
+UNIFI_BLOCKLIST_AUTO_UPDATE="$(cfg UNIFI_BLOCKLIST_AUTO_UPDATE 1)"
+UNIFI_BLOCKLIST_EXTRA_LISTS="$(cfg UNIFI_BLOCKLIST_EXTRA_LISTS '')"
+UNIFI_BLOCKLIST_MAX_ENTRIES="$(cfg UNIFI_BLOCKLIST_MAX_ENTRIES 1500000)"
+UNIFI_BLOCKLIST_UPDATE_CHECK="$(cfg UNIFI_BLOCKLIST_UPDATE_CHECK 1)"
+
+BASE="/data/unifi-blocklist"
+BL="$BASE/blocklist.sh"
+CONF="$BASE/blocklist.conf"
+ENABLED="$BASE/categories.enabled"
+PANEL_CONF="/data/softcenter/config.json"
+LOG="/var/log/unifi-blocklist.log"
+DROPIN_DIR="/etc/systemd/system/unifi-blocklist-update.service.d"
+DROPIN="$DROPIN_DIR/10-softcenter-proxy.conf"
+REPO="msaifuddin/unifi-blocklist"
+WATCH_UNIT="unifi-blocklist-watch.service"
+UPDATE_SVC="unifi-blocklist-update.service"
+UPDATE_TIMER="unifi-blocklist-update.timer"
+
+log_date() {
+	echo "【$(date '+%Y年%m月%d日 %X')】: $1" >> "$LOG"
+}
+
+# ---- 面板的全局更新代理（与后端 NormalizeProxy 规则一致：socks5→socks5h，socks4→socks4a）----
+panel_proxy() {
+	[ -f "$PANEL_CONF" ] || return 0
+	tr -d '\n' < "$PANEL_CONF" 2>/dev/null \
+		| sed -n 's/.*"LocalProxy"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
+		| head -n 1
+}
+
+normalize_proxy() {
+	case "$1" in
+	"") ;;
+	socks5://*) echo "socks5h://${1#socks5://}" ;;
+	socks4://*) echo "socks4a://${1#socks4://}" ;;
+	*://*) echo "$1" ;;
+	*) echo "http://$1" ;;
+	esac
+}
+
+PROXY="$(normalize_proxy "$(panel_proxy)")"
+
+# 带上代理执行 curl（用于拉取上游脚本；列表下载由 systemd 单元负责，见 write_dropin）
+fetch_url() {
+	url="$1"
+	out="$2"
+	if [ -n "$PROXY" ]; then
+		https_proxy="$PROXY" http_proxy="$PROXY" curl -fsSL --connect-timeout 15 --retry 2 --retry-delay 1 -o "$out" "$url"
+	else
+		curl -fsSL --connect-timeout 15 --retry 2 --retry-delay 1 -o "$out" "$url"
+	fi
+}
+
+# 让 systemd 里跑的更新服务也走代理（否则定时任务在墙内拉不到列表）
+write_dropin() {
+	if [ -z "$PROXY" ]; then
+		rm -rf "$DROPIN_DIR"
+		return 0
+	fi
+	mkdir -p "$DROPIN_DIR" 2>/dev/null
+	cat > "$DROPIN" <<EOF
+[Service]
+Environment="https_proxy=$PROXY"
+Environment="http_proxy=$PROXY"
+EOF
+	systemctl daemon-reload 2>/dev/null
+}
+
+# ---- 上游文件（首次安装 / 文件缺失时拉取）----
+fetch_upstream() {
+	if [ -x "$BL" ]; then
+		return 0
+	fi
+	echo "首次使用：从上游 $REPO 拉取运行文件到 $BASE ..."
+	tmp="$(mktemp -d 2>/dev/null || echo /tmp/ubl.$$)"
+	mkdir -p "$tmp"
+	tar_file="$tmp/src.tar.gz"
+
+	tag="${TAG:-}"
+	[ -n "$tag" ] || tag="$(fetch_url "https://api.github.com/repos/$REPO/releases/latest" "$tmp/rel.json" 2>/dev/null && sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$tmp/rel.json" | head -n 1)"
+	branch="${BRANCH:-main}"
+	case "$tag" in
+	v[0-9]*.[0-9]*.[0-9]*) url="https://github.com/$REPO/archive/refs/tags/$tag.tar.gz" ;;
+	*) url="https://github.com/$REPO/archive/refs/heads/$branch.tar.gz" ;;
+	esac
+
+	if ! fetch_url "$url" "$tar_file"; then
+		rm -rf "$tmp"
+		echo "下载上游文件失败，请检查面板里的「全局更新代理」设置"
+		log_date "下载上游文件失败：$url"
+		exit 1
+	fi
+	if ! tar -xzf "$tar_file" -C "$tmp"; then
+		rm -rf "$tmp"
+		echo "解压上游文件失败"
+		log_date "解压上游文件失败"
+		exit 1
+	fi
+	src="$(find "$tmp" -mindepth 1 -maxdepth 1 -type d | head -n 1)"
+	if [ -z "$src" ] || [ ! -f "$src/blocklist.sh" ]; then
+		rm -rf "$tmp"
+		echo "上游包里没有找到 blocklist.sh"
+		log_date "上游包结构异常"
+		exit 1
+	fi
+
+	mkdir -p "$BASE"
+	for f in blocklist.sh install.sh categories.list blocklist.conf.example README.md LICENSE systemd; do
+		rm -rf "$BASE/$f"
+		cp -r "$src/$f" "$BASE/$f" 2>/dev/null
+	done
+	chmod +x "$BASE/blocklist.sh" "$BASE/install.sh" 2>/dev/null
+	rm -rf "$tmp"
+	log_date "已从上游安装运行文件（${tag:-$branch}）"
+	echo "上游运行文件已就绪（${tag:-$branch}）"
+}
+
+# ---- 写配置：分类清单 ----
+write_enabled() {
+	printf '%s' "$UNIFI_BLOCKLIST_CATEGORIES" \
+		| tr ',' ' ' \
+		| tr '\t' ' ' \
+		| tr -s ' ' '\n' \
+		| tr '[:lower:]' '[:upper:]' \
+		| grep -v '^$' \
+		| sort -u > "$ENABLED"
+	n=$(wc -l < "$ENABLED" | tr -d ' ')
+	[ "$n" -gt 0 ] || { echo "启用分类不能为空"; exit 1; }
+}
+
+# ---- 写配置：blocklist.conf 里由面板管理的键 ----
+emit_list_urls() {
+	echo "LIST_URLS=("
+	for u in $UNIFI_BLOCKLIST_EXTRA_LISTS; do
+		# 这个文件会被上游脚本 source 执行，含引号/反引号/美元符的地址直接跳过（防注入）
+		case "$u" in
+		*\"*|*\'*|*\$*|*\`*) continue ;;
+		esac
+		echo "  \"$u\""
+	done
+	echo ")"
+}
+
+write_conf() {
+	[ -f "$CONF" ] || cp "$BASE/blocklist.conf.example" "$CONF"
+	tmp="$CONF.tmp.$$"
+	: > "$tmp"
+	skip=0
+	seen=0
+	while IFS= read -r line || [ -n "$line" ]; do
+		if [ "$skip" = "1" ]; then
+			case "$line" in *")"*) skip=0 ;; esac
+			continue
+		fi
+		case "$line" in
+		LIST_URLS=*)
+			emit_list_urls >> "$tmp"
+			seen=1
+			skip=1
+			case "$line" in *")"*) skip=0 ;; esac
+			continue
+			;;
+		MAX_ENTRIES=*) printf 'MAX_ENTRIES=%s\n' "$UNIFI_BLOCKLIST_MAX_ENTRIES" >> "$tmp"; continue ;;
+		UPDATE_CHECK=*) printf 'UPDATE_CHECK=%s\n' "$UNIFI_BLOCKLIST_UPDATE_CHECK" >> "$tmp"; continue ;;
+		esac
+		printf '%s\n' "$line" >> "$tmp"
+	done < "$CONF"
+	if [ "$seen" = "0" ]; then
+		emit_list_urls >> "$tmp"
+	fi
+	grep -q '^MAX_ENTRIES=' "$tmp" || printf 'MAX_ENTRIES=%s\n' "$UNIFI_BLOCKLIST_MAX_ENTRIES" >> "$tmp"
+	grep -q '^UPDATE_CHECK=' "$tmp" || printf 'UPDATE_CHECK=%s\n' "$UNIFI_BLOCKLIST_UPDATE_CHECK" >> "$tmp"
+	mv "$tmp" "$CONF"
+	chmod 0644 "$CONF" 2>/dev/null
+}
+
+is_installed() {
+	[ -x "$BL" ]
+}
+
+start_service() {
+	[ "$(id -u)" = "0" ] || { echo "需要 root 权限"; exit 1; }
+
+	fetch_upstream
+
+	log_date "开始启动：分类=$(printf '%s' "$UNIFI_BLOCKLIST_CATEGORIES" | tr '\n' ' ')，上限=$UNIFI_BLOCKLIST_MAX_ENTRIES，定时更新=$UNIFI_BLOCKLIST_AUTO_UPDATE"
+	write_conf
+	write_enabled
+	write_dropin
+
+	# 兼容性闸门：先自检，不通过就什么都不改（不装单元、不写 UniFi 的域名列表）
+	echo "兼容性自检（只读）..."
+	if ! "$BL" check; then
+		echo
+		echo "兼容性自检未通过，已中止：未安装 systemd 单元，也未改动 UniFi 的域名列表。"
+		echo "常见原因：该网络还没在 UniFi 里开启 Ad Block，或本机型/固件不是同一套过滤引擎。"
+		log_date "兼容性自检未通过，中止启动"
+		exit 1
+	fi
+
+	# install 会装单元、起 watcher、并在后台跑一次列表更新（用的是刚写好的配置）
+	if ! "$BL" install; then
+		log_date "blocklist.sh install 失败"
+		echo "安装 systemd 单元失败，详见 $LOG"
+		exit 1
+	fi
+
+	if [ "$UNIFI_BLOCKLIST_AUTO_UPDATE" = "1" ]; then
+		systemctl enable "$UPDATE_TIMER" >/dev/null 2>&1
+		systemctl start "$UPDATE_TIMER" >/dev/null 2>&1
+		echo "已启用 12 小时定时更新"
+	else
+		systemctl disable --now "$UPDATE_TIMER" >/dev/null 2>&1
+		echo "已关闭定时更新（仍可手动点「立即更新列表」）"
+	fi
+
+	log_date "启动完成"
+	echo
+	echo "已启动。首次列表下载在后台进行，稍后点「查看状态」确认 Applied: yes。"
+}
+
+stop_service() {
+	rm -rf "$DROPIN_DIR"
+	systemctl daemon-reload 2>/dev/null
+	if is_installed; then
+		"$BL" uninstall
+		log_date "已停止并还原 UniFi 自己的屏蔽列表"
+		echo "已停止：systemd 单元已移除，UniFi 自己的域名列表已还原（$BASE 下的文件与配置保留）"
+	else
+		systemctl disable --now "$WATCH_UNIT" "$UPDATE_TIMER" >/dev/null 2>&1
+		systemctl stop "$UPDATE_SVC" >/dev/null 2>&1
+		log_date "已停止（未找到 $BL，无法还原 UniFi 列表）"
+		echo "已停止（未找到 $BL，未能还原 UniFi 自己的列表）"
+	fi
+}
+
+status_service() {
+	if systemctl is-active --quiet "$WATCH_UNIT" 2>/dev/null; then
+		pid="$(systemctl show -p MainPID --value "$WATCH_UNIT" 2>/dev/null)"
+		echo "running pid=${pid:-unknown}"
+		exit 0
+	fi
+	echo "stopped"
+	exit 1
+}
+
+case "${1:-}" in
+start)
+	start_service
+	;;
+stop)
+	stop_service
+	;;
+restart)
+	stop_service
+	sleep 1
+	start_service
+	;;
+status)
+	status_service
+	;;
+*)
+	echo "Usage: $0 {start|stop|restart|status}"
+	echo "（运行状态明细请执行 $BL status）"
+	exit 1
+	;;
+esac

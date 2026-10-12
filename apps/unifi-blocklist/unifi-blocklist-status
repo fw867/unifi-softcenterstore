@@ -1,0 +1,250 @@
+#!/bin/sh
+
+# UniFi SoftCenter · 屏蔽清单运行状态
+#
+# 用法：
+#   unifi-blocklist-status          文本报告（SSH 里看）
+#   unifi-blocklist-status --json   面板「运行状态」按钮用的 JSON（只输出 JSON，stderr 保持干净）
+#
+# JSON 字段（都可省略，面板会补默认值）：
+#   running    watcher 是否在跑（false 时面板只提示"服务未运行"）
+#   time/pid/mem   标题栏显示
+#   chips[]   {label,value}   标题栏小标签
+#   metrics[] {label,value,hint}   指标卡
+#   checks[]  {label,value,state}  state: ok|warn|bad|info（检查项徽标）
+#   verdicts[] {level,text}   level: ok|warn|info
+#
+# 注意：路由器 /bin/sh 是 busybox ash，只能用 POSIX 语法。
+
+PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+export PATH
+
+BASE="/data/unifi-blocklist"
+BL="$BASE/blocklist.sh"
+ENABLED="$BASE/categories.enabled"
+CONFIG="/data/softcenter/config/unifi-blocklist.env"
+AUTO="1"
+WATCH_UNIT="unifi-blocklist-watch.service"
+UPDATE_SVC="unifi-blocklist-update.service"
+UPDATE_TIMER="unifi-blocklist-update.timer"
+
+JSON=0
+[ "${1:-}" = "--json" ] && JSON=1
+
+[ -f "$CONFIG" ] && . "$CONFIG"
+AUTO="${UNIFI_BLOCKLIST_AUTO_UPDATE:-1}"
+case "$AUTO" in
+b64:*) AUTO="$(printf '%s' "${AUTO#b64:}" | base64 -d 2>/dev/null)" ;;
+esac
+[ -n "$AUTO" ] || AUTO=1
+
+# ---------- 采集 ----------
+dump=""
+dump_status() {
+	if [ -z "$dump" ] && [ -x "$BL" ]; then
+		dump="$("$BL" status 2>/dev/null)"
+	fi
+}
+
+# 取 "Label      : value" 的值（多行包裹时只取第一行）
+field() {
+	dump_status
+	printf '%s\n' "$dump" | sed -n "s/^$1[[:space:]]*:[[:space:]]*//p" | head -n 1
+}
+
+unit_active() { systemctl is-active "$1" 2>/dev/null | head -n 1; }
+unit_result() { systemctl show "$1" -p Result --value 2>/dev/null | head -n 1; }
+
+installed=0
+[ -x "$BL" ] && installed=1
+
+watcher_state="unknown"
+[ "$installed" = "1" ] && watcher_state="$(unit_active "$WATCH_UNIT")"
+running=0
+[ "$watcher_state" = "active" ] && running=1
+
+watcher_pid=""
+[ "$running" = "1" ] && watcher_pid="$(systemctl show -p MainPID --value "$WATCH_UNIT" 2>/dev/null)"
+
+version_raw="$(field 'Version')"
+version="$version_raw"
+notice=""
+case "$version_raw" in
+*"(update available"*)
+	version="${version_raw%% (*}"
+	notice="${version_raw#*(}"
+	notice="${notice%)}"
+	;;
+esac
+
+categories_count=0
+if [ -f "$ENABLED" ]; then
+	categories_count="$(grep -vc '^[[:space:]]*$' "$ENABLED" 2>/dev/null)"
+	[ -n "$categories_count" ] || categories_count=0
+fi
+
+domains_raw="$(field 'Domains')"
+domains="$domains_raw"
+case "$domains_raw" in
+*none*) domains="0" ;;
+*) domains="$(printf '%s' "$domains_raw" | awk '{print $1}')" ;;
+esac
+[ -n "$domains" ] || domains="0"
+
+applied_raw="$(field 'Applied')"
+applied="${applied_raw%% *}"
+[ -n "$applied" ] || applied="unknown"
+
+coredns_raw="$(field 'CoreDNS')"
+coredns_state="unknown"
+coredns_pid=""
+coredns_mem=""
+case "$coredns_raw" in
+running*) coredns_state="running" ;;
+"") coredns_state="unknown" ;;
+*) coredns_state="stopped" ;;
+esac
+# "running (pid 9659, 120 MB)"
+case "$coredns_raw" in
+*pid*)
+	coredns_pid="$(printf '%s' "$coredns_raw" | sed -n 's/.*pid[[:space:]]*\([0-9][0-9]*\).*/\1/p')"
+	;;
+esac
+case "$coredns_raw" in
+*MB*) coredns_mem="$(printf '%s' "$coredns_raw" | sed -n 's/.*,[[:space:]]*\([0-9][0-9]*\) MB.*/\1/p')" ;;
+esac
+
+last_update="$(field 'Last update')"
+next_update="$(field 'Next update')"
+update_result="$(unit_result "$UPDATE_SVC")"
+timer_state="$(unit_active "$UPDATE_TIMER")"
+
+mem_avail="$(awk '/MemAvailable/ {print int($2/1024)}' /proc/meminfo 2>/dev/null)"
+[ -n "$mem_avail" ] || mem_avail="?"
+
+now="$(date '+%Y-%m-%d %H:%M:%S')"
+
+# ---------- 结论 ----------
+if [ "$installed" != "1" ]; then
+	verdict_level="info"
+	verdict_text="尚未安装：请在卡片上打开开关，脚本会从上游拉取运行文件并做兼容性自检。"
+elif [ "$running" != "1" ]; then
+	verdict_level="warn"
+	verdict_text="watcher 未在运行（状态 $watcher_state）：屏蔽清单可能已被 UniFi 重建覆盖，点卡片开关重启即可。"
+elif [ "$applied" = "yes" ]; then
+	verdict_level="ok"
+	verdict_text="已应用：domainlist_0 里标记与校验和一致，屏蔽正在生效（$domains 条域名）。"
+elif [ "$applied" = "NO" ]; then
+	verdict_level="warn"
+	verdict_text="Applied 为 NO：UniFi 刚重建了域名文件，watcher 会在约 30 秒内补写。若一直如此，见「查看日志」。"
+else
+	verdict_level="warn"
+	verdict_text="Applied 为 $applied：上一次应用没完成或校验失败，上一份列表已回滚；下次定时更新会重试。"
+fi
+
+if [ "$update_result" = "failed" ]; then
+	verdict_level="warn"
+	verdict_text="$verdict_text（另外：上一次列表更新执行失败）"
+fi
+
+note_level="info"
+note_text=""
+if [ -n "$notice" ]; then
+	note_text="上游有新版本：$notice"
+fi
+
+# ---------- 输出 ----------
+if [ "$JSON" = "0" ]; then
+	echo "屏蔽清单（unifi-blocklist）状态"
+	echo "----------------------------------------"
+	echo "上游版本    : ${version:-未知}"
+	echo "已启用分类  : $categories_count 个"
+	echo "屏蔽域名    : $domains"
+	echo "应用状态    : $applied"
+	echo "CoreDNS     : ${coredns_raw:-未知}"
+	echo "Watcher     : $watcher_state"
+	echo "定时器      : $timer_state"
+	echo "上次更新    : ${last_update:-未知}"
+	echo "下次更新    : ${next_update:-未知}"
+	echo "可用内存    : ${mem_avail} MB"
+	[ -n "$note_text" ] && echo "提示        : $note_text"
+	echo "----------------------------------------"
+	echo "[$verdict_level] $verdict_text"
+	exit 0
+fi
+
+jstr() {
+	printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' | tr -d '\n\r\t'
+}
+
+chips=""
+metrics=""
+checks=""
+verdicts=""
+
+add_chip() {
+	[ -z "$chips" ] || chips="$chips,"
+	chips="$chips{\"label\":\"$(jstr "$1")\",\"value\":\"$(jstr "$2")\"}"
+}
+add_metric() {
+	[ -z "$metrics" ] || metrics="$metrics,"
+	metrics="$metrics{\"label\":\"$(jstr "$1")\",\"value\":\"$(jstr "$2")\",\"hint\":\"$(jstr "$3")\"}"
+}
+add_check() {
+	[ -z "$checks" ] || checks="$checks,"
+	checks="$checks{\"label\":\"$(jstr "$1")\",\"value\":\"$(jstr "$2")\",\"state\":\"$(jstr "$3")\"}"
+}
+add_verdict() {
+	[ -z "$verdicts" ] || verdicts="$verdicts,"
+	verdicts="$verdicts{\"level\":\"$(jstr "$1")\",\"text\":\"$(jstr "$2")\"}"
+}
+
+add_metric "屏蔽域名" "$domains" "合并后的域名条数"
+[ -n "$coredns_mem" ] && add_metric "CoreDNS 内存" "${coredns_mem} MB" "过滤引擎进程占用"
+case "$mem_avail" in
+''|*[!0-9]*) ;;                                   # 读不到就干脆不显示这一项
+*) add_metric "可用内存" "${mem_avail} MB" "网关剩余内存" ;;
+esac
+[ "$categories_count" -gt 0 ] && add_metric "启用分类" "$categories_count 个" "来自 categories.enabled"
+
+add_chip "上游版本" "${version:-未知}"
+add_chip "应用状态" "$applied"
+[ -n "$last_update" ] && add_chip "上次更新" "$last_update"
+[ -n "$next_update" ] && add_chip "下次更新" "$next_update"
+
+check_state() {
+	case "$1" in
+	active) echo ok ;;
+	activating|reloading) echo warn ;;
+	failed) echo bad ;;
+	*) echo bad ;;
+	esac
+}
+if [ "$installed" = "1" ]; then
+	add_check "watcher 服务" "$watcher_state" "$(check_state "$watcher_state")"
+	timer_value="$timer_state"
+	timer_class="$(check_state "$timer_state")"
+	# 面板里关掉定时更新时，定时器不是 active 属于预期，标成灰色而不是告警
+	if [ "$AUTO" != "1" ] && [ "$timer_state" != "active" ]; then
+		timer_value="已关闭（面板设置）"
+		timer_class="info"
+	fi
+	add_check "更新定时器" "$timer_value" "$timer_class"
+	add_check "上次更新结果" "${update_result:-unknown}" "$([ "$update_result" = success ] && echo ok || echo warn)"
+	add_check "CoreDNS" "$coredns_state" "$([ "$coredns_state" = running ] && echo ok || echo bad)"
+else
+	add_check "运行文件" "未安装" "info"
+fi
+
+add_verdict "$verdict_level" "$verdict_text"
+[ -n "$note_text" ] && add_verdict "$note_level" "$note_text"
+
+mem_label=""
+[ -n "$coredns_mem" ] && mem_label="CoreDNS ${coredns_mem} MB"
+
+printf '{"running":%s,"time":"%s","pid":"%s","mem":"%s","chips":[%s],"metrics":[%s],"checks":[%s],"verdicts":[%s]}\n' \
+	"$([ "$running" = "1" ] && echo true || echo false)" \
+	"$(jstr "$now")" \
+	"$(jstr "$watcher_pid")" \
+	"$(jstr "$mem_label")" \
+	"$chips" "$metrics" "$checks" "$verdicts"

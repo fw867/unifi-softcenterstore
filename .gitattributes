@@ -89,3 +89,5 @@ apps/fwclient/fwclient-linux-arm64 binary
 #*.rtf   diff=astextplain
 #*.RTF   diff=astextplain
 apps/fwclient/fwclient-linux-arm64 binary
+apps/**/unifi-blocklist text eol=lf
+apps/**/unifi-blocklist-* text eol=lf

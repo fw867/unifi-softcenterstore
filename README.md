@@ -285,6 +285,33 @@ systemd 服务可用 `EnvironmentFile=/data/softcenter/config/<id>.env`。
 | `rules.*` | 字符串 | 徽标：值为 **`就位`** 显示绿色，**`缺失`** 显示红色，其它值显示灰色（如 `未知`） |
 | `verdicts[].level` | `ok`/`warn`/`info` | 结论配色与图标：绿 ✓ / 红 ⚠ / 蓝 ⓘ |
 
+上面的连接型字段（`total` / `tcp` / `fd` / `conntrack` / `proto` / `states` / `remote_ports` /
+`local_ports` / `lan` / `rules`）**只有在你提供时才会渲染**——面板检测到这些键就画"连接数 / 协议占比 /
+端口 Top / 局域网设备"那一整套，没提供就完全不显示。所以不是代理类插件也没关系，用下面三个通用字段
+描述自己即可（`apps/unifi-blocklist/unifi-blocklist-status` 就是只用通用字段的例子）：
+
+| 通用字段 | 类型 | 面板用法 |
+|---|---|---|
+| `chips[]` | `[{label,value}]` | 标题栏下方的小标签，适合放"版本 / 状态 / 上次更新 / 下次更新"这类键值对 |
+| `metrics[]` | `[{label,value,hint}]` | 指标卡（2/4 列自适应）；`hint` 是卡片右下角的灰色小字 |
+| `checks[]` | `[{label,value,state}]` | 检查项列表；`state` 取 `ok`（绿）/ `warn`（橙）/ `bad`（红）/ `info`（灰） |
+
+```jsonc
+{
+  "running": true,
+  "time": "2026-10-08 23:10:02",
+  "pid": "9659",
+  "mem": "CoreDNS 120 MB",
+  "chips":   [ { "label": "上游版本", "value": "1.2.3" },
+               { "label": "应用状态", "value": "yes" } ],
+  "metrics": [ { "label": "屏蔽域名", "value": "652,340", "hint": "合并后的域名条数" } ],
+  "checks":  [ { "label": "watcher 服务", "value": "active", "state": "ok" } ],
+  "verdicts": [ { "level": "ok", "text": "已应用：屏蔽正在生效" } ]
+}
+```
+
+标题栏的 `time / pid / uptime / mem` 每一项都可以省略（为空就不显示），`pid` 与 `mem` 用字符串即可。
+
 #### 脚本编写要点
 
 * **必须能被 POSIX sh 解析**（路由器 `/bin/sh` 是 busybox ash，不是 bash）：不要用 `${V//pat/rep}`、`[[ ]]`、数组、`<<<`；`${V//pat/rep}` 会直接 `Bad substitution` 终止脚本。
