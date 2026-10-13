@@ -92,3 +92,4 @@ apps/fwclient/fwclient-linux-arm64 binary
 apps/**/unifi-blocklist text eol=lf
 apps/**/unifi-blocklist-* text eol=lf
 apps/**/sshmanage text eol=lf
+apps/**/cloudflared text eol=lf

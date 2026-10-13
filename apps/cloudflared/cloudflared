@@ -1,0 +1,534 @@
+#!/bin/sh
+
+# UniFi SoftCenter · Cloudflare Tunnel（cloudflared）
+#
+# 它做什么：把局域网里的服务通过 Cloudflare 隧道发布出去，不需要公网 IP、不用开端口。
+# 二进制不随插件分发：首次启动时按需从 GitHub releases 下载（走面板「全局更新代理」），
+# 校验 ELF 架构 + 能 `--version` 跑起来之后才原子替换，并记录版本用于「检测更新」。
+#
+# 面板配置：/data/softcenter/config/cloudflared.env
+#   CF_TUNNEL_NAME    隧道名（先用扩展按钮「创建隧道」创建）
+#   CF_CONFIG         config.yml 内容（textarea，多行会以 b64 存入 env，这里会自动解码）
+#   CF_AUTO_UPDATE    1/0：启动时顺手检查并更新 cloudflared
+#
+# 引导流程（check / info / start 都会告诉你当前该做哪一步）：
+#   1)「生成登录链接」→ 浏览器打开输出的 URL 授权 →「检查登录状态」（cert.pem 落地即成功）
+#   2)「创建隧道」（用面板里的隧道名，会生成 <UUID>.json 凭据）
+#   3) 面板粘贴 config.yml（参考「生成配置模板」）→「校验配置」
+#   4)「绑定域名」（把配置里第一个 hostname 指到该隧道）
+#   5) 打开卡片开关 → 常驻运行
+#
+# 动作：start stop restart status check info guide
+#       login login-status create-tunnel route-dns validate list template
+#       check-update update logs
+#
+# 注意：路由器 /bin/sh 是 busybox ash，只能用 POSIX 语法（不用 local / 数组 / [[ ]] / ${v//}）。
+
+PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+export PATH
+
+CONFIG="/data/softcenter/config/cloudflared.env"
+[ -f "$CONFIG" ] && . "$CONFIG"
+
+raw_env_value() {
+	[ -f "$CONFIG" ] || return 0
+	sed -n "s/^$1=//p" "$CONFIG" 2>/dev/null | head -n 1 \
+		| sed -e "s/^'//" -e "s/'$//" -e 's/^"//' -e 's/"$//'
+}
+
+decode_b64() {
+	case "$1" in
+	b64:*) printf '%s' "${1#b64:}" | base64 -d 2>/dev/null ;;
+	*) printf '%s' "$1" ;;
+	esac
+}
+
+cfg() {
+	eval "v=\${$1:-}"
+	[ -n "$v" ] || v="$(raw_env_value "$1")"
+	[ -n "$v" ] || v="$2"
+	decode_b64 "$v"
+}
+
+CF_TUNNEL_NAME="$(cfg CF_TUNNEL_NAME unifi)"
+CF_CONFIG="$(cfg CF_CONFIG '')"
+CF_AUTO_UPDATE="$(cfg CF_AUTO_UPDATE 1)"
+
+BASE="/data/softcenter/cloudflared"
+BIN="/data/softcenter/bin/cloudflared-core"
+CFDIR="/root/.cloudflared"
+CERT="$CFDIR/cert.pem"
+CFG="$BASE/config.yml"
+STATE="$BASE/state/version"
+LOG="/var/log/cloudflared.log"
+LOGIN_LOG="$BASE/login.log"
+UNIT="/etc/systemd/system/cloudflared-tunnel.service"
+REPO="cloudflare/cloudflared"
+PANEL_CONF="/data/softcenter/config.json"
+
+log_date() {
+	echo "【$(date '+%Y年%m月%d日 %X')】: $1" >> "$LOG"
+}
+
+# ---------------- 代理（与面板 NormalizeProxy 同规则） ----------------
+panel_proxy() {
+	[ -f "$PANEL_CONF" ] || return 0
+	tr -d '\n' < "$PANEL_CONF" 2>/dev/null \
+		| sed -n 's/.*"LocalProxy"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1
+}
+
+normalize_proxy() {
+	case "$1" in
+	"") ;;
+	socks5://*) echo "socks5h://${1#socks5://}" ;;
+	socks4://*) echo "socks4a://${1#socks4://}" ;;
+	*://*) echo "$1" ;;
+	*) echo "http://$1" ;;
+	esac
+}
+
+PROXY="$(normalize_proxy "$(panel_proxy)")"
+
+# fetch <url> <输出文件>：优先走面板「全局更新代理」（版本检测与二进制下载都用它），
+# 代理走不通时退回直连，并把实际用的通道记到 TRANSPORT 里便于排查
+TRANSPORT="direct"
+fetch() {
+	if [ -n "$PROXY" ]; then
+		if curl -fsSL --connect-timeout 15 --retry 2 --retry-delay 1 -x "$PROXY" -o "$2" "$1"; then
+			TRANSPORT="proxy"
+			return 0
+		fi
+		echo "（经面板代理 $PROXY 访问失败，改用直连重试）" >&2
+		log_date "代理访问失败，退回直连：$1"
+	fi
+	TRANSPORT="direct"
+	curl -fsSL --connect-timeout 15 --retry 2 --retry-delay 1 -o "$2" "$1"
+}
+
+# ---------------- 架构 / 版本 ----------------
+asset_name() {
+	case "$(uname -m)" in
+	aarch64|arm64) echo cloudflared-linux-arm64 ;;
+	x86_64|amd64) echo cloudflared-linux-amd64 ;;
+	armv7l|armv6l) echo cloudflared-linux-arm ;;
+	*) echo "" ;;
+	esac
+}
+
+installed_version() {
+	[ -x "$BIN" ] || { echo ""; return 0; }
+	v="$("$BIN" --version 2>/dev/null | head -n 1 | awk '{print $3}')"
+	[ -n "$v" ] || v="$(cat "$STATE" 2>/dev/null)"
+	echo "$v"
+}
+
+latest_version() {
+	tmp="$BASE/.rel.json"
+	mkdir -p "$BASE" 2>/dev/null
+	if ! fetch "https://api.github.com/repos/$REPO/releases/latest" "$tmp"; then
+		return 1
+	fi
+	v="$(sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$tmp" | head -n 1)"
+	rm -f "$tmp"
+	[ -n "$v" ] || return 1
+	echo "$v"
+}
+
+# ---------------- 下载 / 安装二进制 ----------------
+elf_machine_ok() {
+	# 检查 ELF 机器码：arm64 = b7 00，amd64 = 3e 00（小端）
+	[ -f "$1" ] || return 1
+	magic="$(od -An -tx1 -j0 -N4 "$1" 2>/dev/null | tr -d ' \n')"
+	[ "$magic" = "7f454c46" ] || return 1
+	m="$(od -An -tx1 -j18 -N2 "$1" 2>/dev/null | tr -d ' \n')"
+	case "$(uname -m)" in
+	aarch64|arm64) [ "$m" = "b700" ] ;;
+	x86_64|amd64) [ "$m" = "3e00" ] ;;
+	*) return 0 ;;
+	esac
+}
+
+install_binary() {
+	force="$1"
+	asset="$(asset_name)"
+	if [ -z "$asset" ]; then
+		echo "不支持的架构：$(uname -m)"
+		return 1
+	fi
+	mkdir -p "$(dirname "$BIN")" "$BASE/state" || return 1
+
+	tag="$(latest_version)" || {
+		echo "无法查询 cloudflared 最新版本（检查面板「全局更新代理」）"
+		return 1
+	}
+	cur="$(installed_version)"
+	if [ "$force" != "1" ] && [ -n "$cur" ] && [ "$cur" = "$tag" ]; then
+		echo "cloudflared 已是最新（$cur），跳过下载"
+		return 0
+	fi
+	echo "下载 cloudflared $tag（$asset，约 36MB，代理：${PROXY:-未配置}）..."
+	tmp="$BIN.new.$$"
+	if ! fetch "https://github.com/$REPO/releases/download/$tag/$asset" "$tmp"; then
+		rm -f "$tmp"
+		echo "下载失败：$tag/$asset"
+		log_date "下载失败：$tag/$asset"
+		return 1
+	fi
+	size="$(wc -c < "$tmp" | tr -d ' ')"
+	if [ "$size" -lt 1000000 ]; then
+		rm -f "$tmp"
+		echo "下载文件异常（只有 ${size} 字节），已丢弃"
+		return 1
+	fi
+	if ! elf_machine_ok "$tmp"; then
+		rm -f "$tmp"
+		echo "下载的文件不是本机架构的 ELF（$(uname -m)），已丢弃"
+		log_date "架构校验失败：$tag/$asset"
+		return 1
+	fi
+	chmod 0755 "$tmp" 2>/dev/null
+	v="$("$tmp" --version 2>&1 | head -n 1)"
+	case "$v" in
+	cloudflared*version*) ;;
+	*)
+		rm -f "$tmp"
+		echo "二进制无法执行，已丢弃：$v"
+		log_date "二进制无法执行：$v"
+		return 1
+		;;
+	esac
+	# 原子替换：验证通过才动原来的二进制
+	mv "$tmp" "$BIN" || { rm -f "$tmp"; echo "替换二进制失败"; return 1; }
+	printf '%s\n' "$tag" > "$STATE"
+	case "$TRANSPORT" in
+	proxy) ch="经面板代理" ;;
+	*) ch="直连（面板代理未配置或不可用）" ;;
+	esac
+	echo "cloudflared 已安装：$v（版本记录 $tag，通道：$ch）"
+	log_date "已安装 cloudflared $tag（$asset）"
+	return 0
+}
+
+# ---------------- 配置 / 引导 ----------------
+config_template() {
+	printf '# cloudflared 配置（由 SoftCenter 写入 %s）\n' "$CFG"
+	printf 'tunnel: %s\n' "$CF_TUNNEL_NAME"
+	printf 'credentials-file: %s/<隧道UUID>.json\n\n' "$CFDIR"
+	printf 'ingress:\n'
+	printf '  # 把内网服务发布到某个域名（域名需已托管在 Cloudflare）\n'
+	printf '  - hostname: app.example.com\n'
+	printf '    service: http://192.168.1.10:8080\n'
+	printf '  # 规则必须有个兜底\n'
+	printf '  - service: http_status:404\n'
+}
+
+write_config() {
+	[ -n "$CF_CONFIG" ] || {
+		echo "面板里还没填 config.yml（可用「生成配置模板」参考）"
+		return 1
+	}
+	mkdir -p "$BASE" || return 1
+	printf '%s\n' "$CF_CONFIG" > "$CFG" || return 1
+	chmod 0600 "$CFG" 2>/dev/null
+	return 0
+}
+
+validate_config() {
+	[ -x "$BIN" ] || { echo "还没安装 cloudflared，先点「更新二进制」"; return 1; }
+	[ -f "$CFG" ] || { echo "没有配置文件：$CFG（先在面板里填 config.yml）"; return 1; }
+	out="$("$BIN" --config "$CFG" tunnel ingress validate 2>&1)"
+	rc=$?
+	if [ "$rc" = "0" ]; then
+		echo "配置校验通过：$CFG"
+	else
+		echo "配置校验未通过："
+		printf '%s\n' "$out" | head -n 10
+	fi
+	return $rc
+}
+
+guide() {
+	echo "当前进度与下一步："
+	if [ ! -x "$BIN" ]; then
+		echo "  [1/5] 还没有 cloudflared → 点「更新二进制」（或直接打开开关，会自动下载）"
+		return 0
+	fi
+	echo "  [1/5] 二进制就绪：$(installed_version)（路径 $BIN）"
+	if [ ! -f "$CERT" ]; then
+		echo "  [2/5] 未登录 → 点「生成登录链接」，在浏览器里选域名授权，再点「检查登录状态」"
+		return 0
+	fi
+	echo "  [2/5] 已登录（$CERT）"
+	if [ -z "$(ls -1 "$CFDIR"/*.json 2>/dev/null | head -n 1)" ]; then
+		echo "  [3/5] 还没有隧道凭据 → 点「创建隧道」（当前隧道名：$CF_TUNNEL_NAME）"
+		return 0
+	fi
+	echo "  [3/5] 隧道凭据已存在：$(ls -1 "$CFDIR"/*.json 2>/dev/null | head -n 1)"
+	if [ ! -f "$CFG" ]; then
+		echo "  [4/5] 没有 config.yml → 在面板「config.yml」里粘贴配置（参考「生成配置模板」）"
+		return 0
+	fi
+	if ! validate_config >/dev/null 2>&1; then
+		echo "  [4/5] config.yml 校验没通过 → 点「校验配置」看具体报错"
+		return 0
+	fi
+	echo "  [4/5] config.yml 校验通过"
+	if systemctl is-active --quiet cloudflared-tunnel.service 2>/dev/null; then
+		echo "  [5/5] 隧道服务运行中 ✔"
+	else
+		echo "  [5/5] 打开卡片开关即可启动隧道服务（云上还需要把域名指向隧道：点「绑定域名」）"
+	fi
+	return 0
+}
+
+# ---------------- systemd ----------------
+unit_install() {
+	cat > "$UNIT" <<EOF
+[Unit]
+Description=Cloudflare Tunnel (cloudflared) - SoftCenter
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=$BIN --no-autoupdate --config $CFG --loglevel info tunnel run
+Restart=always
+RestartSec=5
+StandardOutput=append:$LOG
+StandardError=append:$LOG
+
+[Install]
+WantedBy=multi-user.target
+EOF
+	systemctl daemon-reload 2>/dev/null
+}
+
+unit_remove() {
+	systemctl disable --now cloudflared-tunnel.service >/dev/null 2>&1
+	rm -f "$UNIT"
+	systemctl daemon-reload 2>/dev/null
+	return 0
+}
+
+# ---------------- 引导动作 ----------------
+do_login() {
+	[ -x "$BIN" ] || { echo "先安装 cloudflared（点「更新二进制」）"; return 1; }
+	mkdir -p "$CFDIR" "$BASE" || return 1
+	: > "$LOGIN_LOG"
+	if systemctl is-active --quiet cloudflared-login.service 2>/dev/null; then
+		echo "已有一次登录在等待授权，直接看链接即可"
+	else
+		systemd-run --unit=cloudflared-login --collect bash -c \
+			"$BIN tunnel login > $LOGIN_LOG 2>&1 || true" >/dev/null 2>&1 || {
+			echo "无法后台启动登录流程（systemd-run 失败）"
+			return 1
+		}
+	fi
+	sleep 3
+	url="$(grep -oE 'https://dash\.cloudflare\.com/[^ ]+' "$LOGIN_LOG" 2>/dev/null | head -n 1)"
+	echo
+	if [ -n "$url" ]; then
+		echo "请在浏览器里打开下面的链接，并选择要使用的域名："
+		echo "  $url"
+	else
+		echo "登录链接还没生成，稍等几秒后点「检查登录状态」或重试；当前输出："
+		head -n 5 "$LOGIN_LOG" 2>/dev/null | sed 's/^/  /'
+	fi
+	echo
+	echo "授权完成后 cert.pem 会落盘，点「检查登录状态」确认。"
+}
+
+do_login_status() {
+	if [ -f "$CERT" ]; then
+		echo "已登录：$CERT"
+		if [ -x "$BIN" ]; then
+			"$BIN" --config "$CFG" tunnel list 2>&1 | head -n 5 | sed 's/^/  /'
+		fi
+		return 0
+	fi
+	echo "尚未登录（没有 $CERT）"
+	if [ -f "$LOGIN_LOG" ] && [ -s "$LOGIN_LOG" ]; then
+		echo "当前登录流程输出："
+		head -n 5 "$LOGIN_LOG" | sed 's/^/  /'
+	fi
+	return 1
+}
+
+do_create_tunnel() {
+	[ -f "$CERT" ] || { echo "需要先登录（点「生成登录链接」）"; return 1; }
+	[ -n "$CF_TUNNEL_NAME" ] || { echo "面板里没填隧道名"; return 1; }
+	echo "创建隧道 $CF_TUNNEL_NAME ..."
+	"$BIN" tunnel create "$CF_TUNNEL_NAME" 2>&1 | sed 's/^/  /'
+}
+
+do_route_dns() {
+	[ -f "$CERT" ] || { echo "需要先登录"; return 1; }
+	host="$(sed -n 's/^[[:space:]]*-[[:space:]]*hostname:[[:space:]]*//p' "$CFG" 2>/dev/null | head -n 1)"
+	[ -n "$host" ] || { echo "没能从 $CFG 里读出第一个 hostname"; return 1; }
+	echo "把 $host 指向隧道 $CF_TUNNEL_NAME ..."
+	"$BIN" tunnel route dns "$CF_TUNNEL_NAME" "$host" 2>&1 | sed 's/^/  /'
+}
+
+do_list() {
+	[ -x "$BIN" ] || { echo "还没安装 cloudflared"; return 1; }
+	"$BIN" --config "$CFG" tunnel list 2>&1 | head -n 20
+}
+
+check_update() {
+	cur="$(installed_version)"
+	[ -n "$cur" ] || cur="未安装"
+	latest="$(latest_version)" || { echo "无法查询最新版本（检查面板「全局更新代理」）"; return 1; }
+	echo "当前版本：$cur"
+	echo "最新版本：$latest"
+	if [ "$cur" = "$latest" ]; then
+		echo "已是最新 ✔"
+		return 0
+	fi
+	echo "有新版本可用 → 点「更新二进制」即可升级"
+	return 0
+}
+
+# ---------------- 自检 / 现状 ----------------
+check_all() {
+	rc=0
+	echo "Cloudflare Tunnel·只读自检"
+	echo "----------------------------------------"
+	[ "$(id -u)" = "0" ] && echo "  [ OK ] 以 root 运行" || { echo "  [FAIL] 需要 root"; rc=1; }
+	asset="$(asset_name)"
+	if [ -n "$asset" ]; then
+		echo "  [ OK ] 架构 $(uname -m) → 资产 $asset"
+	else
+		echo "  [FAIL] 不支持的架构：$(uname -m)"
+		rc=1
+	fi
+	for t in curl od systemctl; do
+		if command -v "$t" >/dev/null 2>&1; then echo "  [ OK ] 依赖 $t"; else echo "  [FAIL] 缺少 $t"; rc=1; fi
+	done
+	if [ -x "$BIN" ]; then
+		echo "  [ OK ] 已安装 cloudflared：$(installed_version)"
+	else
+		echo "  [warn] 还没安装 cloudflared（打开开关会自动下载，约 36MB）"
+	fi
+	echo "  [info] 全局更新代理：${PROXY:-未配置（直连）}"
+	[ -f "$CERT" ] && echo "  [ OK ] 已登录 Cloudflare（cert.pem 存在）" || echo "  [warn] 未登录：点「生成登录链接」"
+	if [ -f "$CFG" ]; then
+		echo "  [info] 配置文件：$CFG"
+		validate_config >/dev/null 2>&1 && echo "  [ OK ] config.yml 校验通过" || echo "  [FAIL] config.yml 校验未通过（点「校验配置」）"
+	else
+		echo "  [warn] 还没有 config.yml（面板里粘贴配置，或点「生成配置模板」）"
+	fi
+	echo "  [info] 隧道服务：$(systemctl is-active cloudflared-tunnel.service 2>/dev/null)"
+	echo "----------------------------------------"
+	guide
+	echo "----------------------------------------"
+	[ "$rc" = "0" ] && echo "结果：环境满足，可以按引导继续" || echo "结果：有问题，见上面 [FAIL]"
+	return "$rc"
+}
+
+info() {
+	echo "Cloudflare Tunnel·现状"
+	echo "----------------------------------------"
+	echo "二进制      : $([ -x "$BIN" ] && echo "$(installed_version)（$BIN）" || echo 未安装)"
+	echo "最新版本    : $(latest_version 2>/dev/null || echo 查询失败)"
+	echo "隧道名      : $CF_TUNNEL_NAME"
+	echo "登录状态    : $([ -f "$CERT" ] && echo "已登录（$CERT）" || echo 未登录)"
+	echo "凭据文件    : $(ls -1 "$CFDIR"/*.json 2>/dev/null | head -n 1 || echo 无)"
+	echo "配置文件    : $([ -f "$CFG" ] && echo "$CFG" || echo 无)"
+	echo "服务状态    : $(systemctl is-active cloudflared-tunnel.service 2>/dev/null)"
+	echo "最近日志    :"
+	tail -n 5 "$LOG" 2>/dev/null | sed 's/^/              /'
+	echo "----------------------------------------"
+	guide
+}
+
+# ---------------- 主流程 ----------------
+start_service() {
+	[ "$(id -u)" = "0" ] || { echo "需要 root 权限"; exit 1; }
+	mkdir -p "$BASE/state" "$CFDIR" 2>/dev/null
+
+	if [ ! -x "$BIN" ]; then
+		echo "首次使用：下载 cloudflared ..."
+		install_binary 1 || { echo "下载失败，已中止"; exit 1; }
+	elif [ "$CF_AUTO_UPDATE" = "1" ]; then
+		cur="$(installed_version)"
+		latest="$(latest_version 2>/dev/null || echo '')"
+		if [ -n "$latest" ] && [ "$latest" != "$cur" ]; then
+			echo "发现新版本 $latest（当前 $cur），正在更新 ..."
+			install_binary 0 || echo "更新失败，继续用当前版本 $cur"
+		fi
+	fi
+
+	if ! write_config; then
+		echo "还没有可用配置，已中止（改好后重新打开开关）"
+		guide
+		exit 1
+	fi
+	if ! validate_config; then
+		echo "config.yml 校验未通过，已中止"
+		exit 1
+	fi
+	if [ ! -f "$CERT" ]; then
+		echo "尚未登录 Cloudflare，已中止（先点「生成登录链接」完成授权）"
+		guide
+		exit 1
+	fi
+
+	unit_install
+	systemctl enable cloudflared-tunnel.service >/dev/null 2>&1
+	if ! systemctl restart cloudflared-tunnel.service; then
+		echo "启动服务失败，最后几行日志："
+		tail -n 10 "$LOG" 2>/dev/null | sed 's/^/  /'
+		exit 1
+	fi
+	sleep 3
+	if systemctl is-active --quiet cloudflared-tunnel.service; then
+		echo "隧道服务已启动（cloudflared $(installed_version)）"
+		log_date "启动成功：版本=$(installed_version) 隧道=$CF_TUNNEL_NAME"
+		echo
+		guide
+	else
+		echo "服务没有保持运行，最后几行日志："
+		tail -n 12 "$LOG" 2>/dev/null | sed 's/^/  /'
+		log_date "启动后服务未保持运行"
+		exit 1
+	fi
+}
+
+stop_service() {
+	systemctl disable --now cloudflared-tunnel.service >/dev/null 2>&1
+	log_date "已停止隧道服务（二进制/凭据/配置都保留）"
+	echo "已停止 Cloudflare Tunnel（二进制、cert.pem、隧道凭据、config.yml 都保留）"
+}
+
+status_service() {
+	if systemctl is-active --quiet cloudflared-tunnel.service 2>/dev/null; then
+		echo "running tunnel=$CF_TUNNEL_NAME version=$(installed_version)"
+		exit 0
+	fi
+	echo "stopped"
+	exit 1
+}
+
+case "${1:-}" in
+start) start_service ;;
+stop) stop_service ;;
+restart) stop_service; sleep 1; start_service ;;
+status) status_service ;;
+check) check_all ;;
+info) info ;;
+guide) guide ;;
+login) do_login ;;
+login-status) do_login_status ;;
+create-tunnel) do_create_tunnel ;;
+route-dns) do_route_dns ;;
+validate) validate_config ;;
+list) do_list ;;
+template) config_template ;;
+check-update) check_update ;;
+update) install_binary 1 ;;
+logs) tail -n 80 "$LOG" 2>/dev/null ;;
+*)
+	echo "Usage: $0 {start|stop|restart|status|check|info|guide|login|login-status|create-tunnel|route-dns|validate|list|template|check-update|update|logs}"
+	exit 1
+	;;
+esac

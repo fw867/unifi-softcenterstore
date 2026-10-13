@@ -2157,5 +2157,60 @@
             ]
         },
         "CustomCommands": "[{\"name\":\"查看 SSH 现状\",\"command\":\"/data/softcenter/bin/sshmanage info\"},{\"name\":\"兼容性自检\",\"command\":\"/data/softcenter/bin/sshmanage check\"},{\"name\":\"重启 SSH 服务\",\"command\":\"/data/softcenter/bin/sshmanage restart-ssh\"},{\"name\":\"恢复上一份配置\",\"command\":\"/data/softcenter/bin/sshmanage rollback\"},{\"name\":\"查看日志\",\"command\":\"tail -n 60 /var/log/sshmanage.log\"}]"
+    },
+    {
+        "Id": "cloudflared",
+        "Name": "Cloudflare Tunnel",
+        "Type": "Shell Script",
+        "Version": "1.0.0",
+        "Description": "用 Cloudflare 隧道把内网服务发布出去（自动下载 cloudflared，含登录与配置引导）",
+        "Icon": "cloud",
+        "StartCommand": "/data/softcenter/bin/cloudflared start",
+        "StopCommand": "/data/softcenter/bin/cloudflared stop",
+        "StatusCommand": "/data/softcenter/bin/cloudflared status",
+        "IsAutoStart": 1,
+        "ConfigPath": "/data/softcenter/config/cloudflared.env",
+        "ConfigKeys": "",
+        "LogPath": "/var/log/cloudflared.log",
+        "Files": [
+            {
+                "Name": "cloudflared",
+                "Path": "apps/cloudflared/cloudflared",
+                "Sha256": "d3357c72b4e4495f4f3519263d24e61d2354991ce74820eb2efcb059cbdf33d6",
+                "Mode": "0755"
+            }
+        ],
+        "ConfigSchema": {
+            "Sections": [
+                {
+                    "Title": "隧道设置",
+                    "Fields": [
+                        {
+                            "Key": "CF_TUNNEL_NAME",
+                            "Label": "隧道名",
+                            "Type": "text",
+                            "Default": "unifi",
+                            "Help": "先用扩展按钮「创建隧道」按这个名字建隧道（会生成 <UUID>.json 凭据）；改名后要重新创建，并同步 config.yml 里的 tunnel: 字段"
+                        },
+                        {
+                            "Key": "CF_CONFIG",
+                            "Label": "config.yml",
+                            "Type": "textarea",
+                            "Default": "# cloudflared 配置（保存后面板会写到这里：/data/softcenter/cloudflared/config.yml）\ntunnel: unifi\ncredentials-file: /root/.cloudflared/<隧道UUID>.json\n\ningress:\n  # 例：把 http://192.168.1.10:8080 发布到 app.example.com（域名需已托管在 Cloudflare）\n  - hostname: app.example.com\n    service: http://192.168.1.10:8080\n  # 最后一条必须是兜底规则\n  - service: http_status:404\n",
+                            "Rows": 10,
+                            "Help": "这就是 cloudflared 的配置文件，保存后会写到 /data/softcenter/cloudflared/config.yml（权限 600）。隧道 UUID 用「查看隧道列表」查，credentials-file 填 /root/.cloudflared/<UUID>.json；ingress 最后一条必须是兜底规则。改完先点「校验配置」再开开关"
+                        },
+                        {
+                            "Key": "CF_AUTO_UPDATE",
+                            "Label": "启动时自动更新",
+                            "Type": "switch",
+                            "Default": "1",
+                            "Help": "打开开关时顺手检查 cloudflared 新版本；版本相同时不会重复下载（二进制约 36MB，走面板「全局更新代理」）"
+                        }
+                    ]
+                }
+            ]
+        },
+        "CustomCommands": "[{\"name\":\"生成登录链接\",\"command\":\"/data/softcenter/bin/cloudflared login\"},{\"name\":\"检查登录状态\",\"command\":\"/data/softcenter/bin/cloudflared login-status\"},{\"name\":\"创建隧道\",\"command\":\"/data/softcenter/bin/cloudflared create-tunnel\"},{\"name\":\"校验配置\",\"command\":\"/data/softcenter/bin/cloudflared validate\"},{\"name\":\"绑定域名\",\"command\":\"/data/softcenter/bin/cloudflared route-dns\"},{\"name\":\"检查更新\",\"command\":\"/data/softcenter/bin/cloudflared check-update\"},{\"name\":\"更新二进制\",\"command\":\"/data/softcenter/bin/cloudflared update\"},{\"name\":\"查看隧道列表\",\"command\":\"/data/softcenter/bin/cloudflared list\"},{\"name\":\"生成配置模板\",\"command\":\"/data/softcenter/bin/cloudflared template\"},{\"name\":\"查看日志\",\"command\":\"/data/softcenter/bin/cloudflared logs\"}]"
     }
 ]
