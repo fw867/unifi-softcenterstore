@@ -1,0 +1,571 @@
+#!/bin/sh
+
+# UniFi SoftCenter · UU 加速器（网易 UU，闭源二进制）
+#
+# 参考实现：coolsnowwolf/packages 的 net/uugamebooster（OpenWrt 包）。区别在于：
+#   - UniFi OS 没有 fw4/procd，UU 自己下发的 nftables 规则不生效 → 本插件用 iptables 自行放行 tun163；
+#   - UniFi OS 根目录会在固件更新时被重建 → /.uuplugin_uuid（配对身份）备份到 /data 并在启动时还原，
+#     这样升级后不用重新配对；
+#   - 二进制不随插件分发：启动时按需从网易官方源下载（带 md5 校验）。
+#
+# 版本探测（官方 API，参考包的 update.sh 用的就是它）：
+#   GET https://router.uu.163.com/api/plugin?type=openwrt-<arch>
+#   → {"url":"http://uurouter.gdl.netease.com/uuplugin/openwrt-<arch>/v<ver>/uu.tar.gz","md5":"..."}
+#   NetEase 是国内源：直连优先，失败才走面板「全局更新代理」。
+#
+# 面板配置：/data/softcenter/config/uugamebooster.env
+#   UU_AUTO_UPDATE   1/0：启动时检查并更新内核（默认 1）
+#   UU_VERSION       固定版本（留空 = 跟随官方最新）
+#
+# 动作：start stop restart status check info guide
+#       code check-update update unpair logs
+#   code    查看配对口令（从日志抓取，并给出 UU App 操作步骤）
+#   unpair  解除配对（删除 /.uuplugin_uuid 与备份）
+#
+# 注意：路由器 /bin/sh 是 busybox ash，只能用 POSIX 语法（不用 local / 数组 / [[ ]] / ${v//}）。
+
+PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+export PATH
+
+CONFIG="/data/softcenter/config/uugamebooster.env"
+[ -f "$CONFIG" ] && . "$CONFIG"
+
+raw_env_value() {
+	[ -f "$CONFIG" ] || return 0
+	sed -n "s/^$1=//p" "$CONFIG" 2>/dev/null | head -n 1 \
+		| sed -e "s/^'//" -e "s/'$//" -e 's/^"//' -e 's/"$//'
+}
+
+decode_b64() {
+	case "$1" in
+	b64:*) printf '%s' "${1#b64:}" | base64 -d 2>/dev/null ;;
+	*) printf '%s' "$1" ;;
+	esac
+}
+
+cfg() {
+	eval "v=\${$1:-}"
+	[ -n "$v" ] || v="$(raw_env_value "$1")"
+	[ -n "$v" ] || v="$2"
+	decode_b64 "$v"
+}
+
+UU_AUTO_UPDATE="$(cfg UU_AUTO_UPDATE 1)"
+UU_VERSION="$(cfg UU_VERSION '')"
+
+BASE="/data/softcenter/uugamebooster"
+CORE="/data/softcenter/bin/uugamebooster-core"
+BIN="$CORE/uugamebooster"
+UU_CONF="$CORE/uu.conf"
+UUID_FILE="/.uuplugin_uuid"
+UUID_BAK="$BASE/uuplugin_uuid.backup"
+STATE="$BASE/state/version"
+LOG="/var/log/uugamebooster.log"
+UNIT="/etc/systemd/system/uugamebooster.service"
+MARK="softcenter-uugamebooster"
+TUN_IF="tun163"
+PANEL_CONF="/data/softcenter/config.json"
+API="https://router.uu.163.com/api/plugin"
+
+log_date() {
+	echo "【$(date '+%Y年%m月%d日 %X')】: $1" >> "$LOG"
+}
+
+# ---------------- 下载通道：NetEase 直连优先，失败再走面板代理 ----------------
+panel_proxy() {
+	[ -f "$PANEL_CONF" ] || return 0
+	tr -d '\n' < "$PANEL_CONF" 2>/dev/null \
+		| sed -n 's/.*"LocalProxy"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1
+}
+
+normalize_proxy() {
+	case "$1" in
+	"") ;;
+	socks5://*) echo "socks5h://${1#socks5://}" ;;
+	socks4://*) echo "socks4a://${1#socks4://}" ;;
+	*://*) echo "$1" ;;
+	*) echo "http://$1" ;;
+	esac
+}
+
+PROXY="$(normalize_proxy "$(panel_proxy)")"
+TRANSPORT="direct"
+
+# fetch <url> <输出文件>：直连优先，失败再走面板代理（国内源走代理通常更慢）
+fetch() {
+	if curl -fsSL --connect-timeout 15 --retry 2 --retry-delay 1 -o "$2" "$1"; then
+		TRANSPORT="direct"
+		return 0
+	fi
+	if [ -n "$PROXY" ]; then
+		echo "（直连失败，改用面板代理 $PROXY 重试）" >&2
+		log_date "直连失败，改用面板代理：$1"
+		if curl -fsSL --connect-timeout 15 --retry 2 --retry-delay 1 -x "$PROXY" -o "$2" "$1"; then
+			TRANSPORT="proxy"
+			return 0
+		fi
+	fi
+	return 1
+}
+
+# ---------------- 架构 / 版本 ----------------
+uu_arch() {
+	case "$(uname -m)" in
+	aarch64|arm64) echo aarch64 ;;
+	x86_64|amd64) echo x86_64 ;;
+	armv7l|armv6l) echo arm ;;
+	mips*) echo mipsel ;;
+	*) echo "" ;;
+	esac
+}
+
+# 官方 API：输出 "版本<TAB>url<TAB>md5"
+uu_release() {
+	a="$(uu_arch)"
+	[ -n "$a" ] || return 1
+	tmp="$BASE/state/plugin.json"
+	mkdir -p "$BASE/state" 2>/dev/null
+	if ! fetch "$API?type=openwrt-$a" "$tmp"; then
+		return 1
+	fi
+	url="$(sed -n 's/.*"url"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$tmp" | head -n 1)"
+	md5="$(sed -n 's/.*"md5"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$tmp" | head -n 1)"
+	rm -f "$tmp"
+	[ -n "$url" ] || return 1
+	ver="$(printf '%s' "$url" | sed -n 's#.*/v\([0-9][0-9.]*\)/.*#\1#p')"
+	echo "$ver	$url	$md5"
+}
+
+installed_version() {
+	cat "$STATE" 2>/dev/null
+}
+
+# ---------------- 下载 / 安装 ----------------
+install_core() {
+	force="$1"
+	info="$(uu_release)" || {
+		echo "无法获取 UU 官方版本信息（检查网络或面板代理）"
+		log_date "获取官方版本信息失败"
+		return 1
+	}
+	ver="$(printf '%s' "$info" | cut -f1)"
+	url="$(printf '%s' "$info" | cut -f2)"
+	md5="$(printf '%s' "$info" | cut -f3)"
+	[ -n "$UU_VERSION" ] && ver="$UU_VERSION"
+
+	cur="$(installed_version)"
+	if [ "$force" != "1" ] && [ -n "$cur" ] && [ "$cur" = "$ver" ] && [ -x "$BIN" ]; then
+		echo "UU 内核已是最新（$cur），跳过下载"
+		return 0
+	fi
+
+	# 版本被面板固定时，按固定版本拼地址（官方 API 的 url 是最新的）
+	if [ -n "$UU_VERSION" ] && [ "$UU_VERSION" != "$(printf '%s' "$info" | cut -f1)" ]; then
+		a="$(uu_arch)"
+		url="http://uurouter.gdl.netease.com/uuplugin/openwrt-$a/v$ver/uu.tar.gz"
+		md5=""
+	fi
+
+	mkdir -p "$BASE/state" "$CORE" || return 1
+	tgz="$BASE/uu.tar.gz"
+	echo "下载 UU 内核 $ver（$url）..."
+	if ! fetch "$url" "$tgz"; then
+		rm -f "$tgz"
+		echo "下载失败：$url"
+		log_date "下载失败：$url"
+		return 1
+	fi
+	if [ -n "$md5" ]; then
+		got="$(md5sum "$tgz" 2>/dev/null | awk '{print $1}')"
+		if [ "$got" != "$md5" ]; then
+			rm -f "$tgz"
+			echo "md5 校验失败（期望 $md5，实际 $got），已丢弃"
+			log_date "md5 校验失败：期望=$md5 实际=$got"
+			return 1
+		fi
+		echo "md5 校验通过"
+	else
+		echo "提示：面板固定了版本，官方 API 的 md5 不适用，已跳过校验"
+	fi
+
+	tmpdir="$BASE/extract"
+	rm -rf "$tmpdir"; mkdir -p "$tmpdir" || return 1
+	if ! tar -xzf "$tgz" -C "$tmpdir" 2>/dev/null; then
+		rm -rf "$tmpdir" "$tgz"
+		echo "解包失败：$tgz"
+		return 1
+	fi
+	# 包内可能是散文件，也可能带一层目录
+	src="$tmpdir"
+	[ -f "$tmpdir/uuplugin" ] || {
+		d="$(find "$tmpdir" -maxdepth 2 -name uuplugin -type f 2>/dev/null | head -n 1)"
+		[ -n "$d" ] && src="$(dirname "$d")"
+	}
+	if [ ! -f "$src/uuplugin" ]; then
+		rm -rf "$tmpdir" "$tgz"
+		echo "包里没有找到 uuplugin，已丢弃"
+		return 1
+	fi
+
+	# 先装到临时目录，全部就位后再整体替换（失败不影响正在跑的版本）
+	newdir="$CORE.new.$$"
+	rm -rf "$newdir"; mkdir -p "$newdir" || { rm -rf "$tmpdir" "$tgz"; return 1; }
+	cp -f "$src/uuplugin" "$newdir/uugamebooster" 2>/dev/null
+	for f in xtables-nft-multi xuplugin-guardian; do
+		[ -f "$src/$f" ] && cp -f "$src/$f" "$newdir/$f" 2>/dev/null
+	done
+	if [ -f "$src/uu.conf" ]; then
+		cp -f "$src/uu.conf" "$newdir/uu.conf" 2>/dev/null
+	elif [ -f "$CORE/uu.conf" ]; then
+		cp -f "$CORE/uu.conf" "$newdir/uu.conf" 2>/dev/null
+	fi
+	chmod 0755 "$newdir/uugamebooster" "$newdir/xtables-nft-multi" "$newdir/xuplugin-guardian" 2>/dev/null
+	[ -f "$newdir/uu.conf" ] || echo "enabled=1" > "$newdir/uu.conf"
+
+	if [ ! -x "$newdir/uugamebooster" ]; then
+		rm -rf "$tmpdir" "$tgz" "$newdir"
+		echo "解包出来的 uugamebooster 不可执行，已丢弃"
+		return 1
+	fi
+	# 校验 ELF 机器码，防止下错架构的包（arm64=b700 / x86_64=3e00 / arm=2800）
+	magic="$(od -An -tx1 -j0 -N4 "$newdir/uugamebooster" 2>/dev/null | tr -d ' \n')"
+	mach="$(od -An -tx1 -j18 -N2 "$newdir/uugamebooster" 2>/dev/null | tr -d ' \n')"
+	want=""
+	case "$(uname -m)" in
+	aarch64|arm64) want=b700 ;;
+	x86_64|amd64) want=3e00 ;;
+	armv7l|armv6l) want=2800 ;;
+	esac
+	if [ "$magic" != "7f454c46" ] || { [ -n "$want" ] && [ "$mach" != "$want" ]; }; then
+		rm -rf "$tmpdir" "$tgz" "$newdir"
+		echo "解包出来的 uugamebooster 不是本机架构的 ELF（magic=$magic machine=$mach），已丢弃"
+		log_date "架构校验失败：magic=$magic machine=$mach"
+		return 1
+	fi
+
+	rm -rf "$CORE.old"
+	[ -d "$CORE" ] && mv "$CORE" "$CORE.old" 2>/dev/null
+	if ! mv "$newdir" "$CORE"; then
+		[ -d "$CORE.old" ] && mv "$CORE.old" "$CORE" 2>/dev/null
+		rm -rf "$tmpdir" "$tgz" "$newdir"
+		echo "替换内核目录失败，已回滚"
+		return 1
+	fi
+	rm -rf "$CORE.old" "$tmpdir" "$tgz"
+	printf '%s\n' "$ver" > "$STATE"
+	case "$TRANSPORT" in
+	proxy) ch="经面板代理" ;;
+	*) ch="直连" ;;
+	esac
+	echo "UU 内核已安装：$ver（通道：$ch，目录 $CORE）"
+	log_date "已安装 UU 内核 $ver（通道 $ch）"
+	return 0
+}
+
+# ---------------- tun / 防火墙 ----------------
+ensure_tun() {
+	if [ -e /dev/net/tun ]; then
+		return 0
+	fi
+	mkdir -p /dev/net 2>/dev/null
+	command -v modprobe >/dev/null 2>&1 && modprobe tun 2>/dev/null
+	if [ -e /dev/net/tun ]; then
+		echo "已加载 tun 模块"
+		return 0
+	fi
+	return 1
+}
+
+# 找 UBIOS 跳转那一条的行号（插在它之前，避免绕过 UniFi 的防护链）
+ubios_line() {
+	chain="$1"
+	iptables -L "$chain" -n --line-numbers 2>/dev/null | awk '/UBIOS.*JUMP/{print $1; exit}'
+}
+
+ipt_add() {
+	chain="$1"; idx="$2"; shift 2
+	if [ -n "$idx" ]; then
+		iptables -I "$chain" "$idx" "$@" 2>/dev/null && return 0
+	fi
+	iptables -A "$chain" "$@" 2>/dev/null
+}
+
+fw_open() {
+	fw_close >/dev/null 2>&1
+	i=$(ubios_line INPUT)
+	ipt_add INPUT "$i" -i "$TUN_IF" -m comment --comment "$MARK" -j ACCEPT || echo "警告：INPUT 放行失败"
+	f=$(ubios_line FORWARD)
+	ipt_add FORWARD "$f" -i "$TUN_IF" -m comment --comment "$MARK" -j ACCEPT || echo "警告：FORWARD(入) 放行失败"
+	ipt_add FORWARD "$f" -o "$TUN_IF" -m comment --comment "$MARK" -j ACCEPT || echo "警告：FORWARD(出) 放行失败"
+	echo "已放行 $TUN_IF 的转发与入站"
+	log_date "已为 $TUN_IF 插入放行规则"
+}
+
+fw_close() {
+	# 两个方向 × 两个链 × （有标记/无标记）都清一遍，只删我们自己插入的那几条
+	for d in "-i" "-o"; do
+		while iptables -D INPUT $d "$TUN_IF" -m comment --comment "$MARK" -j ACCEPT 2>/dev/null; do :; done
+		while iptables -D FORWARD $d "$TUN_IF" -m comment --comment "$MARK" -j ACCEPT 2>/dev/null; do :; done
+		while iptables -D INPUT $d "$TUN_IF" -j ACCEPT 2>/dev/null; do :; done
+		while iptables -D FORWARD $d "$TUN_IF" -j ACCEPT 2>/dev/null; do :; done
+	done
+	return 0
+}
+
+fw_state() {
+	if iptables -S 2>/dev/null | grep -q -- "$MARK"; then echo on; else echo off; fi
+}
+
+# ---------------- 配对身份（根目录文件，固件更新会丢） ----------------
+restore_uuid() {
+	if [ -f "$UUID_FILE" ]; then
+		mkdir -p "$BASE" 2>/dev/null
+		cp -f "$UUID_FILE" "$UUID_BAK" 2>/dev/null
+		return 0
+	fi
+	if [ -f "$UUID_BAK" ]; then
+		cp -f "$UUID_BAK" "$UUID_FILE" 2>/dev/null
+		chmod 0600 "$UUID_FILE" 2>/dev/null
+		echo "已从备份还原配对身份 $UUID_FILE（升级后无需重新配对）"
+		log_date "已还原配对身份"
+		return 0
+	fi
+	return 1
+}
+
+# ---------------- systemd ----------------
+unit_install() {
+	cat > "$UNIT" <<EOF
+[Unit]
+Description=NetEase UU Game Booster - SoftCenter
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=$CORE
+ExecStart=$CORE/uugamebooster $CORE/uu.conf
+Restart=always
+RestartSec=10
+StandardOutput=append:$LOG
+StandardError=append:$LOG
+
+[Install]
+WantedBy=multi-user.target
+EOF
+	systemctl daemon-reload 2>/dev/null
+}
+
+# ---------------- 配对口令 / 引导 ----------------
+show_code() {
+	[ -x "$BIN" ] || { echo "还没安装 UU 内核（点「更新内核」或直接打开开关）"; return 1; }
+	echo "UU 配对口令（从服务日志提取）："
+	if [ -f "$LOG" ]; then
+		lines="$(grep -aE '口令|配对|验证码|SN|serial|code' "$LOG" 2>/dev/null | tail -n 5)"
+		if [ -n "$lines" ]; then
+			printf '%s\n' "$lines" | sed 's/^/  /'
+		else
+			echo "  （日志里还没出现口令，下面是最后几行，请以实际输出为准）"
+			tail -n 8 "$LOG" 2>/dev/null | sed 's/^/  /'
+		fi
+	else
+		echo "  （还没有日志：先打开开关启动服务）"
+	fi
+	echo
+	echo "手机上的操作："
+	echo "  1) 打开「UU 加速器」App → 我的 → 路由器加速（或「加速盒/路由器」入口）"
+	echo "  2) 添加设备 → 输入上面日志里的配对口令/SN"
+	echo "  3) 绑定成功后，在 App 里给要加速的游戏开启加速即可"
+	echo
+	echo "提示：配对身份保存在 $UUID_FILE，插件的备份在 $UUID_BAK，"
+	echo "      UniFi 固件更新后会自动还原，通常不需要重新配对。"
+}
+
+do_unpair() {
+	echo "解除配对：删除 $UUID_FILE 与备份（下次启动需要重新在 App 里配对）"
+	rm -f "$UUID_FILE" "$UUID_BAK"
+	if systemctl is-active --quiet uugamebooster.service 2>/dev/null; then
+		systemctl restart uugamebooster.service >/dev/null 2>&1
+		echo "服务已重启，请用「查看配对口令」获取新的口令"
+	fi
+	log_date "已解除配对（删除 uuid 与备份）"
+}
+
+guide() {
+	echo "当前进度与下一步："
+	if [ -z "$(uu_arch)" ]; then
+		echo "  [!] 不支持的架构：$(uname -m)"
+		return 0
+	fi
+	if [ ! -x "$BIN" ]; then
+		echo "  [1/4] 还没安装 UU 内核 → 点「更新内核」（或直接打开开关，会自动下载）"
+		return 0
+	fi
+	echo "  [1/4] 内核就绪：版本 $(installed_version)（$CORE）"
+	if [ ! -e /dev/net/tun ]; then
+		echo "  [2/4] 缺少 /dev/net/tun（UU 需要 tun 设备）→ 点「查看状态」看能否 modprobe tun"
+		return 0
+	fi
+	echo "  [2/4] tun 设备就绪（服务使用 $TUN_IF 接口）"
+	if systemctl is-active --quiet uugamebooster.service 2>/dev/null; then
+		echo "  [3/4] 加速服务运行中"
+		if [ -f "$UUID_FILE" ] || [ -f "$UUID_BAK" ]; then
+			echo "  [4/4] 配对身份已存在 → 手机 App 里应能看到该设备；换账号点「解除配对」"
+		else
+			echo "  [4/4] 还没配对 → 点「查看配对口令」，用 UU App 输入口令完成绑定"
+		fi
+	else
+		echo "  [3/4] 服务未运行 → 打开卡片开关启动"
+		echo "  [4/4] 启动后点「查看配对口令」用 UU App 绑定"
+	fi
+}
+
+# ---------------- 自检 / 现状 ----------------
+check_all() {
+	rc=0
+	echo "UU 加速器·只读自检"
+	echo "----------------------------------------"
+	[ "$(id -u)" = "0" ] && echo "  [ OK ] 以 root 运行" || { echo "  [FAIL] 需要 root"; rc=1; }
+	a="$(uu_arch)"
+	if [ -n "$a" ]; then echo "  [ OK ] 架构 $(uname -m) → openwrt-$a"; else echo "  [FAIL] 不支持的架构：$(uname -m)"; rc=1; fi
+	for t in curl tar md5sum systemctl iptables; do
+		if command -v "$t" >/dev/null 2>&1; then echo "  [ OK ] 依赖 $t"; else echo "  [FAIL] 缺少 $t"; rc=1; fi
+	done
+	if [ -e /dev/net/tun ]; then
+		echo "  [ OK ] /dev/net/tun 存在"
+	elif command -v modprobe >/dev/null 2>&1; then
+		echo "  [warn] 没有 /dev/net/tun，将尝试 modprobe tun（启动时自动执行）"
+	else
+		echo "  [FAIL] 没有 /dev/net/tun 且没有 modprobe：UU 无法工作"
+		rc=1
+	fi
+	echo "  [info] 内核目录：$CORE"
+	echo "  [info] 已装版本：$(installed_version)（面板固定版本：${UU_VERSION:-未固定}）"
+	rel="$(uu_release 2>/dev/null)"
+	if [ -n "$rel" ]; then
+		echo "  [info] 官方最新：$(printf '%s' "$rel" | cut -f1)"
+	else
+		echo "  [warn] 查询官方版本失败（网络/代理）"
+	fi
+	[ -f "$UUID_FILE" ] && echo "  [ OK ] 已配对（$UUID_FILE）" || {
+		[ -f "$UUID_BAK" ] && echo "  [info] 有配对备份，启动时会还原（$UUID_BAK）" || echo "  [info] 尚未配对（点「查看配对口令」）"
+	}
+	echo "  [info] 防火墙放行：$(fw_state)"
+	echo "  [info] 服务状态：$(systemctl is-active uugamebooster.service 2>/dev/null)"
+	echo "----------------------------------------"
+	guide
+	echo "----------------------------------------"
+	[ "$rc" = "0" ] && echo "结果：环境满足，可以按引导继续" || echo "结果：有问题，见上面 [FAIL]"
+	return "$rc"
+}
+
+info() {
+	echo "UU 加速器·现状"
+	echo "----------------------------------------"
+	echo "内核版本    : $(installed_version)"
+	echo "官方最新    : $(uu_release 2>/dev/null | cut -f1)"
+	echo "内核目录    : $CORE"
+	echo "配置文件    : $UU_CONF"
+	echo "tun 设备    : $([ -e /dev/net/tun ] && echo 就绪 || echo 缺失)"
+	echo "配对身份    : $([ -f "$UUID_FILE" ] && echo "已配对" || { [ -f "$UUID_BAK" ] && echo "有备份（启动可还原）" || echo 未配对; })"
+	echo "防火墙放行  : $(fw_state)"
+	echo "服务状态    : $(systemctl is-active uugamebooster.service 2>/dev/null)"
+	echo "最近日志    :"
+	tail -n 5 "$LOG" 2>/dev/null | sed 's/^/              /'
+	echo "----------------------------------------"
+	guide
+}
+
+# ---------------- 主流程 ----------------
+start_service() {
+	[ "$(id -u)" = "0" ] || { echo "需要 root 权限"; exit 1; }
+	[ -n "$(uu_arch)" ] || { echo "不支持的架构：$(uname -m)"; exit 1; }
+	mkdir -p "$BASE/state" 2>/dev/null
+
+	if ! ensure_tun; then
+		echo "UU 需要 /dev/net/tun，但设备上没有且无法加载 tun 模块。"
+		echo "  UniFi OS 内核可能未编译 tun，这种情况本插件无法工作。"
+		log_date "缺少 /dev/net/tun，无法启动"
+		exit 1
+	fi
+
+	if [ ! -x "$BIN" ]; then
+		echo "首次使用：下载 UU 内核 ..."
+		install_core 1 || { echo "下载/安装失败，已中止"; exit 1; }
+	elif [ "$UU_AUTO_UPDATE" = "1" ]; then
+		cur="$(installed_version)"
+		rel="$(uu_release 2>/dev/null)"
+		new="$(printf '%s' "$rel" | cut -f1)"
+		if [ -n "$new" ] && [ "$new" != "$cur" ] && [ -z "$UU_VERSION" ]; then
+			echo "发现新版本 $new（当前 $cur），正在更新 ..."
+			install_core 0 || echo "更新失败，继续使用当前版本 $cur"
+		fi
+	fi
+
+	restore_uuid
+	unit_install
+	systemctl enable uugamebooster.service >/dev/null 2>&1
+	if ! systemctl restart uugamebooster.service; then
+		echo "启动服务失败，最后几行日志："
+		tail -n 10 "$LOG" 2>/dev/null | sed 's/^/  /'
+		exit 1
+	fi
+	fw_open
+	sleep 3
+	if systemctl is-active --quiet uugamebooster.service; then
+		echo "UU 加速服务已启动（内核 $(installed_version)）"
+		log_date "启动成功：内核=$(installed_version)"
+		echo
+		guide
+	else
+		echo "服务没有保持运行，最后几行日志："
+		tail -n 12 "$LOG" 2>/dev/null | sed 's/^/  /'
+		log_date "启动后服务未保持运行"
+		exit 1
+	fi
+}
+
+stop_service() {
+	systemctl disable --now uugamebooster.service >/dev/null 2>&1
+	fw_close
+	log_date "已停止（内核、uu.conf、配对身份都保留）"
+	echo "已停止 UU 加速服务（内核、配置、配对身份都保留）"
+	echo "提示：停用后 $TUN_IF 的放行规则已移除；配对身份保存在 $UUID_BAK"
+}
+
+status_service() {
+	if systemctl is-active --quiet uugamebooster.service 2>/dev/null; then
+		echo "running version=$(installed_version) tun=$TUN_IF fw=$(fw_state)"
+		exit 0
+	fi
+	echo "stopped"
+	exit 1
+}
+
+case "${1:-}" in
+start) start_service ;;
+stop) stop_service ;;
+restart) stop_service; sleep 1; start_service ;;
+status) status_service ;;
+check) check_all ;;
+info) info ;;
+guide) guide ;;
+code) show_code ;;
+unpair) do_unpair ;;
+check-update)
+	cur="$(installed_version)"
+	rel="$(uu_release 2>/dev/null)" || { echo "查询官方版本失败"; exit 1; }
+	new="$(printf '%s' "$rel" | cut -f1)"
+	echo "当前版本：${cur:-未安装}"
+	echo "官方最新：$new"
+	[ "$cur" = "$new" ] && echo "已是最新" || echo "有新版本 → 点「更新内核」升级"
+	;;
+update) install_core 1 ;;
+logs) tail -n 80 "$LOG" 2>/dev/null ;;
+*)
+	echo "Usage: $0 {start|stop|restart|status|check|info|guide|code|unpair|check-update|update|logs}"
+	echo "  start/stop  启动/停止     code  查看配对口令     unpair  解除配对"
+	echo "  check  只读自检           info  现状            update  更新内核"
+	exit 1
+	;;
+esac

@@ -2212,5 +2212,53 @@
             ]
         },
         "CustomCommands": "[{\"name\":\"生成登录链接\",\"command\":\"/data/softcenter/bin/cloudflared login\"},{\"name\":\"检查登录状态\",\"command\":\"/data/softcenter/bin/cloudflared login-status\"},{\"name\":\"创建隧道\",\"command\":\"/data/softcenter/bin/cloudflared create-tunnel\"},{\"name\":\"校验配置\",\"command\":\"/data/softcenter/bin/cloudflared validate\"},{\"name\":\"绑定域名\",\"command\":\"/data/softcenter/bin/cloudflared route-dns\"},{\"name\":\"检查更新\",\"command\":\"/data/softcenter/bin/cloudflared check-update\"},{\"name\":\"更新二进制\",\"command\":\"/data/softcenter/bin/cloudflared update\"},{\"name\":\"查看隧道列表\",\"command\":\"/data/softcenter/bin/cloudflared list\"},{\"name\":\"生成配置模板\",\"command\":\"/data/softcenter/bin/cloudflared template\"},{\"name\":\"查看日志\",\"command\":\"/data/softcenter/bin/cloudflared logs\"}]"
+    },
+    {
+        "Id": "uugamebooster",
+        "Name": "UU 加速器",
+        "Type": "Shell Script",
+        "Version": "1.0.0",
+        "Description": "网易 UU 加速器路由器端：自动下载内核，手机 App 输入配对口令即可（闭源二进制）",
+        "Icon": "gamepad-2",
+        "StartCommand": "/data/softcenter/bin/uugamebooster start",
+        "StopCommand": "/data/softcenter/bin/uugamebooster stop",
+        "StatusCommand": "/data/softcenter/bin/uugamebooster status",
+        "IsAutoStart": 1,
+        "ConfigPath": "/data/softcenter/config/uugamebooster.env",
+        "ConfigKeys": "",
+        "LogPath": "/var/log/uugamebooster.log",
+        "Files": [
+            {
+                "Name": "uugamebooster",
+                "Path": "apps/uugamebooster/uugamebooster",
+                "Sha256": "1afb49811035722c1caf5f39c29f0f5a89f19d659ae16869fe7e38b3aa2c7163",
+                "Mode": "0755"
+            }
+        ],
+        "ConfigSchema": {
+            "Sections": [
+                {
+                    "Title": "UU 加速器",
+                    "Fields": [
+                        {
+                            "Key": "UU_AUTO_UPDATE",
+                            "Label": "启动时自动更新内核",
+                            "Type": "switch",
+                            "Default": "1",
+                            "Help": "启动时查一次网易官方接口（router.uu.163.com/api/plugin）看有无新版本；版本相同时不会重复下载。国内源默认直连，失败才走面板「全局更新代理」"
+                        },
+                        {
+                            "Key": "UU_VERSION",
+                            "Label": "固定内核版本（可选）",
+                            "Type": "text",
+                            "Default": "",
+                            "Placeholder": "14.6.24",
+                            "Help": "留空 = 跟随官方最新（推荐）。填了就固定用该版本，此时官方接口给的 md5 不适用，插件会跳过校验；改回留空即可恢复自动跟随"
+                        }
+                    ]
+                }
+            ]
+        },
+        "CustomCommands": "[{\"name\":\"查看配对口令\",\"command\":\"/data/softcenter/bin/uugamebooster code\"},{\"name\":\"查看状态\",\"command\":\"/data/softcenter/bin/uugamebooster status\"},{\"name\":\"检查更新\",\"command\":\"/data/softcenter/bin/uugamebooster check-update\"},{\"name\":\"更新内核\",\"command\":\"/data/softcenter/bin/uugamebooster update\"},{\"name\":\"重启服务\",\"command\":\"/data/softcenter/bin/uugamebooster restart\"},{\"name\":\"解除配对\",\"command\":\"/data/softcenter/bin/uugamebooster unpair\"},{\"name\":\"查看日志\",\"command\":\"/data/softcenter/bin/uugamebooster logs\"}]"
     }
 ]
