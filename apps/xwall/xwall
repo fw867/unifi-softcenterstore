@@ -184,7 +184,6 @@ build_xray_config() {
                 "geosite:openai",
                 "geosite:anthropic",
                 "geosite:github",
-                "geosite:bing",
                 "geosite:telegram",
                 "geosite:google",
                 "geosite:facebook",
