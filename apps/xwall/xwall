@@ -73,6 +73,9 @@ XWALL_RULES_UPDATE_TIME="${XWALL_RULES_UPDATE_TIME:-07:00}"
 XWALL_WATCHDOG_ENABLE="${XWALL_WATCHDOG_ENABLE:-0}"
 XWALL_BLOCK_ADS="${XWALL_BLOCK_ADS:-0}"
 XWALL_BITTORRENT_DIRECT="${XWALL_BITTORRENT_DIRECT:-0}"
+# Cloudflare 兜底（仅 GFW 模式）：拿不到 SNI 的 Cloudflare 连接也走代理，
+# 避免 ChatGPT 这类 Cloudflare 站点时好时坏（有的连接按 IP 直连出去）
+XWALL_CF_FALLBACK="${XWALL_CF_FALLBACK:-1}"
 WATCHDOG_STATE="/tmp/xwall_watchdog.miss"
 
 log_date() {
@@ -200,10 +203,15 @@ build_xray_config() {
                 "geosite:line",
                 "geosite:netflix"
             ]'
+            mode_name="GFWList"
+            # 拿不到域名（没 SNI / QUIC 分片）时按 IP 兜底：Cloudflare 段也走代理
+            cf_ip_rule=""
+            if [ "$XWALL_CF_FALLBACK" = "1" ]; then cf_ip_rule='"geoip:cloudflare",'; fi
             routing_rules='[
                 {"type": "field", "outboundTag": "direct", "ip": ["geoip:private"]},
                 {"type": "field", "outboundTag": "proxy", "domain": '"$proxy_domains"'},
                 {"type": "field", "outboundTag": "proxy", "ip": [
+                    '"$cf_ip_rule"'
                     "geoip:telegram",
                     "geoip:google",
                     "geoip:facebook",
@@ -212,7 +220,6 @@ build_xray_config() {
                 ]},
                 {"type": "field", "outboundTag": "direct", "network": "tcp,udp"}
             ]'
-            mode_name="GFWList"
             ;;
         3)
             routing_rules='[
@@ -871,20 +878,68 @@ trace_exit() {
     if [ "$XWALL_SOCKS_AUTH" = "1" ] && [ -n "$XWALL_SOCKS_USER" ]; then
         _proxy="socks5h://${XWALL_SOCKS_USER}:${XWALL_SOCKS_PASS}@${_host}:${XWALL_SOCKS_PORT}"
     fi
-    echo "== XWall 出口地区检测 =="
+    _n="${2:-3}"
+    case "$_n" in
+        ''|*[!0-9]*) _n=3 ;;
+    esac
+    [ "$_n" -lt 1 ] 2>/dev/null && _n=1
+    [ "$_n" -gt 10 ] 2>/dev/null && _n=10
+    echo "== XWall 出口地区检测（采样 $_n 次）=="
     echo "检测代理：$_proxy"
-    _out=$(curl -s -m 15 -x "$_proxy" https://chatgpt.com/cdn-cgi/trace 2>/dev/null)
-    [ -z "$_out" ] && _out=$(curl -s -m 15 -x "$_proxy" https://www.cloudflare.com/cdn-cgi/trace 2>/dev/null)
-    if [ -z "$_out" ]; then
+    # 连续采样：如果每次出口地区都不同，说明节点本身在轮换出口 IP，这类节点必然时好时坏
+    _i=0
+    _ip=""
+    _loc=""
+    _colo=""
+    _locs=""
+    while [ "$_i" -lt "$_n" ]; do
+        _out=$(curl -s -m 15 -x "$_proxy" https://chatgpt.com/cdn-cgi/trace 2>/dev/null)
+        [ -z "$_out" ] && _out=$(curl -s -m 15 -x "$_proxy" https://www.cloudflare.com/cdn-cgi/trace 2>/dev/null)
+        _a=$(printf '%s\n' "$_out" | sed -n 's/^ip=//p' | head -n1)
+        _l=$(printf '%s\n' "$_out" | sed -n 's/^loc=//p' | head -n1)
+        _c=$(printf '%s\n' "$_out" | sed -n 's/^colo=//p' | head -n1)
+        if [ -n "$_l" ]; then
+            echo "  第 $((_i + 1)) 次：${_a:-未知} / ${_l}（colo=${_c:-?}）"
+            _locs="$_locs$_l
+"
+            if [ -z "$_loc" ]; then _ip="$_a"; _loc="$_l"; _colo="$_c"; fi
+        else
+            echo "  第 $((_i + 1)) 次：取不到"
+        fi
+        _i=$((_i + 1))
+    done
+    if [ -z "$_loc" ]; then
         echo "❌ 取不到出口信息：代理不通，或节点访问不了 Cloudflare"
         echo "   先确认插件在运行、SOCKS5 端口没填错、节点本身可用"
         return 1
     fi
-    _ip=$(printf '%s\n' "$_out" | sed -n 's/^ip=//p' | head -n1)
-    _loc=$(printf '%s\n' "$_out" | sed -n 's/^loc=//p' | head -n1)
-    _colo=$(printf '%s\n' "$_out" | sed -n 's/^colo=//p' | head -n1)
+    _distinct=$(printf '%s' "$_locs" | sort -u | grep -c .)
+    echo ""
     echo "出口 IP  ：${_ip:-未知}"
-    echo "出口地区：${_loc:-未知}（Cloudflare 判定，colo=${_colo:-未知}）"
+    echo "出口地区：${_loc}（Cloudflare 判定，colo=${_colo:-未知}）"
+    if [ "${_distinct:-1}" -gt 1 ] 2>/dev/null; then
+        echo "⚠ 这 $_n 次采样的地区不一致：$(printf '%s' "$_locs" | sort -u | tr '\n' ' ')"
+        echo "   说明节点出口 IP 在轮换，其中某些地区不被 OpenAI 支持 → 于是时好时坏"
+        echo "   建议换成固定出口的节点，或让服务商固定出口地区"
+    fi
+    # 直连出口对比：两边地区不一样才说明分流真的生效了
+    _direct=$(curl -s -m 10 https://www.cloudflare.com/cdn-cgi/trace 2>/dev/null | sed -n 's/^loc=//p' | head -n1)
+    echo "直连出口：${_direct:-未知}"
+    # 域名劫持没开：局域网 DNS 由路由器 dnsmasq 解析，拿到真实 IP，只能靠嗅探认域名
+    if [ "$DNS_HIJACK" != "1" ]; then
+        echo ""
+        echo "⚠ 「域名劫持」没开：局域网 DNS 仍由路由器 dnsmasq 解析（拿到真实 IP），"
+        echo "   只能靠 TLS / QUIC 嗅探识别域名，个别连接（QUIC 分片等）就会按 IP 直连出去"
+        echo "   建议在 DNS设置 里打开「域名劫持」，让被代理域名统一拿到 FakeIP，分流才稳定"
+    fi
+    # IPv6 漏检：局域网有全局 IPv6、而插件的 IPv6 支持没开时，IPv6 流量根本不经过 Xray
+    _v6=$(awk '$1 != "00000000000000000000000000000001" && substr($1,1,4) != "fe80" {print $1; exit}' /proc/net/if_inet6 2>/dev/null)
+    if [ -n "$_v6" ] && [ "$XWALL_IPV6_ENABLE" != "1" ]; then
+        echo ""
+        echo "⚠ 局域网已启用 IPv6，但插件的「IPv6 支持」是关闭的"
+        echo "   IPv6 流量不经过 Xray、会直连出去 —— 这是「时而能登、时而报地区限制」常见的原因"
+        echo "   建议：高级设置里打开「IPv6 支持」；或者把局域网的 IPv6 关掉"
+    fi
     case "$_loc" in
         CN|HK|MO|RU|IR|KP|SY|CU|BY)
             echo ""
@@ -899,9 +954,9 @@ trace_exit() {
         *)
             echo ""
             echo "✓ 该地区不受 OpenAI 限制"
-            echo "  若仍报 unsupported_country_region_territory，依次排查："
-            echo "   1) 该设备是否真的走了 XWall（用同网段另一台设备对照）"
-            echo "   2) 浏览器是否开着自带的「安全 DNS / 代理」导致部分请求绕过"
+            echo "  若仍时而正常、时而报 unsupported_country_region_territory："
+            echo "   1) 先看上面「域名劫持」和「IPv6」两条提示，那是常见漏点"
+            echo "   2) 再看采样地区是否一致，不一致说明节点出口在轮换"
             return 0
             ;;
     esac
@@ -912,7 +967,7 @@ case ${1} in
     stop) stop ;;
     restart) stop; sleep 1; start ;;
     watchdog) watchdog ;;
-    trace|check-exit) trace_exit ;;
+    trace|check-exit) trace_exit "$@" ;;
     status) if pgrep -x "$PROC_NAME" >/dev/null 2>&1; then echo "running"; else echo "stopped"; exit 1; fi ;;
-    *) echo "Usage: $0 {start|stop|restart|status|watchdog|trace}"; exit 1 ;;
+    *) echo "Usage: $0 {start|stop|restart|status|watchdog|trace [次数]}"; exit 1 ;;
 esac
