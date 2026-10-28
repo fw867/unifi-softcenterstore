@@ -73,9 +73,8 @@ XWALL_RULES_UPDATE_TIME="${XWALL_RULES_UPDATE_TIME:-07:00}"
 XWALL_WATCHDOG_ENABLE="${XWALL_WATCHDOG_ENABLE:-0}"
 XWALL_BLOCK_ADS="${XWALL_BLOCK_ADS:-0}"
 XWALL_BITTORRENT_DIRECT="${XWALL_BITTORRENT_DIRECT:-0}"
-# Cloudflare 兜底（仅 GFW 模式）：拿不到 SNI 的 Cloudflare 连接也走代理，
-# 避免 ChatGPT 这类 Cloudflare 站点时好时坏（有的连接按 IP 直连出去）
-XWALL_CF_FALLBACK="${XWALL_CF_FALLBACK:-1}"
+# 内网自有域名后缀（逗号分隔）：开了域名劫持后这些域名仍交给路由器 dnsmasq 解析
+XWALL_LOCAL_DOMAINS="${XWALL_LOCAL_DOMAINS:-}"
 WATCHDOG_STATE="/tmp/xwall_watchdog.miss"
 
 log_date() {
@@ -204,14 +203,10 @@ build_xray_config() {
                 "geosite:netflix"
             ]'
             mode_name="GFWList"
-            # 拿不到域名（没 SNI / QUIC 分片）时按 IP 兜底：Cloudflare 段也走代理
-            cf_ip_rule=""
-            if [ "$XWALL_CF_FALLBACK" = "1" ]; then cf_ip_rule='"geoip:cloudflare",'; fi
             routing_rules='[
                 {"type": "field", "outboundTag": "direct", "ip": ["geoip:private"]},
                 {"type": "field", "outboundTag": "proxy", "domain": '"$proxy_domains"'},
                 {"type": "field", "outboundTag": "proxy", "ip": [
-                    '"$cf_ip_rule"'
                     "geoip:telegram",
                     "geoip:google",
                     "geoip:facebook",
@@ -273,6 +268,18 @@ build_xray_config() {
     if [ "$XWALL_SOCKS_ENABLE" = "1" ]; then client_inbounds="$client_inbounds"',"socks-in"'; fi
     client_inbounds="$client_inbounds"']'
 
+    # 内网自有域名（UDM 里把公网域名指到内网 IP 的本地 DNS 记录）：开域名劫持后必须让它们
+    # 继续走路由器 dnsmasq，否则会被当成公网域名解析错。逗号/空格分隔，自动转成 domain: 规则
+    local_extra='[]'
+    if [ -n "$XWALL_LOCAL_DOMAINS" ]; then
+        _extra_items=""
+        for _d in $(printf '%s' "$XWALL_LOCAL_DOMAINS" | tr ',' ' '); do
+            case "$_d" in "" | *[!A-Za-z0-9._-]*) continue ;; esac
+            _extra_items="$_extra_items\"domain:$_d\","
+        done
+        [ -n "$_extra_items" ] && local_extra="[${_extra_items%,}]"
+    fi
+
     jq -n --slurpfile user "$USER_JSON" \
        --arg inListen "$in_listen" \
        --arg outSend "$out_send" \
@@ -287,6 +294,7 @@ build_xray_config() {
        --arg blackDomains "$black_domains" \
        --arg blackIps "$black_ips" \
        --argjson localDomains "$DNS_LOCAL_DOMAINS" \
+       --argjson localExtra "$local_extra" \
        --arg blockAds "$XWALL_BLOCK_ADS" \
        --arg btDirect "$XWALL_BITTORRENT_DIRECT" \
        --arg fakePool "$fake_pool" \
@@ -365,7 +373,7 @@ build_xray_config() {
         "servers": (
           [
             { "address": $dnsCn, "domains": (["geosite:cn"] + $whiteDomRule) },
-            { "address": $localDns, "domains": $localDomains },
+            { "address": $localDns, "domains": ($localDomains + $localExtra) },
             (if ($proxyDomains | length) > 0 then { "address": "fakedns", "domains": $proxyDomains } else "fakedns" end)
           ]
           + (if ($proxyDomains | length) > 0 then [ { "address": $dnsForeign, "domains": $proxyDomains }, $dnsCn ] else [] end)
@@ -429,7 +437,8 @@ build_xray_config() {
     mv -f "$XRAY_JSON.tmp" "$XRAY_JSON"
     [ "$XWALL_BLOCK_ADS" = "1" ] && ads_msg="广告与隐私拦截=开" || ads_msg="广告与隐私拦截=关"
     [ "$XWALL_BITTORRENT_DIRECT" = "1" ] && bt_msg="BT/PT 直连=开" || bt_msg="BT/PT 直连=关"
-    log_date "Xray 运行配置生成成功（代理模式=$PROXY_MODE $mode_name，底层联动: $msg，$ads_msg，$bt_msg）"
+    [ "$DNS_HIJACK" = "1" ] && hijack_msg="域名劫持=开" || hijack_msg="域名劫持=关"
+    log_date "Xray 运行配置生成成功（代理模式=$PROXY_MODE $mode_name，$hijack_msg，$ads_msg，$bt_msg，底层联动: $msg）"
 }
 
 run_config_test() {
