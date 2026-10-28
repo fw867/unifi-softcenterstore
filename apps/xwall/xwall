@@ -177,12 +177,20 @@ build_xray_config() {
     esac
 
     proxy_domains='[]'
+    # 老的 geosite.dat 可能还没有 AI 分类合集；没有就不加，否则 Xray 会因未知 geosite 代码起不来
+    ai_rule=""
+    if [ -s "$ASSET_DIR/geosite.dat" ] && grep -q 'CATEGORY-AI-!CN' "$ASSET_DIR/geosite.dat" 2>/dev/null; then
+        ai_rule='"geosite:category-ai-!cn",'
+    fi
     case "$PROXY_MODE" in
         1)
             proxy_domains='[
                 "geosite:gfw",
                 "geosite:openai",
                 "geosite:anthropic",
+                '"$ai_rule"'
+                "domain:statsigapi.net",
+                "domain:chatgpt.livekit.cloud",
                 "geosite:github",
                 "geosite:telegram",
                 "geosite:google",
@@ -847,11 +855,64 @@ stop() {
 
 trap 'unset_lock' EXIT INT TERM
 
+# 检测代理出口地区：ChatGPT / Claude 等按「出口国家」限制，香港、中国大陆等地区会被直接拒绝
+trace_exit() {
+    if [ "$XWALL_SOCKS_ENABLE" != "1" ]; then
+        echo "需要先在设置里打开 SOCKS5 才能检测（本项通过 SOCKS 出站，路由器自身流量不走透明代理）"
+        return 1
+    fi
+    if ! command -v curl >/dev/null 2>&1; then
+        echo "缺少 curl，无法检测"
+        return 1
+    fi
+    _host="127.0.0.1"
+    [ "$XWALL_SOCKS_LISTEN" = "1" ] && _host=$(detect_lan_ip)
+    _proxy="socks5h://${_host}:${XWALL_SOCKS_PORT}"
+    if [ "$XWALL_SOCKS_AUTH" = "1" ] && [ -n "$XWALL_SOCKS_USER" ]; then
+        _proxy="socks5h://${XWALL_SOCKS_USER}:${XWALL_SOCKS_PASS}@${_host}:${XWALL_SOCKS_PORT}"
+    fi
+    echo "== XWall 出口地区检测 =="
+    echo "检测代理：$_proxy"
+    _out=$(curl -s -m 15 -x "$_proxy" https://chatgpt.com/cdn-cgi/trace 2>/dev/null)
+    [ -z "$_out" ] && _out=$(curl -s -m 15 -x "$_proxy" https://www.cloudflare.com/cdn-cgi/trace 2>/dev/null)
+    if [ -z "$_out" ]; then
+        echo "❌ 取不到出口信息：代理不通，或节点访问不了 Cloudflare"
+        echo "   先确认插件在运行、SOCKS5 端口没填错、节点本身可用"
+        return 1
+    fi
+    _ip=$(printf '%s\n' "$_out" | sed -n 's/^ip=//p' | head -n1)
+    _loc=$(printf '%s\n' "$_out" | sed -n 's/^loc=//p' | head -n1)
+    _colo=$(printf '%s\n' "$_out" | sed -n 's/^colo=//p' | head -n1)
+    echo "出口 IP  ：${_ip:-未知}"
+    echo "出口地区：${_loc:-未知}（Cloudflare 判定，colo=${_colo:-未知}）"
+    case "$_loc" in
+        CN|HK|MO|RU|IR|KP|SY|CU|BY)
+            echo ""
+            echo "⚠ 该地区不被 OpenAI / ChatGPT 支持，登录会报 unsupported_country_region_territory"
+            echo "  换到美国 / 日本 / 新加坡 / 台湾等支持地区的节点即可（香港、中国大陆都不行）"
+            return 1
+            ;;
+        "")
+            echo "⚠ 没解析到地区，可再跑一次"
+            return 1
+            ;;
+        *)
+            echo ""
+            echo "✓ 该地区不受 OpenAI 限制"
+            echo "  若仍报 unsupported_country_region_territory，依次排查："
+            echo "   1) 该设备是否真的走了 XWall（用同网段另一台设备对照）"
+            echo "   2) 浏览器是否开着自带的「安全 DNS / 代理」导致部分请求绕过"
+            return 0
+            ;;
+    esac
+}
+
 case ${1} in
     start) start ;;
     stop) stop ;;
     restart) stop; sleep 1; start ;;
     watchdog) watchdog ;;
+    trace|check-exit) trace_exit ;;
     status) if pgrep -x "$PROC_NAME" >/dev/null 2>&1; then echo "running"; else echo "stopped"; exit 1; fi ;;
-    *) echo "Usage: $0 {start|stop|restart|status|watchdog}"; exit 1 ;;
+    *) echo "Usage: $0 {start|stop|restart|status|watchdog|trace}"; exit 1 ;;
 esac

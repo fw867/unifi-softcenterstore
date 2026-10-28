@@ -340,7 +340,7 @@
         "Id": "xwall",
         "Name": "XWall",
         "Type": "Binary Core",
-        "Version": "1.1.0",
+        "Version": "1.1.1",
         "Description": "全流量交给 Xray，由 Xray 规则集自动分流（国内直连 / 国外代理）。",
         "Icon": "shield-check",
         "StartCommand": "/data/softcenter/bin/xwall start",
@@ -350,12 +350,12 @@
         "ConfigPath": "/data/softcenter/config/xwall.env",
         "ConfigKeys": "",
         "LogPath": "/var/log/xwall.log",
-        "CustomCommands": "[{\"name\":\"运行状态排查\",\"command\":\"/data/softcenter/bin/xwall-status\"},{\"name\":\"升级Xray核心\",\"command\":\"/data/softcenter/bin/xwall-ssup\"},{\"name\":\"强制重下核心\",\"command\":\"FORCE_DOWNLOAD=1 /data/softcenter/bin/xwall-ssup\"},{\"name\":\"更新路由规则\",\"command\":\"/data/softcenter/bin/xwall-rules 2>&1 | tee -a /var/log/xwall-rules.log\"},{\"name\":\"查看Xray运行日志\",\"command\":\"echo '===== Xray 运行日志 ====='; sed -n 's/^XRAY_LOG_LEVEL=/错误日志级别: /p' /data/softcenter/config/xwall.env 2>/dev/null | head -n1; echo; if [ -s /var/log/xwall-xray.log ]; then tail -n 150 /var/log/xwall-xray.log; else echo '(暂无日志：进程未运行，或日志级别为 none)'; fi\"},{\"name\":\"清空Xray日志\",\"command\":\": > /var/log/xwall-xray.log; echo 'Xray 运行日志已清空'\"}]",
+        "CustomCommands": "[{\"name\":\"运行状态排查\",\"command\":\"/data/softcenter/bin/xwall-status\"},{\"name\":\"检测出口地区\",\"command\":\"/data/softcenter/bin/xwall trace\"},{\"name\":\"升级Xray核心\",\"command\":\"/data/softcenter/bin/xwall-ssup\"},{\"name\":\"强制重下核心\",\"command\":\"FORCE_DOWNLOAD=1 /data/softcenter/bin/xwall-ssup\"},{\"name\":\"更新路由规则\",\"command\":\"/data/softcenter/bin/xwall-rules 2>&1 | tee -a /var/log/xwall-rules.log\"},{\"name\":\"查看Xray运行日志\",\"command\":\"echo '===== Xray 运行日志 ====='; sed -n 's/^XRAY_LOG_LEVEL=/错误日志级别: /p' /data/softcenter/config/xwall.env 2>/dev/null | head -n1; echo; if [ -s /var/log/xwall-xray.log ]; then tail -n 150 /var/log/xwall-xray.log; else echo '(暂无日志：进程未运行，或日志级别为 none)'; fi\"},{\"name\":\"清空Xray日志\",\"command\":\": > /var/log/xwall-xray.log; echo 'Xray 运行日志已清空'\"}]",
         "Files": [
             {
                 "Name": "xwall",
                 "Path": "apps/xwall/xwall",
-                "Sha256": "faf900990af5338754b27aaddc60a945022fb4134f61bf64c9c7f64cc992201c",
+                "Sha256": "4ea4f9af4793cdaee94091de0aa4798179ac8f984bbdc6d0f43285030849c42e",
                 "Mode": "0755"
             },
             {
@@ -417,7 +417,7 @@
                                     "Value": "4"
                                 }
                             ],
-                            "Help": "决定 Xray 规则集的默认走向（iptables 始终把流量交给 Xray，再由规则集分流）：GFWList=只代理 geosite:gfw 与 telegram，其余直连；国内白名单=国内域名/IP 直连、其余走代理；游戏模式=TCP 全走代理、UDP 仅非国内走代理；全局代理=除内网外全部走代理。需要完全不代理时直接停用插件即可，故不再提供该模式"
+                            "Help": "决定 Xray 规则集的默认走向（iptables 始终把流量交给 Xray，再由规则集分流）：GFWList=只代理 GFW 名单与常用被墙站点（含 OpenAI / Claude 等 AI 站点、GitHub、Telegram、Google 系），其余直连；国内白名单=国内域名/IP 直连、其余走代理；游戏模式=TCP 全走代理、UDP 仅非国内走代理；全局代理=除内网外全部走代理。需要完全不代理时直接停用插件即可，故不再提供该模式。ChatGPT / Claude 等按出口地区放行，节点需在支持地区（香港、中国大陆都不行），可用「扩展 → 检测出口地区」确认"
                         }
                     ]
                 },
