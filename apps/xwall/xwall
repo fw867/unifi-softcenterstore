@@ -652,6 +652,7 @@ ipts_update() {
         ipt -t nat -F XWALL_DNS 2>/dev/null
 
         # 1. 代理白名单设备不劫持：它们本来就绕过代理，被塞 FakeIP 会直接上不了网
+        #    优先用集合（条目多时快）；集合不可用时逐条 -s 兜底，绝不让这一步静默失效
         if [ -n "$DIRECT_LIST" ]; then
             ipset -! create xwall_dns_bypass nethash 2>/dev/null
             ipset flush xwall_dns_bypass 2>/dev/null
@@ -663,23 +664,55 @@ ipts_update() {
                     *) ipset -! add xwall_dns_bypass "$line" 2>/dev/null ;;
                 esac
             done
-            ipt -t nat -A XWALL_DNS -m set --match-set xwall_dns_bypass src -j RETURN
+            if ! ipt -t nat -A XWALL_DNS -m set --match-set xwall_dns_bypass src -j RETURN 2>/dev/null; then
+                log_date "DNS劫持：白名单集合不可用，改用逐条规则"
+                printf '%s\n' "$DIRECT_LIST" | while IFS= read -r line || [ -n "$line" ]; do
+                    line=$(trim "$line")
+                    case "$line" in "" | \#* | *[!0-9a-fA-F.:/]*) continue ;; esac
+                    case "$line" in
+                        *:*) ;;
+                        *) ipt -t nat -A XWALL_DNS -s "$line" -j RETURN 2>/dev/null ;;
+                    esac
+                done
+            fi
         fi
 
-        # 2. 排除路由器自身的所有地址（含 WAN、loopback），阻断本机 DNS 被二次劫持
-        _self_added=0
+        # 2. 排除路由器自身的所有地址（含 WAN、loopback）：先灌进固定集合 xwall_self（1 条规则），
+        #    集合建不出来/灌不进去时再逐条 -s 兜底 —— 两步都做，绝不静默漏掉本机排除
+        ipset -! create xwall_self nethash 2>/dev/null
+        ipset flush xwall_self 2>/dev/null
+        _self_n=0
+        _self_list=""
         for _addr in $(ip -4 addr show 2>/dev/null | awk '/inet /{print $2}' | cut -d/ -f1); do
             [ -n "$_addr" ] || continue
-            ipt -t nat -A XWALL_DNS -s "$_addr" -j RETURN
-            _self_added=$((_self_added + 1))
+            _self_list="$_self_list $_addr"
+            ipset -! add xwall_self "$_addr" 2>/dev/null && _self_n=$((_self_n + 1))
         done
-        if [ "$_self_added" = "0" ]; then
+        if [ -z "$_self_list" ]; then
             _router_ip=$(detect_lan_ip)
-            [ -n "$_router_ip" ] && ipt -t nat -A XWALL_DNS -s "$_router_ip" -j RETURN
+            if [ -n "$_router_ip" ]; then
+                _self_list=" $_router_ip"
+                ipset -! add xwall_self "$_router_ip" 2>/dev/null && _self_n=1
+            fi
+        fi
+        if [ "$_self_n" = "0" ] || ! ipt -t nat -A XWALL_DNS -m set --match-set xwall_self src -j RETURN 2>/dev/null; then
+            log_date "DNS劫持：本机地址集合不可用，改用逐条规则"
+            for _addr in $_self_list; do
+                ipt -t nat -A XWALL_DNS -s "$_addr" -j RETURN 2>/dev/null
+            done
         fi
 
-        # 3. 只劫持局域网来源的查询（-i 网卡名在各固件上不一致，用来源网段最稳）
-        ipt -t nat -A XWALL_DNS -m set --match-set xwall_src src -j REDIRECT --to-ports "$DNS_PORT"
+        # 3. 只劫持局域网来源的查询：直接用固定内网网段（与 xwall_src 内容等价），不依赖集合。
+        #    必须显式带 -p：部分固件（nft 后端）在没有协议匹配时会拒绝 REDIRECT --to-ports
+        _dns_ok=0
+        for _proto in udp tcp; do
+            for _net in 192.168.0.0/16 10.0.0.0/8 172.16.0.0/12 100.64.0.0/10; do
+                ipt -t nat -A XWALL_DNS -p "$_proto" -s "$_net" -j REDIRECT --to-ports "$DNS_PORT" 2>/dev/null && _dns_ok=$((_dns_ok + 1))
+            done
+        done
+        if [ "$_dns_ok" = "0" ]; then
+            log_date "⚠ DNS劫持规则下发失败：XWALL_DNS 链里没有 REDIRECT（检查 iptables -V 与 --to-ports 支持）"
+        fi
 
         # 4. 挂到 PREROUTING（udp / tcp 分别判断，避免只挂上一条时漏掉另一条）
         if ! ipt -t nat -C PREROUTING -p udp --dport 53 -j XWALL_DNS 2>/dev/null; then
@@ -714,7 +747,21 @@ ipts_update() {
                 case "$_addr6" in "" | fe80:* | ::1) continue ;; esac
                 case "$_addr6" in *:*) ipt6 -t nat -A XWALL_DNS -s "$_addr6" -j RETURN; _self6_added=$((_self6_added + 1)) ;; esac
             done
-            ipt6 -t nat -A XWALL_DNS -m set --match-set xwall_src6 src -j REDIRECT --to-ports "$DNS_PORT"
+            # IPv6 的 LAN 前缀是动态的，优先用集合；集合不可用时按路由表里的 LAN 前缀兜底。
+            # 和 v4 一样必须显式带 -p，否则 nft 后端会拒绝 REDIRECT --to-ports
+            _v6ok=0
+            for _proto6 in udp tcp; do
+                ipt6 -t nat -A XWALL_DNS -p "$_proto6" -m set --match-set xwall_src6 src -j REDIRECT --to-ports "$DNS_PORT" 2>/dev/null && _v6ok=$((_v6ok + 1))
+            done
+            if [ "$_v6ok" = "0" ]; then
+                log_date "DNS劫持(IPv6)：xwall_src6 集合不可用，改按 LAN 前缀下发"
+                for _proto6 in udp tcp; do
+                    for _net6 in $(ip -6 route show 2>/dev/null | awk '/dev br/{if($1!="default" && $1!="fe80::/64") print $1}'); do
+                        ipt6 -t nat -A XWALL_DNS -p "$_proto6" -s "$_net6" -j REDIRECT --to-ports "$DNS_PORT" 2>/dev/null && _v6ok=$((_v6ok + 1))
+                    done
+                done
+            fi
+            [ "$_v6ok" = "0" ] && log_date "⚠ DNS劫持(IPv6)规则下发失败：XWALL_DNS 链里没有 REDIRECT"
 
             if ! ipt6 -t nat -C PREROUTING -p udp --dport 53 -j XWALL_DNS 2>/dev/null; then
                 ipt6 -t nat -I PREROUTING "$RULE6_INDEX" -p udp --dport 53 -j XWALL_DNS
@@ -724,7 +771,13 @@ ipts_update() {
             fi
         fi
 
-        log_date "DNS劫持已开启：接管内网 53 端口查询（独立链 XWALL_DNS，已排除路由器本机${DIRECT_LIST:+ 与白名单设备}）"
+        if [ "$_dns_ok" = "0" ]; then
+            log_date "⚠ DNS劫持未生效：XWALL_DNS 链里没有任何 REDIRECT 规则（请检查 iptables -t nat -S XWALL_DNS）"
+        elif [ -n "$DIRECT_LIST" ]; then
+            log_date "DNS劫持已开启：接管内网 53 端口查询（独立链 XWALL_DNS，已排除路由器本机与白名单设备）"
+        else
+            log_date "DNS劫持已开启：接管内网 53 端口查询（独立链 XWALL_DNS，已排除路由器本机）"
+        fi
     fi
 }
 
@@ -787,6 +840,7 @@ ipts_origin() {
     ipset destroy xwall_src6 2>/dev/null
     ipset destroy xwall_dns_bypass 2>/dev/null
     ipset destroy xwall_dns_bypass6 2>/dev/null
+    ipset destroy xwall_self 2>/dev/null
 }
 
 ipfwd_on() {
