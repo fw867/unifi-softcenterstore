@@ -199,10 +199,8 @@ build_xray_config() {
     socks_listen_ip="127.0.0.1"
     [ "$XWALL_SOCKS_LISTEN" = "1" ] && socks_listen_ip="$in_listen"
 
-    local lan_ip
-    lan_ip=$(detect_lan_ip)
-    # 本地 DNS 用真实的局域网地址更稳（diag 实测 192.168.1.1:53 可通；127.0.0.1 仅作兜底）
-    local_dns="${lan_ip:-127.0.0.1}"
+    # dnsmasq 的本机入口不依赖接口枚举顺序，避免多 WAN/VLAN 时选中不提供 DNS 的地址。
+    local_dns="127.0.0.1"
     dns_listen="$in_listen"
 
     case "$XRAY_LOG_LEVEL" in
@@ -396,29 +394,31 @@ build_xray_config() {
         "queryStrategy": $qStrategy,
         "servers": (
           [
-            { "address": $localDns, "domains": ($localDomains + $localExtra) },
+            { "address": $localDns, "domains": ($localDomains + $localExtra), "skipFallback": true },
             # 白名单域名必须拿真实 IP：若塞 FakeIP，直连出口会再把域名解析回假地址
-            (if ($whiteDomRule | length) > 0 then { "address": $localDns, "domains": $whiteDomRule } else empty end)
+            (if ($whiteDomRule | length) > 0 then { "address": $localDns, "domains": $whiteDomRule, "skipFallback": true } else empty end)
           ]
           # FakeIP 只在“能按域名分流”时启用（GFW 模式）；模式 2/3/4 的 proxyDomains 为空，
           # 以前这里会退化成裸字符串 "fakedns"（全局兜底），导致国内域名全拿 FakeIP 而全部走代理
           + (if ($proxyDomains | length) > 0 then [
-              { "address": "fakedns", "domains": ($proxyDomains + $blackDomRule) },
-              { "address": $dnsForeign, "domains": ($proxyDomains + $blackDomRule) }
+              { "address": "fakedns", "domains": ($proxyDomains + $blackDomRule), "skipFallback": true },
+              { "address": $dnsForeign, "domains": ($proxyDomains + $blackDomRule), "skipFallback": true }
             ] else [] end)
-          # 其余（国内 / 未命中 / 未知）统一交给路由器 dnsmasq：继承它的 AAAA 过滤与本地域名
-          + [ $localDns ]
+          # 公网域名使用面板设置的国内 DNS，本地记录仍由上面的 dnsmasq 处理。
+          # IPv4 模式的 AAAA 过滤由 queryStrategy 保证，不依赖路由器 DNS 的过滤设置。
+          + [ $dnsCn ]
         )
       },
       "routing": {
         "domainStrategy": "IPIfNonMatch",
         "rules": (
+          # 客户端 DNS 必须优先接管；否则目标为路由器/公共 DNS 时会先命中下面的直连规则，
+          # 绕过 queryStrategy（UseIPv4），导致 AAAA 原样透传、FakeDNS 也不生效。
           [
+            {"type": "field", "inboundTag": $clientInbounds, "port": 53, "outboundTag": "dns-out"},
             {"type": "field", "ip": [$dnsCn], "outboundTag": "direct"},
             {"type": "field", "ip": [$localDns], "outboundTag": "direct"},
             {"type": "field", "ip": [$dnsForeign], "outboundTag": $dnsForeignTarget}
-          ] + [
-            {"type": "field", "inboundTag": $clientInbounds, "port": 53, "outboundTag": "dns-out"}
           ] + (if ($whiteDomRule | length) > 0 then [
             {"type": "field", "domain": $whiteDomRule, "outboundTag": "direct"}
           ] else [] end) + (if ($whiteIpRule | length) > 0 then [
@@ -669,8 +669,6 @@ ipts_update() {
         ipt6 -t mangle -I PREROUTING "$RULE16_INDEX" -p udp -j "$CHAIN"
     fi
 
-    # 劫持后的 DNS 已经走 tproxy 通道（1280/1281），这两个端口本来就有放行/透明处理；
-    # 15353 只有旧版 dokodemo 方案会用到，这里不再下发放行规则（ipts_origin 仍会清掉历史规则）
     # SOCKS5 若监听了局域网，同样需要放行
     if [ "$XWALL_SOCKS_ENABLE" = "1" ] && [ "$XWALL_SOCKS_LISTEN" = "1" ]; then
         ipt -t filter -I INPUT 1 -p tcp --dport "$XWALL_SOCKS_PORT" -m set --match-set xwall_src src -j ACCEPT
@@ -682,6 +680,15 @@ ipts_update() {
     fi
 
     if [ "$DNS_HIJACK" = "1" ]; then
+        # TPROXY 只改变投递 socket，UDP 报文的目的端口仍是 53；TCP REDIRECT 后则是 1280。
+        # 两者都会经过 INPUT，必须先于 UniFi 的 LAN LOCAL / 区域防火墙放行。
+        # 限制 LAN 来源和实际接管的流量，避免开放未被接管的 DNS 或透明代理端口。
+        ipt -t filter -I INPUT 1 -p udp --dport 53 -m mark --mark "$FWMARK" -m set --match-set xwall_src src -j ACCEPT
+        ipt -t filter -I INPUT 1 -p tcp --dport "$TCP_PORT" -m conntrack --ctstate DNAT --ctorigdstport 53 -m set --match-set xwall_src src -j ACCEPT
+        if [ "$XWALL_IPV6_ENABLE" = "1" ]; then
+            ipt6 -t filter -I INPUT 1 -p udp --dport 53 -m mark --mark "$FWMARK" -m set --match-set xwall_src6 src -j ACCEPT
+            ipt6 -t filter -I INPUT 1 -p tcp --dport "$TCP_PORT" -m conntrack --ctstate DNAT --ctorigdstport 53 -m set --match-set xwall_src6 src -j ACCEPT
+        fi
         # ==================== DNS 劫持（走 tproxy 通道） ====================
         # 之前是 nat REDIRECT 到 dokodemo-door(15353)：实测那条通道会漏 socket ——
         # 报文堆在 192.168.1.1:15353 的 socket 里没人读，客户端拿不到应答（日志只有 pending lost）。
@@ -740,6 +747,10 @@ ipts_update() {
 
 ipts_origin() {
     # 先撤掉 filter INPUT 的放行规则（必须在 ipset 销毁之前，否则删不掉）
+    while ipt -t filter -D INPUT -p udp --dport 53 -m mark --mark "$FWMARK" -m set --match-set xwall_src src -j ACCEPT 2>/dev/null; do :; done
+    while ipt -t filter -D INPUT -p tcp --dport "$TCP_PORT" -m conntrack --ctstate DNAT --ctorigdstport 53 -m set --match-set xwall_src src -j ACCEPT 2>/dev/null; do :; done
+    while ipt6 -t filter -D INPUT -p udp --dport 53 -m mark --mark "$FWMARK" -m set --match-set xwall_src6 src -j ACCEPT 2>/dev/null; do :; done
+    while ipt6 -t filter -D INPUT -p tcp --dport "$TCP_PORT" -m conntrack --ctstate DNAT --ctorigdstport 53 -m set --match-set xwall_src6 src -j ACCEPT 2>/dev/null; do :; done
     while ipt -t filter -D INPUT -p udp --dport "$DNS_PORT" -m set --match-set xwall_src src -j ACCEPT 2>/dev/null; do :; done
     while ipt -t filter -D INPUT -p tcp --dport "$DNS_PORT" -m set --match-set xwall_src src -j ACCEPT 2>/dev/null; do :; done
     # 按行号兜底清一遍（ipset 已被销毁时上面的精确删除会失败）

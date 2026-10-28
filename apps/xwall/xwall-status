@@ -381,7 +381,9 @@ $_m53"
 LEGACY_CHAIN=$(iptables -t nat -S XWALL_DNS 2>/dev/null | grep -c .)
 [ -z "$LEGACY_CHAIN" ] && LEGACY_CHAIN=0
 
-LAN_IP=$(ip -4 addr show 2>/dev/null | awk '/inet /{print $2}' | cut -d/ -f1 | grep -v '^127\.' | head -n1)
+# 检查实际配置中的本地 DNS，不能把第一个接口（可能是 WAN）当成 LAN DNS。
+LAN_IP=$(jq -r '.dns.servers[0] | if type == "object" then .address else . end // empty' /tmp/xwall.json 2>/dev/null)
+[ -n "$LAN_IP" ] || LAN_IP="127.0.0.1"
 dns_probe() {
     _s="$1"
     [ -n "$_s" ] || { printf '%s' "-"; return; }
@@ -415,6 +417,12 @@ $1|$2"
 }
 if [ "$R_NAT" != "就位" ] || [ "$R_MANGLE" != "就位" ] || [ "$R_JUMP" != "就位" ] || [ "$R_ROUTE" != "就位" ]; then
     add_verdict warn "劫持规则不完整：流量可能没被接管（重启插件：/data/softcenter/bin/xwall restart）"
+fi
+if [ "$PROBE_LAN" = "不通" ]; then
+    add_verdict warn "运行配置中的本地 DNS ${LAN_IP} 探测不通，本地域名或经它转发的查询可能失败"
+fi
+if [ "$PROBE_CN" = "不通" ]; then
+    add_verdict warn "国内 DNS ${DNS_CN} 探测不通，普通公网域名可能无法解析"
 fi
 if [ "$FD_PCT" -ge 70 ]; then
     add_verdict warn "文件描述符已用 ${FD_PCT}%，接近上限，注意连接数是否异常增长"
@@ -663,7 +671,7 @@ printf '%s\n' "$LISTEN_TEXT" | sed 's/^/    /'
 printf '  DNS 接管规则\n'
 printf '%s\n' "$DNS_RULES" | sed 's/^/    /'
 printf '  旧 XWALL_DNS 链   %s\n' "$([ "${LEGACY_CHAIN:-0}" -gt 0 ] && echo "仍有 ${LEGACY_CHAIN} 条残留（可重启插件清理）" || echo "已清理")"
-printf '  本机解析探测   路由器 %s(%s)  loopback %s(%s)  国内 %s(%s)  国外 %s(%s)\n' \
+printf '  本机解析探测   配置本地DNS %s(%s)  loopback %s(%s)  国内 %s(%s)  国外 %s(%s)\n' \
     "${LAN_IP:--}" "${PROBE_LAN:-?}" "127.0.0.1" "${PROBE_LOOP:-?}" "$DNS_CN" "${PROBE_CN:-?}" "$DNS_FOREIGN" "${PROBE_FOREIGN:-?}"
 printf '  其它开关       广告拦截 %s  BT直连 %s  IPv6 %s\n' \
     "$DIAG_ADS" "$DIAG_BT" "$DIAG_V6"
