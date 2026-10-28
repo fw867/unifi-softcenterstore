@@ -372,12 +372,11 @@ build_xray_config() {
         "queryStrategy": $qStrategy,
         "servers": (
           [
-            { "address": $dnsCn, "domains": (["geosite:cn"] + $whiteDomRule) },
             { "address": $localDns, "domains": ($localDomains + $localExtra) },
             (if ($proxyDomains | length) > 0 then { "address": "fakedns", "domains": $proxyDomains } else "fakedns" end)
           ]
-          + (if ($proxyDomains | length) > 0 then [ { "address": $dnsForeign, "domains": $proxyDomains }, $dnsCn ] else [] end)
-          + [ $dnsForeign ]
+          + (if ($proxyDomains | length) > 0 then [ { "address": $dnsForeign, "domains": $proxyDomains } ] else [] end)
+          + [ $localDns ]
         )
       },
       "routing": {

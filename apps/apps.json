@@ -355,7 +355,7 @@
             {
                 "Name": "xwall",
                 "Path": "apps/xwall/xwall",
-                "Sha256": "282b0dbb4e59d4f85ff893e0c8f85b9c45cf0c9b7048d86ab030f62cbe0f696f",
+                "Sha256": "1483f773d6279b4b61ee72219bcde4d99215f8300c429d1648ace5997405560d",
                 "Mode": "0755"
             },
             {
@@ -430,14 +430,14 @@
                             "Label": "国内 DNS",
                             "Type": "ip",
                             "Default": "223.5.5.5",
-                            "Help": "解析国内域名（geosite:cn），同时加入直连名单"
+                            "Help": "仅用于把该 DNS 加入直连名单（不被代理）。国内域名现在统一交给路由器 dnsmasq 解析，不再直查本项，一般保持默认即可"
                         },
                         {
                             "Key": "DNS_FOREIGN",
                             "Label": "国外 DNS",
                             "Type": "ip",
                             "Default": "8.8.8.8",
-                            "Help": "解析被代理的国外域名，走代理出去；不要填国内 DNS"
+                            "Help": "被代理域名的备用解析（首选由 FakeIP 直接应答）；不要填国内 DNS"
                         },
                         {
                             "Key": "DNS_HIJACK",
