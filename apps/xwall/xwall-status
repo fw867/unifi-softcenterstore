@@ -23,6 +23,7 @@ export PATH
 PROC_NAME="xwall-xray"
 PROC_ROOT="${XWALL_PROC:-/proc}"        # 便于离线测试，默认 /proc
 CONFIG="/data/softcenter/config/xwall.env"
+XRAY_LOG="${XRAY_LOG:-/var/log/xwall-xray.log}"
 CHAIN="XWALL"
 IPSET_BYPASS="xwall_bypass"
 ROUTE_TABLE="320"
@@ -198,9 +199,9 @@ client_mac() {
     fi
 }
 
-# JSON 字符串转义
+# JSON 字符串转义（顺带去掉换行/制表符，否则会破坏 JSON）
 jstr() {
-    printf '"%s"' "$(printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g')"
+    printf '"%s"' "$(printf '%s' "$1" | tr '\r\n\t' '   ' | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g')"
 }
 
 # ---------- 采集 ----------
@@ -353,6 +354,55 @@ if command -v ipset >/dev/null 2>&1; then
     fi
 fi
 
+# ---------- 关键诊断（进程 / 端口 / DNS 劫持规则 / 解析探测 / 日志） ----------
+DIAG_MODE="${PROXY_MODE:-2}"
+DIAG_ADS=$([ "${XWALL_BLOCK_ADS:-0}" = "1" ] && echo 开 || echo 关)
+DIAG_BT=$([ "${XWALL_BITTORRENT_DIRECT:-0}" = "1" ] && echo 开 || echo 关)
+DIAG_V6=$([ "${XWALL_IPV6_ENABLE:-0}" = "1" ] && echo 开 || echo 关)
+
+PROC_COUNT=$(pgrep -x "$PROC_NAME" 2>/dev/null | wc -l | tr -d ' ')
+PROC_LIST=$(pgrep -a "$PROC_NAME" 2>/dev/null | head -n 5)
+
+LISTEN_TEXT=""
+if command -v ss >/dev/null 2>&1; then
+    LISTEN_TEXT=$(ss -ltnp 2>/dev/null | grep -E ":$TCP_PORT " | head -n 3)
+    _lu=$(ss -lunp 2>/dev/null | grep -E ":$UDP_PORT " | head -n 3)
+    [ -n "$_lu" ] && LISTEN_TEXT="$LISTEN_TEXT
+$_lu"
+fi
+[ -z "$LISTEN_TEXT" ] && LISTEN_TEXT="未监听 $TCP_PORT / $UDP_PORT"
+
+DNS_RULES=$(iptables -t nat -S "$CHAIN" 2>/dev/null | grep -E 'dport 53' | head -n 4)
+_m53=$(iptables -t mangle -S "$CHAIN" 2>/dev/null | grep -E 'dport 53' | head -n 4)
+[ -n "$_m53" ] && DNS_RULES="$DNS_RULES
+$_m53"
+[ -z "$DNS_RULES" ] && DNS_RULES="链内没有 53 端口规则（DNS 未接管）"
+
+LEGACY_CHAIN=$(iptables -t nat -S XWALL_DNS 2>/dev/null | grep -c .)
+[ -z "$LEGACY_CHAIN" ] && LEGACY_CHAIN=0
+
+LAN_IP=$(ip -4 addr show 2>/dev/null | awk '/inet /{print $2}' | cut -d/ -f1 | grep -v '^127\.' | head -n1)
+dns_probe() {
+    _s="$1"
+    [ -n "$_s" ] || { printf '%s' "-"; return; }
+    command -v nslookup >/dev/null 2>&1 || { printf '%s' "?"; return; }
+    if command -v timeout >/dev/null 2>&1; then
+        timeout 3 nslookup baidu.com "$_s" >/dev/null 2>&1 && printf '%s' "通" || printf '%s' "不通"
+    else
+        nslookup baidu.com "$_s" >/dev/null 2>&1 && printf '%s' "通" || printf '%s' "不通"
+    fi
+}
+PROBE_LAN=$(dns_probe "$LAN_IP")
+PROBE_LOOP=$(dns_probe 127.0.0.1)
+PROBE_CN=$(dns_probe "$DNS_CN")
+PROBE_FOREIGN=$(dns_probe "$DNS_FOREIGN")
+
+LOG_TAIL=""
+[ -r "$XRAY_LOG" ] && LOG_TAIL=$(tail -n 3 "$XRAY_LOG" 2>/dev/null)
+RESOLVE_FAIL=0
+[ -r "$XRAY_LOG" ] && tail -n 200 "$XRAY_LOG" 2>/dev/null | grep -q 'failed to resolve ip' && RESOLVE_FAIL=1
+
+
 # 结论条目（level: ok / warn / info）
 VERDICTS=""
 add_verdict() {
@@ -454,8 +504,45 @@ if [ "$JSON_MODE" = "1" ]; then
     printf '"local_ports":[%s],' "$(ports_json "$LOCAL_TOP")"
     printf '"lan":[%s],' "$(lan_json)"
     printf '"conntrack":{"count":"%s","max":"%s","pct":%s},' "$CT_COUNT" "$CT_MAX" "$CT_PCT"
+    # 通用字段：面板「运行状态」会渲染 chips / metrics / checks（与具体插件无关）
+    _dnscount=$(printf '%s\n' "$DNS_RULES" | grep -c 'dport 53')
+    [ -z "$_dnscount" ] && _dnscount=0
+    _probe_ok=0
+    [ "$PROBE_LAN" = "通" ] && _probe_ok=$((_probe_ok + 1))
+    [ "$PROBE_LOOP" = "通" ] && _probe_ok=$((_probe_ok + 1))
+    [ "$PROBE_CN" = "通" ] && _probe_ok=$((_probe_ok + 1))
+    [ "$PROBE_FOREIGN" = "通" ] && _probe_ok=$((_probe_ok + 1))
+    printf '"chips":[{"label":"xray","value":"运行中"},{"label":"DNS接管","value":"%s"},{"label":"模式","value":"%s"}],' \
+        "$([ "${_dnscount:-0}" -gt 0 ] && echo "tproxy" || echo "未接管")" "$HIJACK_TEXT"
+    printf '"metrics":[{"label":"xray 进程","value":"%s 个","hint":"%s"},{"label":"监听端口","value":"%s/%s","hint":"TCP/UDP"},{"label":"DNS 解析探测","value":"%s/4 通","hint":"路由器/loopback/国内/国外"}],' \
+        "${PROC_COUNT:-0}" "$([ "${PROC_COUNT:-0}" -gt 1 ] && echo '多于 1 个，可能有残留实例' || echo '正常')" \
+        "$TCP_PORT" "$UDP_PORT" "$_probe_ok"
+    printf '"checks":[{"label":"DNS 接管规则","value":"%s 条","state":"%s"},{"label":"旧 XWALL_DNS 链","value":"%s","state":"%s"},{"label":"出站节点域名解析","value":"%s","state":"%s"}],' \
+        "$_dnscount" "$([ "$_dnscount" -gt 0 ] && echo ok || echo bad)" \
+        "$([ "${LEGACY_CHAIN:-0}" -gt 0 ] && echo "${LEGACY_CHAIN} 条残留" || echo '已清理')" \
+        "$([ "${LEGACY_CHAIN:-0}" -gt 0 ] && echo warn || echo ok)" \
+        "$([ "${RESOLVE_FAIL:-0}" = "1" ] && echo '失败（见日志）' || echo '正常')" \
+        "$([ "${RESOLVE_FAIL:-0}" = "1" ] && echo warn || echo ok)"
     printf '"rules":{"nat":"%s","mangle":"%s","jump":"%s","route":"%s","ipset":"%s","ipset_n":"%s"},' \
         "$R_NAT" "$R_MANGLE" "$R_JUMP" "$R_ROUTE" "$R_SET" "$R_SET_N"
+    printf '"diag":{"procs":%s,"legacy_chain":%s,"resolve_fail":%s,' \
+        "${PROC_COUNT:-0}" "${LEGACY_CHAIN:-0}" "${RESOLVE_FAIL:-0}"
+    printf '"flags":{"ads":"%s","bt":"%s","ipv6":"%s"},' \
+        "$DIAG_ADS" "$DIAG_BT" "$DIAG_V6"
+    printf '"dns_probe":{"lan":"%s","lan_ip":"%s","loopback":"%s","cn":"%s","foreign":"%s"},' \
+        "${PROBE_LAN:-?}" "${LAN_IP:--}" "${PROBE_LOOP:-?}" "${PROBE_CN:-?}" "${PROBE_FOREIGN:-?}"
+    _lt=""
+    _sep=""
+    if [ -n "$LOG_TAIL" ]; then
+        while IFS= read -r _line; do
+            [ -z "$_line" ] && continue
+            _lt="$_lt$_sep$(jstr "$_line")"
+            _sep=","
+        done <<EOF
+$LOG_TAIL
+EOF
+    fi
+    printf '"log_tail":[%s]},' "$_lt"
     printf '"verdicts":[%s]' "$(verdict_json)"
     printf '}\n'
     exit 0
@@ -566,7 +653,31 @@ printf '  策略路由 table %s %s\n' "$ROUTE_TABLE" "$R_ROUTE"
 printf '  直连白名单 %s %s' "$R_SET" "$([ -n "$R_SET_N" ] && echo "($R_SET_N 条)")"
 printf '\n'
 
-section "7. 结论"
+section "7. 关键诊断（进程 / 端口 / DNS 接管 / 解析 / 日志）"
+printf '  xray 进程      %s 个' "${PROC_COUNT:-0}"
+[ -n "$PROC_COUNT" ] && [ "$PROC_COUNT" -gt 1 ] && printf '  ! 多于一个，可能有残留实例'
+printf '\n'
+[ -n "$PROC_LIST" ] && printf '%s\n' "$PROC_LIST" | sed 's/^/    /'
+printf '  监听端口\n'
+printf '%s\n' "$LISTEN_TEXT" | sed 's/^/    /'
+printf '  DNS 接管规则\n'
+printf '%s\n' "$DNS_RULES" | sed 's/^/    /'
+printf '  旧 XWALL_DNS 链   %s\n' "$([ "${LEGACY_CHAIN:-0}" -gt 0 ] && echo "仍有 ${LEGACY_CHAIN} 条残留（可重启插件清理）" || echo "已清理")"
+printf '  本机解析探测   路由器 %s(%s)  loopback %s(%s)  国内 %s(%s)  国外 %s(%s)\n' \
+    "${LAN_IP:--}" "${PROBE_LAN:-?}" "127.0.0.1" "${PROBE_LOOP:-?}" "$DNS_CN" "${PROBE_CN:-?}" "$DNS_FOREIGN" "${PROBE_FOREIGN:-?}"
+printf '  其它开关       广告拦截 %s  BT直连 %s  IPv6 %s\n' \
+    "$DIAG_ADS" "$DIAG_BT" "$DIAG_V6"
+if [ -n "$LOG_TAIL" ]; then
+    printf '  Xray 日志尾部\n'
+    printf '%s\n' "$LOG_TAIL" | sed 's/^/    /'
+fi
+if [ "${RESOLVE_FAIL:-0}" = "1" ]; then
+    printf '  ! 日志里有 failed to resolve ip：出站节点的 server 域名解析不了（解析成 NXDOMAIN 时尤其如此）\n'
+    printf '    · 节点 server 若是占位域名，改成真实域名或直接填 IP\n'
+    printf '    · 已下线域名刷屏属于设备空转，日志会按 4MB 上限自动轮转\n'
+fi
+
+section "8. 结论"
 printf '%s\n' "$VERDICTS" | while IFS= read -r line; do
     [ -z "$line" ] && continue
     _lvl=${line%%|*}

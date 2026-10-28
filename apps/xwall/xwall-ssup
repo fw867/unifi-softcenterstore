@@ -69,11 +69,19 @@ if [ -n "$PROXY_URL" ]; then
     if [ "$PROXY_FROM" = "XWall 自带 SOCKS5 入口" ] && [ "$XWALL_SOCKS_AUTH" = "1" ] && [ -n "$XWALL_SOCKS_USER" ]; then
         CURL_OPT="$CURL_OPT -U $XWALL_SOCKS_USER:$XWALL_SOCKS_PASS"
     fi
-    echo_date "升级代理：$PROXY_URL（来源：$PROXY_FROM）"
-elif [ "$XWALL_SOCKS_ENABLE" = "1" ]; then
-    echo_date "未配置全局更新代理，且 XWall 未运行（自带 SOCKS5 不可用），本次直连 GitHub"
-else
-    echo_date "未配置更新代理（全局未设置、插件 SOCKS5 未启用），直连 GitHub"
+    # 配了代理不代表可用（典型：全局更新代理填了 XWall 自己的 1283，但插件 SOCKS5 没开），
+    # 探测不通就放弃它，改走直连
+    if ! curl -s -m 6 $CURL_OPT -o /dev/null "$GITHUB_API" 2>/dev/null; then
+        echo_date "⚠ 配置的代理连不上（$PROXY_URL，来源：$PROXY_FROM），本次改走直连"
+        PROXY_URL=""
+        PROXY_FROM=""
+        CURL_OPT=""
+    else
+        echo_date "升级代理：$PROXY_URL（来源：$PROXY_FROM）"
+    fi
+fi
+if [ -z "$PROXY_URL" ]; then
+    echo_date "本次不使用代理（未配置，或配置的代理不可用），直连 GitHub"
 fi
 
 # 1. 自动获取 UDM 架构
@@ -140,8 +148,18 @@ dat_ok() {
     return 0
 }
 
+# 判断是不是我们需要的第三方 geosite（含 gfw 分类）。官方 v2fly 版没有 gfw，
+# 用它会让 XWall 的 geosite:gfw 规则直接失效。
+dat_is_thirdparty() {
+    local f="$ASSET_DIR/geosite.dat"
+    [ -s "$f" ] || return 1
+    grep -q 'GFW' "$f" 2>/dev/null || return 1
+    grep -q 'CATEGORY-ADS-ALL' "$f" 2>/dev/null || return 1
+    return 0
+}
+
 dat_ready() {
-    dat_ok "$ASSET_DIR/geoip.dat" && dat_ok "$ASSET_DIR/geosite.dat"
+    dat_ok "$ASSET_DIR/geoip.dat" && dat_ok "$ASSET_DIR/geosite.dat" && dat_is_thirdparty
 }
 
 get_latest_version(){
@@ -274,9 +292,8 @@ check_hash(){
     echo_date "✅ 校验通过  ${LOCAL_HASH}"
 
     echo_date "▸ 解压并安装"
-    # 内核必装；geoip.dat / geosite.dat 官方包里有就一起取出来（缺了不报错，后面会兜底下载）
+    # 只取内核；数据文件必须用第三方规则库（官方包内的 geosite 没有 gfw 分类）
     $UNZIP_CMD -o "${ZIP_NAME}" xray >/dev/null 2>&1
-    $UNZIP_CMD -o "${ZIP_NAME}" geoip.dat geosite.dat >/dev/null 2>&1
 
     if [ -f "xray" ]; then
         install_binary
@@ -284,25 +301,6 @@ check_hash(){
         echo_date "解压失败或未找到 xray 二进制文件！"
         exit 1
     fi
-}
-
-# 把解压出来的数据文件复制到内核同目录（内容一致时跳过）
-install_dat(){
-    local f src
-    for f in geoip.dat geosite.dat; do
-        src="/tmp/xray/$f"
-        if dat_ok "$src"; then
-            if dat_ok "$ASSET_DIR/$f" && cmp -s "$src" "$ASSET_DIR/$f"; then
-                echo_date "  $f 无变化，跳过复制"
-            else
-                cp -f "$src" "$ASSET_DIR/$f" || { echo_date "  $f 复制失败"; return 1; }
-                echo_date "  $f 已复制到 $ASSET_DIR（$(human_size "$(wc -c < "$ASSET_DIR/$f" | tr -d ' ')")）"
-            fi
-        else
-            echo_date "  发布包内没有可用的 $f，稍后兜底下载"
-        fi
-    done
-    return 0
 }
 
 download_dat(){
@@ -321,24 +319,28 @@ download_dat(){
     return 1
 }
 
-# 兜底：数据文件缺失时从规则库下载
+# 数据文件策略：
+#   - 本地已是合格的第三方库 → 直接跳过（不覆盖、不重复下载）
+#   - 缺失 / 被官方版覆盖 / 文件不完整 → 重新下载第三方库（官方 geosite 没有 gfw 等分类，
+#     首次安装如果沿用官方包里的 dat，XWall 的 geosite:gfw 规则会直接失效）
 ensure_dat(){
     if dat_ready; then
-        echo_date "geoip.dat / geosite.dat 已就绪"
+        echo_date "geoip.dat / geosite.dat 已就绪（第三方规则库，不覆盖）"
         return 0
     fi
 
-    echo_date "数据文件缺失，从规则库补齐（Loyalsoldier/v2ray-rules-dat）..."
+    echo_date "规则库缺失、被官方版覆盖或文件不完整 → 重新下载第三方规则库（Loyalsoldier/v2ray-rules-dat）..."
     mkdir -p "$ASSET_DIR"
 
-    dat_ok "$ASSET_DIR/geoip.dat" || download_dat geoip.dat "$DAT_GEOIP_URL"
-    dat_ok "$ASSET_DIR/geosite.dat" || download_dat geosite.dat "$DAT_GEOSITE_URL"
+    # 两个一起重下：避免官方 geoip 与第三方 geosite 混搭出难查的问题
+    download_dat geoip.dat "$DAT_GEOIP_URL" || true
+    download_dat geosite.dat "$DAT_GEOSITE_URL" || true
 
     if dat_ready; then
-        echo_date "数据文件补齐完成"
+        echo_date "规则库已切换为第三方版本"
         return 0
     fi
-    echo_date "数据文件仍不完整，Xray 可能无法启动（geoip/geosite 规则需要它）"
+    echo_date "规则库仍不可用，Xray 可能无法启动（geoip/geosite 规则需要它）"
     return 1
 }
 
@@ -371,7 +373,10 @@ install_binary(){
     chmod +x "$XRAY_BIN"
     echo_date "Xray 内核更新成功：$XRAY_BIN"
 
-    install_dat
+    # 注意：发布包里的 geoip.dat / geosite.dat 是官方 v2fly 版，没有 gfw / openai /
+    # category-ai-!cn 这些分类，覆盖进来会让 XWall 的规则集直接失效（Xray 报
+    # "illegal domain rule: geosite:gfw ... EOF"）。所以这里只装内核，数据文件一律用
+    # 第三方规则库（Loyalsoldier/v2ray-rules-dat），缺失或不是第三方版时由 ensure_dat 重下。
     ensure_dat || true
 
     # 先离开临时目录再删除：否则工作目录被删，maybe_start 拉起的 xwall 会 getcwd() 失败

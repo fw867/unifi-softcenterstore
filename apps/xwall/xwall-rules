@@ -70,11 +70,23 @@ if [ -n "$PROXY_URL" ]; then
     if [ "$PROXY_FROM" = "XWall 自带 SOCKS5 入口" ] && [ "$XWALL_SOCKS_AUTH" = "1" ] && [ -n "$XWALL_SOCKS_USER" ]; then
         CURL_OPT="$CURL_OPT -U $XWALL_SOCKS_USER:$XWALL_SOCKS_PASS"
     fi
-    echo_date "规则更新代理：$PROXY_URL（来源：$PROXY_FROM）"
-elif [ "$XWALL_SOCKS_ENABLE" = "1" ]; then
-    echo_date "未配置全局更新代理，且 XWall 未运行（自带 SOCKS5 不可用），本次直连 GitHub"
-else
-    echo_date "未配置更新代理（全局未设置、插件 SOCKS5 未启用），直连 GitHub"
+    # 关键：配了代理不代表它可用（典型：全局更新代理填了 XWall 自己的 1283，但插件 SOCKS5 没开）。
+    # 先探测一次，不通就放弃它，交给后面的「直连 → 自举代理」兜底。
+    if ! curl -s -m 6 $CURL_OPT -o /dev/null "$GITHUB_API" 2>/dev/null; then
+        echo_date "⚠ 配置的更新代理连不上（$PROXY_URL，来源：$PROXY_FROM），本次改走直连/自举"
+        PROXY_URL=""
+        PROXY_FROM=""
+        CURL_OPT=""
+    else
+        echo_date "规则更新代理：$PROXY_URL（来源：$PROXY_FROM）"
+    fi
+fi
+if [ -z "$PROXY_URL" ]; then
+    if [ "$XWALL_SOCKS_ENABLE" = "1" ]; then
+        echo_date "本次不使用代理（未配置，或配置的代理不可用），直连 GitHub"
+    else
+        echo_date "本次不使用代理（未配置，或插件 SOCKS5 未启用导致代理不可用），直连 GitHub"
+    fi
 fi
 
 human_size() {
@@ -87,6 +99,57 @@ human_size() {
     }'
 }
 
+# ================= 自举代理 =================
+# 场景：规则库被官方版覆盖（缺 gfw / openai 等分类）或首次安装，直连 GitHub 拉不下来。
+# 做法：用插件自己的出站配置临时起一个「只有 SOCKS 入口」的 Xray，用它下载规则，用完即杀。
+XRAY_BIN="$XWALL_DIR/xwall-xray"
+BOOT_PORT="18899"
+BOOT_PID=""
+
+stop_bootstrap_proxy() {
+    [ -n "$BOOT_PID" ] || return 0
+    kill "$BOOT_PID" 2>/dev/null
+    wait "$BOOT_PID" 2>/dev/null
+    BOOT_PID=""
+    rm -f /tmp/xwall_boot.json /tmp/xwall_boot_outbounds.json
+}
+trap 'stop_bootstrap_proxy' EXIT INT TERM
+
+start_bootstrap_proxy() {
+    [ -x "$XRAY_BIN" ] || { echo_date "自举代理：缺少 $XRAY_BIN"; return 1; }
+    [ -n "$XWALL_CONFIG" ] || { echo_date "自举代理：插件里还没有出站配置，先在面板保存一次节点"; return 1; }
+    command -v base64 >/dev/null 2>&1 || { echo_date "自举代理：缺少 base64"; return 1; }
+    command -v jq >/dev/null 2>&1 || { echo_date "自举代理：缺少 jq"; return 1; }
+
+    printf '%s' "$XWALL_CONFIG" | base64 -d > /tmp/xwall_boot_outbounds.json 2>/dev/null || {
+        echo_date "自举代理：出站配置解码失败"; return 1; }
+    jq -e '.outbounds | length > 0' /tmp/xwall_boot_outbounds.json >/dev/null 2>&1 || {
+        echo_date "自举代理：出站配置里没有 outbounds"; return 1; }
+
+    # 把 tag=proxy 的出站排到最前（Xray 默认用第一个出站）
+    jq -n --slurpfile u /tmp/xwall_boot_outbounds.json --argjson port "$BOOT_PORT" '
+      ($u[0].outbounds) as $o
+      | { "log": { "loglevel": "warning" },
+          "inbounds": [ { "tag": "boot-socks", "protocol": "socks", "listen": "127.0.0.1",
+                          "port": $port, "settings": { "udp": false } } ],
+          "outbounds": (($o | map(select(.tag == "proxy"))) + ($o | map(select(.tag != "proxy")))) }' \
+      > /tmp/xwall_boot.json || { echo_date "自举代理：生成临时配置失败"; return 1; }
+
+    "$XRAY_BIN" -c /tmp/xwall_boot.json >/tmp/xwall_boot.log 2>&1 &
+    BOOT_PID=$!
+    _i=0
+    while [ "$_i" -lt 10 ]; do
+        if curl -s -m 4 --socks5-hostname "127.0.0.1:$BOOT_PORT" -o /dev/null "https://api.github.com" 2>/dev/null; then
+            echo_date "自举代理已就绪：socks5h://127.0.0.1:$BOOT_PORT（用完自动关闭）"
+            return 0
+        fi
+        sleep 1
+        _i=$((_i + 1))
+    done
+    echo_date "自举代理启动失败，详见 /tmp/xwall_boot.log"
+    stop_bootstrap_proxy
+    return 1
+}
 download_with_progress() {
     local url="$1"
     local out="$2"
@@ -205,6 +268,19 @@ echo_date "              XWall 规则库 (.dat) 独立更新脚本"
 echo_date "==================================================================="
 
 mkdir -p "$XWALL_DIR"
+# 没有可用代理时先探测直连：连不上 GitHub 就临时拉起自举代理再更新
+# （规则库被官方版覆盖、或首次安装时都指望这条路）
+if [ -z "$PROXY_URL" ]; then
+    if ! curl -s -m 6 -o /dev/null "$GITHUB_API" 2>/dev/null; then
+        echo_date "直连 GitHub 失败，尝试用插件自己的节点临时起代理..."
+        if start_bootstrap_proxy; then
+            PROXY_URL="socks5h://127.0.0.1:$BOOT_PORT"
+            PROXY_FROM="自举代理（临时 Xray）"
+            CURL_OPT="-x $PROXY_URL"
+        fi
+    fi
+fi
+
 get_latest_version
 check_local_version
 

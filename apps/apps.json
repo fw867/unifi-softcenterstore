@@ -340,7 +340,7 @@
         "Id": "xwall",
         "Name": "XWall",
         "Type": "Binary Core",
-        "Version": "1.1.3",
+        "Version": "1.1.4",
         "Description": "全流量交给 Xray，由 Xray 规则集自动分流（国内直连 / 国外代理）。",
         "Icon": "shield-check",
         "StartCommand": "/data/softcenter/bin/xwall start",
@@ -355,25 +355,25 @@
             {
                 "Name": "xwall",
                 "Path": "apps/xwall/xwall",
-                "Sha256": "1483f773d6279b4b61ee72219bcde4d99215f8300c429d1648ace5997405560d",
+                "Sha256": "1c1ce467257e21305e22db60e720c2545ed580b9883beaa348f4ae8c823433df",
                 "Mode": "0755"
             },
             {
                 "Name": "xwall-ssup",
                 "Path": "apps/xwall/xwall-ssup",
-                "Sha256": "e717b52c39bc55408de04b2db70b12da021ba091205edb0191f8c17066913136",
+                "Sha256": "3422c5d7759550287a4a5be0669ff9c6c578e11cbe8be04e2a21348e840c5a9c",
                 "Mode": "0755"
             },
             {
                 "Name": "xwall-rules",
                 "Path": "apps/xwall/xwall-rules",
-                "Sha256": "eb4a4814bcddb8316d7ca5b3d4ea7f80734df944c67617c5941988742e225f9b",
+                "Sha256": "172ad2f33550ff634a873174cb28713356aaea38056024691d14a037a373b36c",
                 "Mode": "0755"
             },
             {
                 "Name": "xwall-status",
                 "Path": "apps/xwall/xwall-status",
-                "Sha256": "a6a70a83d4fffd24292ae44fd91f73c57969ddd2a59e1d899f9fcc7419647957",
+                "Sha256": "d32d552631588d90d12dc6dfd870bb84d9138c42c97e2d4cbb2ded6db0923d8c",
                 "Mode": "0755"
             }
         ],

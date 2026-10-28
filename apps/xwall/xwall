@@ -114,10 +114,41 @@ count_entries() {
 DIRECT_LIST=$(decode_b64 "$PROXY_WHITE_LIST")
 
 have_core() { [ -x "$XRAY_BIN" ]; }
-have_assets() { [ -s "$ASSET_DIR/geoip.dat" ] && [ -s "$ASSET_DIR/geosite.dat" ]; }
+# 资产是否可用：不仅看"非空"，还要看大小与分类是否对。
+# 截断的 .dat 会以 EOF 报错；而官方 v2fly 的 geosite 没有 gfw 分类，
+# 被核心升级覆盖后 XWall 的 geosite:gfw 规则会直接失效（同样报 EOF）。
+have_assets() {
+    [ -s "$ASSET_DIR/geoip.dat" ] && [ -s "$ASSET_DIR/geosite.dat" ] || return 1
+    _ga=$(wc -c < "$ASSET_DIR/geoip.dat" 2>/dev/null)
+    _gs=$(wc -c < "$ASSET_DIR/geosite.dat" 2>/dev/null)
+    case "$_ga" in ''|*[!0-9]*) return 1 ;; esac
+    case "$_gs" in ''|*[!0-9]*) return 1 ;; esac
+    [ "$_ga" -gt 1048576 ] || return 1
+    [ "$_gs" -gt 1048576 ] || return 1
+    grep -q 'GFW' "$ASSET_DIR/geosite.dat" 2>/dev/null || return 1
+    grep -q 'CATEGORY-ADS-ALL' "$ASSET_DIR/geosite.dat" 2>/dev/null || return 1
+    return 0
+}
 
 ensure_core() {
     if have_core && have_assets; then return 0; fi
+    # 数据文件存在但大小异常 = 截断/损坏（Xray 会报 geosite ... EOF），先删掉再重新下载，
+    # 否则 ssup 的 dat_ok 只看到"非空"就跳过下载，坏文件会一直留在原地
+    for _f in "$ASSET_DIR/geoip.dat" "$ASSET_DIR/geosite.dat"; do
+        [ -s "$_f" ] || continue
+        _sz=$(wc -c < "$_f" 2>/dev/null)
+        case "$_sz" in '' | *[!0-9]*) _sz=0 ;; esac
+        _bad=0
+        [ "$_sz" -gt 1048576 ] || _bad=1
+        # geosite 还必须是第三方版（含 gfw 分类），官方版会让 geosite:gfw 规则失效
+        case "$_f" in
+            *geosite.dat) grep -q 'GFW' "$_f" 2>/dev/null || _bad=1 ;;
+        esac
+        if [ "$_bad" = "1" ]; then
+            log_date "检测到 $(basename "$_f") 不可用（${_sz} 字节，或缺少 gfw 分类），删除后重新下载"
+            rm -f "$_f"
+        fi
+    done
     if have_core; then
         log_date "缺少 geoip.dat / geosite.dat，开始自动获取..."
     else
@@ -170,7 +201,7 @@ build_xray_config() {
 
     local lan_ip
     lan_ip=$(detect_lan_ip)
-    local_dns="${lan_ip:-127.0.0.1}"
+    local_dns="127.0.0.1"
     dns_listen="$in_listen"
 
     case "$XRAY_LOG_LEVEL" in
@@ -345,15 +376,7 @@ build_xray_config() {
           "streamSettings": { "sockopt": { "tproxy": "tproxy" } },
           "sniffing": { "enabled": true, "destOverride": ["fakedns", "http", "tls", "quic"], "routeOnly": false }
         }
-      ] + (if $dnsHijack == "1" then [
-        {
-          "tag": "dns-in",
-          "listen": $dnsListen,
-          "port": $dnsPort,
-          "protocol": "dokodemo-door",
-          "settings": { "network": "tcp,udp", "followRedirect": true }
-        }
-      ] else [] end) + (if $socks_en == "1" then [
+      ] + (if $socks_en == "1" then [
         {
           "tag": "socks-in",
           "protocol": "socks",
@@ -375,8 +398,8 @@ build_xray_config() {
             { "address": $localDns, "domains": ($localDomains + $localExtra) },
             (if ($proxyDomains | length) > 0 then { "address": "fakedns", "domains": $proxyDomains } else "fakedns" end)
           ]
-          + (if ($proxyDomains | length) > 0 then [ { "address": $dnsForeign, "domains": $proxyDomains } ] else [] end)
-          + [ $localDns ]
+          + (if ($proxyDomains | length) > 0 then [ { "address": $dnsForeign, "domains": $proxyDomains }, $dnsCn ] else [] end)
+          + [ $dnsCn ]
         )
       },
       "routing": {
@@ -388,9 +411,7 @@ build_xray_config() {
             {"type": "field", "ip": [$dnsForeign], "outboundTag": $dnsForeignTarget}
           ] + [
             {"type": "field", "inboundTag": $clientInbounds, "port": 53, "outboundTag": "dns-out"}
-          ] + (if $dnsHijack == "1" then [
-            {"type": "field", "inboundTag": ["dns-in"], "outboundTag": "dns-out"}
-          ] else [] end) + (if ($whiteDomRule | length) > 0 then [
+          ] + (if ($whiteDomRule | length) > 0 then [
             {"type": "field", "domain": $whiteDomRule, "outboundTag": "direct"}
           ] else [] end) + (if ($whiteIpRule | length) > 0 then [
             {"type": "field", "ip": $whiteIpRule, "outboundTag": "direct"}
@@ -467,6 +488,13 @@ validate_config() {
         *"Configuration OK"*|*"Configuration ok"*) log_date "Xray 配置自检通过"; return 0 ;;
         *"ailed to"*|*"ailed:"*)
             log_date "Xray 配置自检失败：$(printf '%s' "$out" | tail -n 3 | tr '\n' ' ')"
+            # 数据文件损坏时报错里会有 geosite/geodata/EOF，给出可操作的提示
+            case "$out" in
+                *geosite*|*geoip*|*geodata*|*EOF*)
+                    log_date "  ↑ 这是规则库文件损坏/被截断，不是配置写错：请点「更新路由规则」，或执行："
+                    log_date "     rm -f $ASSET_DIR/geosite.dat $ASSET_DIR/geoip.dat && /data/softcenter/bin/xwall-rules && /data/softcenter/bin/xwall restart"
+                    ;;
+            esac
             return 1
             ;;
     esac
@@ -633,16 +661,8 @@ ipts_update() {
         ipt6 -t mangle -I PREROUTING "$RULE16_INDEX" -p udp -j "$CHAIN"
     fi
 
-    # 劫持后的 DNS 会落到路由器本机的高位端口，UDM 的 INPUT 策略默认可能只放行 53，
-    # 这里显式放行内网来源；否则部分网段会出现「DNS 完全没回应」
-    if [ "$DNS_HIJACK" = "1" ]; then
-        ipt -t filter -I INPUT 1 -p udp --dport "$DNS_PORT" -m set --match-set xwall_src src -j ACCEPT
-        ipt -t filter -I INPUT 1 -p tcp --dport "$DNS_PORT" -m set --match-set xwall_src src -j ACCEPT
-        if [ "$XWALL_IPV6_ENABLE" = "1" ]; then
-            ipt6 -t filter -I INPUT 1 -p udp --dport "$DNS_PORT" -m set --match-set xwall_src6 src -j ACCEPT
-            ipt6 -t filter -I INPUT 1 -p tcp --dport "$DNS_PORT" -m set --match-set xwall_src6 src -j ACCEPT
-        fi
-    fi
+    # 劫持后的 DNS 已经走 tproxy 通道（1280/1281），这两个端口本来就有放行/透明处理；
+    # 15353 只有旧版 dokodemo 方案会用到，这里不再下发放行规则（ipts_origin 仍会清掉历史规则）
     # SOCKS5 若监听了局域网，同样需要放行
     if [ "$XWALL_SOCKS_ENABLE" = "1" ] && [ "$XWALL_SOCKS_LISTEN" = "1" ]; then
         ipt -t filter -I INPUT 1 -p tcp --dport "$XWALL_SOCKS_PORT" -m set --match-set xwall_src src -j ACCEPT
@@ -654,137 +674,48 @@ ipts_update() {
     fi
 
     if [ "$DNS_HIJACK" = "1" ]; then
-        # 用独立链做 DNS 劫持：PREROUTING 只留两条跳转，排除逻辑全在链内用 RETURN 表达。
-        # 好处：重复启停不会累积规则（-N/-F 每次重建），排除顺序也一目了然。
-        ipt -t nat -N XWALL_DNS 2>/dev/null
-        ipt -t nat -F XWALL_DNS 2>/dev/null
+        # ==================== DNS 劫持（走 tproxy 通道） ====================
+        # 之前是 nat REDIRECT 到 dokodemo-door(15353)：实测那条通道会漏 socket ——
+        # 报文堆在 192.168.1.1:15353 的 socket 里没人读，客户端拿不到应答（日志只有 pending lost）。
+        # 现在改成复用已经稳定的 tproxy 入站：
+        #   TCP 53 -> nat REDIRECT --to-ports $TCP_PORT（tproxy-tcp, 1280）
+        #   UDP 53 -> mangle TPROXY  --on-port  $UDP_PORT（tproxy-udp, 1281）
+        # 两者都会命中路由里已有的 {inboundTag: tproxy-*, port: 53 -> dns-out}，由 Xray 的
+        # DNS 模块（FakeIP）回答，因此不再需要 dns-in 入站。
+        #
+        # 规则插在链的位置 2（紧跟“非 LAN 来源 RETURN”、排在 dst-type LOCAL 之前），这样连
+        # “发往路由器自己”的 DNS 也会被接管；排除项必须排在 53 规则之前，而 -I 位置 2 每次
+        # 都插到最前，所以按“53 规则 -> 代理白名单 -> 不劫持名单”的倒序插入。
+        _dns_ok=0
+        ipt -t mangle -I "$CHAIN" 2 -p udp --dport 53 -j TPROXY --on-port "$UDP_PORT" --tproxy-mark "$FWMARK" 2>/dev/null && _dns_ok=$((_dns_ok + 1))
+        ipt -t nat -I "$CHAIN" 2 -p tcp --dport 53 -j REDIRECT --to-ports "$TCP_PORT" 2>/dev/null && _dns_ok=$((_dns_ok + 1))
+        if [ "$XWALL_IPV6_ENABLE" = "1" ]; then
+            ipt6 -t mangle -I "$CHAIN" 2 -p udp --dport 53 -j TPROXY --on-port "$UDP_PORT" --tproxy-mark "$FWMARK" 2>/dev/null
+            ipt6 -t nat -I "$CHAIN" 2 -p tcp --dport 53 -j REDIRECT --to-ports "$TCP_PORT" 2>/dev/null
+        fi
 
-        # 1. 代理白名单设备不劫持：它们本来就绕过代理，被塞 FakeIP 会直接上不了网
-        #    优先用集合（条目多时快）；集合不可用时逐条 -s 兜底，绝不让这一步静默失效
+        # 代理白名单里的设备不劫持：它们本来就绕过代理，被塞 FakeIP 会直接上不了网
         if [ -n "$DIRECT_LIST" ]; then
-            ipset -! create xwall_dns_bypass nethash 2>/dev/null
-            ipset flush xwall_dns_bypass 2>/dev/null
             printf '%s\n' "$DIRECT_LIST" | while IFS= read -r line || [ -n "$line" ]; do
                 line=$(trim "$line")
                 case "$line" in "" | \#* | *[!0-9a-fA-F.:/]*) continue ;; esac
                 case "$line" in
-                    *:*) ;;
-                    *) ipset -! add xwall_dns_bypass "$line" 2>/dev/null ;;
+                    *:*)
+                        [ "$XWALL_IPV6_ENABLE" = "1" ] && ipt6 -t nat -I "$CHAIN" 2 -s "$line" -j RETURN 2>/dev/null \
+                            && ipt6 -t mangle -I "$CHAIN" 2 -s "$line" -j RETURN 2>/dev/null
+                        ;;
+                    *)
+                        ipt -t nat -I "$CHAIN" 2 -s "$line" -j RETURN 2>/dev/null
+                        ipt -t mangle -I "$CHAIN" 2 -s "$line" -j RETURN 2>/dev/null
+                        ;;
                 esac
             done
-            if ! ipt -t nat -A XWALL_DNS -m set --match-set xwall_dns_bypass src -j RETURN 2>/dev/null; then
-                log_date "DNS劫持：白名单集合不可用，改用逐条规则"
-                printf '%s\n' "$DIRECT_LIST" | while IFS= read -r line || [ -n "$line" ]; do
-                    line=$(trim "$line")
-                    case "$line" in "" | \#* | *[!0-9a-fA-F.:/]*) continue ;; esac
-                    case "$line" in
-                        *:*) ;;
-                        *) ipt -t nat -A XWALL_DNS -s "$line" -j RETURN 2>/dev/null ;;
-                    esac
-                done
-            fi
-        fi
-
-        # 2. 排除路由器自身的所有地址（含 WAN、loopback）：先灌进固定集合 xwall_self（1 条规则），
-        #    集合建不出来/灌不进去时再逐条 -s 兜底 —— 两步都做，绝不静默漏掉本机排除
-        ipset -! create xwall_self nethash 2>/dev/null
-        ipset flush xwall_self 2>/dev/null
-        _self_n=0
-        _self_list=""
-        for _addr in $(ip -4 addr show 2>/dev/null | awk '/inet /{print $2}' | cut -d/ -f1); do
-            [ -n "$_addr" ] || continue
-            _self_list="$_self_list $_addr"
-            ipset -! add xwall_self "$_addr" 2>/dev/null && _self_n=$((_self_n + 1))
-        done
-        if [ -z "$_self_list" ]; then
-            _router_ip=$(detect_lan_ip)
-            if [ -n "$_router_ip" ]; then
-                _self_list=" $_router_ip"
-                ipset -! add xwall_self "$_router_ip" 2>/dev/null && _self_n=1
-            fi
-        fi
-        if [ "$_self_n" = "0" ] || ! ipt -t nat -A XWALL_DNS -m set --match-set xwall_self src -j RETURN 2>/dev/null; then
-            log_date "DNS劫持：本机地址集合不可用，改用逐条规则"
-            for _addr in $_self_list; do
-                ipt -t nat -A XWALL_DNS -s "$_addr" -j RETURN 2>/dev/null
-            done
-        fi
-
-        # 3. 只劫持局域网来源的查询：直接用固定内网网段（与 xwall_src 内容等价），不依赖集合。
-        #    必须显式带 -p：部分固件（nft 后端）在没有协议匹配时会拒绝 REDIRECT --to-ports
-        _dns_ok=0
-        for _proto in udp tcp; do
-            for _net in 192.168.0.0/16 10.0.0.0/8 172.16.0.0/12 100.64.0.0/10; do
-                ipt -t nat -A XWALL_DNS -p "$_proto" -s "$_net" -j REDIRECT --to-ports "$DNS_PORT" 2>/dev/null && _dns_ok=$((_dns_ok + 1))
-            done
-        done
-        if [ "$_dns_ok" = "0" ]; then
-            log_date "⚠ DNS劫持规则下发失败：XWALL_DNS 链里没有 REDIRECT（检查 iptables -V 与 --to-ports 支持）"
-        fi
-
-        # 4. 挂到 PREROUTING（udp / tcp 分别判断，避免只挂上一条时漏掉另一条）
-        if ! ipt -t nat -C PREROUTING -p udp --dport 53 -j XWALL_DNS 2>/dev/null; then
-            ipt -t nat -I PREROUTING "$RULE_INDEX" -p udp --dport 53 -j XWALL_DNS
-        fi
-        if ! ipt -t nat -C PREROUTING -p tcp --dport 53 -j XWALL_DNS 2>/dev/null; then
-            ipt -t nat -I PREROUTING "$RULE_INDEX" -p tcp --dport 53 -j XWALL_DNS
-        fi
-
-        # ========== IPv6 独立链 ==========
-        if [ "$XWALL_IPV6_ENABLE" = "1" ]; then
-            ipt6 -t nat -N XWALL_DNS 2>/dev/null
-            ipt6 -t nat -F XWALL_DNS 2>/dev/null
-
-            if [ -n "$DIRECT_LIST" ]; then
-                ipset -! create xwall_dns_bypass6 nethash family inet6 2>/dev/null
-                ipset flush xwall_dns_bypass6 2>/dev/null
-                printf '%s\n' "$DIRECT_LIST" | while IFS= read -r line || [ -n "$line" ]; do
-                    line=$(trim "$line")
-                    case "$line" in "" | \#* | *[!0-9a-fA-F.:/]*) continue ;; esac
-                    case "$line" in
-                        *:*) ipset -! add xwall_dns_bypass6 "$line" 2>/dev/null ;;
-                    esac
-                done
-                ipt6 -t nat -A XWALL_DNS -m set --match-set xwall_dns_bypass6 src -j RETURN
-            fi
-
-            # 链路本地 + 路由器自身地址都放行，只劫持内网客户端
-            ipt6 -t nat -A XWALL_DNS -s fe80::/10 -j RETURN
-            _self6_added=0
-            for _addr6 in $(ip -6 addr show 2>/dev/null | awk '/inet6 /{print $2}' | cut -d/ -f1); do
-                case "$_addr6" in "" | fe80:* | ::1) continue ;; esac
-                case "$_addr6" in *:*) ipt6 -t nat -A XWALL_DNS -s "$_addr6" -j RETURN; _self6_added=$((_self6_added + 1)) ;; esac
-            done
-            # IPv6 的 LAN 前缀是动态的，优先用集合；集合不可用时按路由表里的 LAN 前缀兜底。
-            # 和 v4 一样必须显式带 -p，否则 nft 后端会拒绝 REDIRECT --to-ports
-            _v6ok=0
-            for _proto6 in udp tcp; do
-                ipt6 -t nat -A XWALL_DNS -p "$_proto6" -m set --match-set xwall_src6 src -j REDIRECT --to-ports "$DNS_PORT" 2>/dev/null && _v6ok=$((_v6ok + 1))
-            done
-            if [ "$_v6ok" = "0" ]; then
-                log_date "DNS劫持(IPv6)：xwall_src6 集合不可用，改按 LAN 前缀下发"
-                for _proto6 in udp tcp; do
-                    for _net6 in $(ip -6 route show 2>/dev/null | awk '/dev br/{if($1!="default" && $1!="fe80::/64") print $1}'); do
-                        ipt6 -t nat -A XWALL_DNS -p "$_proto6" -s "$_net6" -j REDIRECT --to-ports "$DNS_PORT" 2>/dev/null && _v6ok=$((_v6ok + 1))
-                    done
-                done
-            fi
-            [ "$_v6ok" = "0" ] && log_date "⚠ DNS劫持(IPv6)规则下发失败：XWALL_DNS 链里没有 REDIRECT"
-
-            if ! ipt6 -t nat -C PREROUTING -p udp --dport 53 -j XWALL_DNS 2>/dev/null; then
-                ipt6 -t nat -I PREROUTING "$RULE6_INDEX" -p udp --dport 53 -j XWALL_DNS
-            fi
-            if ! ipt6 -t nat -C PREROUTING -p tcp --dport 53 -j XWALL_DNS 2>/dev/null; then
-                ipt6 -t nat -I PREROUTING "$RULE6_INDEX" -p tcp --dport 53 -j XWALL_DNS
-            fi
         fi
 
         if [ "$_dns_ok" = "0" ]; then
-            log_date "⚠ DNS劫持未生效：XWALL_DNS 链里没有任何 REDIRECT 规则（请检查 iptables -t nat -S XWALL_DNS）"
-        elif [ -n "$DIRECT_LIST" ]; then
-            log_date "DNS劫持已开启：接管内网 53 端口查询（独立链 XWALL_DNS，已排除路由器本机与白名单设备）"
+            log_date "⚠ DNS劫持规则下发失败：XWALL 链里插不进 53 端口规则"
         else
-            log_date "DNS劫持已开启：接管内网 53 端口查询（独立链 XWALL_DNS，已排除路由器本机）"
+            log_date "DNS劫持已开启：DNS 走 tproxy 通道（TCP→$TCP_PORT / UDP→$UDP_PORT），由 Xray 的 DNS 模块回答"
         fi
     fi
 }
@@ -848,6 +779,7 @@ ipts_origin() {
     ipset destroy xwall_src6 2>/dev/null
     ipset destroy xwall_dns_bypass 2>/dev/null
     ipset destroy xwall_dns_bypass6 2>/dev/null
+    ipset destroy xwall_dns_skip 2>/dev/null
     ipset destroy xwall_self 2>/dev/null
 }
 
@@ -897,6 +829,8 @@ cleanup_legacy_cron() {
 setup_cron() {
     cleanup_legacy_cron
     crontab -l 2>/dev/null > /tmp/cron_tmp
+    # 日志体积巡检独立于 watchdog：个别设备会无限重试已下线域名，日志涨得很快
+    echo "*/10 * * * * /data/softcenter/bin/xwall logrotate #softcenter:xwall" >> /tmp/cron_tmp
     if [ "$XWALL_WATCHDOG_ENABLE" = "1" ]; then
         echo "* * * * * /data/softcenter/bin/xwall watchdog #softcenter:xwall" >> /tmp/cron_tmp
     else
@@ -972,6 +906,33 @@ check_rules() {
     return 0
 }
 
+# 日志体积管理：别让日志把路由器的存储撑爆。
+# 个别设备会无限重试已下线的域名，Xray 每次都会写一条 [Error]（failed to resolve ip ... rcode: 3），
+# 一天就能堆几十 MB。超过阈值就截断，只保留最近 2000 行。
+LOG_MAX_KB="${XWALL_LOG_MAX_KB:-4096}"      # 单个日志文件上限，默认 4MB
+LOG_KEEP_LINES="${XWALL_LOG_KEEP:-2000}"    # 截断后保留的行数
+
+rotate_logs() {
+    local _lf _kb _tmp _rotated=""
+    # 先处理 Xray 日志，再处理插件日志（避免边写边截）
+    for _lf in "$XRAY_LOG" "$LOG_FILE"; do
+        [ -f "$_lf" ] || continue
+        _kb=$(du -k "$_lf" 2>/dev/null | awk '{print $1}')
+        case "$_kb" in '' | *[!0-9]*) continue ;; esac
+        [ "$_kb" -le "$LOG_MAX_KB" ] && continue
+        _tmp="/tmp/xwall_rot.$$"
+        if tail -n "$LOG_KEEP_LINES" "$_lf" > "$_tmp" 2>/dev/null; then
+            mv -f "$_tmp" "$_lf"
+        else
+            rm -f "$_tmp"
+            : > "$_lf"
+        fi
+        _rotated="$_rotated $(basename "$_lf")(${_kb}KB)"
+    done
+    [ -n "$_rotated" ] && echo "【$(date '+%Y年%m月%d日 %X')】: 日志超过 ${LOG_MAX_KB}KB，已截断保留最近 ${LOG_KEEP_LINES} 行:${_rotated}" >> "$LOG_FILE"
+    return 0
+}
+
 watchdog() {
     [ "$XWALL_WATCHDOG_ENABLE" = "1" ] || return 0
 
@@ -980,6 +941,8 @@ watchdog() {
     if ! flock -n 9 2>/dev/null; then
         return 0
     fi
+
+    rotate_logs
 
     if pgrep -x "$PROC_NAME" >/dev/null 2>&1; then
         local missing prev fails rc
@@ -1016,6 +979,7 @@ watchdog() {
 start() {
     log_sep "XWall 启动"
     set_lock || exit 1
+    rotate_logs
     setup_cron
     if ! ensure_core; then unset_lock; exit 1; fi
     prepare_config
@@ -1154,6 +1118,7 @@ case ${1} in
     restart) stop; sleep 1; start ;;
     watchdog) watchdog ;;
     trace|check-exit) trace_exit "$@" ;;
+    logrotate) rotate_logs ;;
     status) if pgrep -x "$PROC_NAME" >/dev/null 2>&1; then echo "running"; else echo "stopped"; exit 1; fi ;;
-    *) echo "Usage: $0 {start|stop|restart|status|watchdog|trace [次数]}"; exit 1 ;;
+    *) echo "Usage: $0 {start|stop|restart|status|watchdog|trace [次数]|logrotate}"; exit 1 ;;
 esac
