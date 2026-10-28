@@ -355,7 +355,7 @@
             {
                 "Name": "xwall",
                 "Path": "apps/xwall/xwall",
-                "Sha256": "eb565c10a3ecc12473f77e500118096de0411aef837d1f5ce3c453e7b4b609fd",
+                "Sha256": "0dbbf3987faeafad68780ee0f962e983579a3baa5d9548553a6c59784a17a4f2",
                 "Mode": "0755"
             },
             {
@@ -451,7 +451,7 @@
                             "Label": "域名劫持",
                             "Type": "switch",
                             "Default": "0",
-                            "Help": "开启后下发 PREROUTING 53 端口劫持：局域网所有 DNS 查询都交给 Xray（国内域名走国内 DNS，国外域名走 FakeIP + 国外 DNS）；关闭则只接管本来就要出网的 DNS 查询。本地域名（.local/.localdomain 等）仍交给路由器 dnsmasq 解析。分流靠域名识别，关闭时局域网解析仍由 dnsmasq 返回真实 IP，个别连接（QUIC 分片等）会按 IP 直连出去，想让 ChatGPT 这类站点稳定走代理建议开启"
+                            "Help": "开启后下发 PREROUTING 53 端口劫持：局域网所有 DNS 查询都交给 Xray（国内域名走国内 DNS，国外域名走 FakeIP + 国外 DNS）；关闭则只接管本来就要出网的 DNS 查询。本地域名（.local/.localdomain 等）仍交给路由器 dnsmasq 解析。分流靠域名识别，关闭时局域网解析仍由 dnsmasq 返回真实 IP，个别连接（QUIC 分片等）会按 IP 直连出去，想让 ChatGPT 这类站点稳定走代理建议开启。代理白名单里的设备不会被劫持（它们本来就绕过代理，被劫持会拿到 FakeIP 反而上不了网）"
                         }
                     ]
                 },
