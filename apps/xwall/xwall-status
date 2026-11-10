@@ -654,12 +654,19 @@ if [ -n "$CT_COUNT" ] && [ -n "$CT_MAX" ]; then
     printf '  conntrack 表 %s / %s  %s  %s\n' "$CT_COUNT" "$CT_MAX" "$(bar "$CT_COUNT" "$CT_MAX" 18)" "$(pct "$CT_COUNT" "$CT_MAX")"
 fi
 
+DNS_BYPASS_N=""
+DNS_BYPASS_TXT="未创建"
+if command -v ipset >/dev/null 2>&1 && ipset list xwall_dns_bypass >/dev/null 2>&1; then
+    DNS_BYPASS_N=$(ipset list xwall_dns_bypass 2>/dev/null | awk '/Number of entries/{print $4}')
+    DNS_BYPASS_TXT="就位"
+fi
+
 section "6. 劫持规则与白名单（只读检查）"
 printf '  nat/mangle 链  nat %s / mangle %s\n' "$R_NAT" "$R_MANGLE"
 printf '  PREROUTING 跳转 %s\n' "$R_JUMP"
 printf '  策略路由 table %s %s\n' "$ROUTE_TABLE" "$R_ROUTE"
-printf '  直连白名单 %s %s' "$R_SET" "$([ -n "$R_SET_N" ] && echo "($R_SET_N 条)")"
-printf '\n'
+printf '  直连白名单 %s %s\n' "$R_SET" "$([ -n "$R_SET_N" ] && echo "($R_SET_N 条)")"
+printf '  DNS 旁路集合 %s %s\n' "$DNS_BYPASS_TXT" "$([ -n "$DNS_BYPASS_N" ] && echo "($DNS_BYPASS_N 条，开劫持时白名单设备走路由器 DNS)")"
 
 section "7. 关键诊断（进程 / 端口 / DNS 接管 / 解析 / 日志）"
 printf '  xray 进程      %s 个' "${PROC_COUNT:-0}"

@@ -590,16 +590,55 @@ add_bypass_ip() {
 add_direct_rule() {
     local table="$1" line
     [ -z "$DIRECT_LIST" ] && return 0
-    printf '%s\n' "$DIRECT_LIST" | while IFS= read -r line || [ -n "$line" ]; do
+    # here-doc 保持当前 shell，避免 pipe 子 shell 里函数/计数丢失
+    while IFS= read -r line || [ -n "$line" ]; do
         line=$(trim "$line")
         case "$line" in "" | \#* | *[!0-9a-fA-F.:/]*) continue ;; esac
-        
-        if echo "$line" | grep -qF ":"; then
-            [ "$XWALL_IPV6_ENABLE" = "1" ] && ipt6 -t "$table" -A "$CHAIN" -s "$line" -j RETURN
-        else
-            ipt -t "$table" -A "$CHAIN" -s "$line" -j RETURN
-        fi
-    done
+
+        case "$line" in
+            *:*)
+                [ "$XWALL_IPV6_ENABLE" = "1" ] && ipt6 -t "$table" -A "$CHAIN" -s "$line" -j RETURN
+                ;;
+            *)
+                ipt -t "$table" -A "$CHAIN" -s "$line" -j RETURN
+                ;;
+        esac
+    done <<EOF
+$DIRECT_LIST
+EOF
+}
+
+# 把代理白名单填进 DNS 旁路集合：开了域名劫持后这些源地址不进 53 端口 TPROXY，
+# 继续走路由器 dnsmasq（拿真实 IP）。被塞 FakeIP 又绕过代理会直接上不了网。
+# 返回写入条数（stdout 只打数字）。
+load_dns_bypass_set() {
+    local set4="$1" set6="$2" line n=0
+    ipset -! create "$set4" nethash 2>/dev/null
+    ipset flush "$set4" 2>/dev/null
+    if [ "$XWALL_IPV6_ENABLE" = "1" ]; then
+        ipset -! create "$set6" nethash family inet6 2>/dev/null
+        ipset flush "$set6" 2>/dev/null
+    fi
+    [ -z "$DIRECT_LIST" ] && { printf '%s' 0; return 0; }
+    while IFS= read -r line || [ -n "$line" ]; do
+        line=$(trim "$line")
+        case "$line" in "" | \#* | *[!0-9a-fA-F.:/]*) continue ;; esac
+        case "$line" in
+            *:*)
+                if [ "$XWALL_IPV6_ENABLE" = "1" ] && ipset -! add "$set6" "$line" 2>/dev/null; then
+                    n=$((n + 1))
+                fi
+                ;;
+            *)
+                if ipset -! add "$set4" "$line" 2>/dev/null; then
+                    n=$((n + 1))
+                fi
+                ;;
+        esac
+    done <<EOF
+$DIRECT_LIST
+EOF
+    printf '%s' "$n"
 }
 
 ipts_update() {
@@ -699,32 +738,61 @@ ipts_update() {
         # DNS 模块（FakeIP）回答，因此不再需要 dns-in 入站。
         #
         # 规则插在链的位置 2（紧跟“非 LAN 来源 RETURN”、排在 dst-type LOCAL 之前），这样连
-        # “发往路由器自己”的 DNS 也会被接管；排除项必须排在 53 规则之前，而 -I 位置 2 每次
-        # 都插到最前，所以按“53 规则 -> 代理白名单 -> 不劫持名单”的倒序插入。
-        _dns_ok=0
-        ipt -t mangle -I "$CHAIN" 2 -p udp --dport 53 -j TPROXY --on-port "$UDP_PORT" --tproxy-mark "$FWMARK" 2>/dev/null && _dns_ok=$((_dns_ok + 1))
-        ipt -t nat -I "$CHAIN" 2 -p tcp --dport 53 -j REDIRECT --to-ports "$TCP_PORT" 2>/dev/null && _dns_ok=$((_dns_ok + 1))
-        if [ "$XWALL_IPV6_ENABLE" = "1" ]; then
-            ipt6 -t mangle -I "$CHAIN" 2 -p udp --dport 53 -j TPROXY --on-port "$UDP_PORT" --tproxy-mark "$FWMARK" 2>/dev/null
-            ipt6 -t nat -I "$CHAIN" 2 -p tcp --dport 53 -j REDIRECT --to-ports "$TCP_PORT" 2>/dev/null
+        # “发往路由器自己”的 DNS 也会被接管。代理白名单用 xwall_dns_bypass 在 53 规则上
+        # 直接排除（! --match-set），命中后落到后面的 dst-type LOCAL RETURN → 路由器 dnsmasq；
+        # 不再依赖“先插一条全流量 RETURN”——那条若因 pipe 子 shell / 插位失败漏掉，白名单设备
+        # 会被塞 FakeIP，流量又被旁路，表现为完全没有 DNS。
+        _bypass_n=$(load_dns_bypass_set xwall_dns_bypass xwall_dns_bypass6)
+        _dns_excl=""
+        _dns_excl6=""
+        if [ "${_bypass_n:-0}" -gt 0 ] 2>/dev/null; then
+            # 探测集合匹配是否可用；不可用则下面走逐条 RETURN 兜底
+            if ipt -t mangle -I "$CHAIN" 2 -p udp --dport 53 -m set ! --match-set xwall_dns_bypass src -j RETURN 2>/dev/null; then
+                ipt -t mangle -D "$CHAIN" -p udp --dport 53 -m set ! --match-set xwall_dns_bypass src -j RETURN 2>/dev/null
+                _dns_excl="-m set ! --match-set xwall_dns_bypass src"
+            fi
+            if [ "$XWALL_IPV6_ENABLE" = "1" ]; then
+                if ipt6 -t mangle -I "$CHAIN" 2 -p udp --dport 53 -m set ! --match-set xwall_dns_bypass6 src -j RETURN 2>/dev/null; then
+                    ipt6 -t mangle -D "$CHAIN" -p udp --dport 53 -m set ! --match-set xwall_dns_bypass6 src -j RETURN 2>/dev/null
+                    _dns_excl6="-m set ! --match-set xwall_dns_bypass6 src"
+                fi
+            fi
+            # 白名单走 dnsmasq：显式放行无 mark 的 53，避免个别 UniFi 区域防火墙只认我们加的 mark 规则
+            ipt -t filter -I INPUT 1 -p udp --dport 53 -m set --match-set xwall_dns_bypass src -j ACCEPT
+            ipt -t filter -I INPUT 1 -p tcp --dport 53 -m set --match-set xwall_dns_bypass src -j ACCEPT
+            if [ "$XWALL_IPV6_ENABLE" = "1" ]; then
+                ipt6 -t filter -I INPUT 1 -p udp --dport 53 -m set --match-set xwall_dns_bypass6 src -j ACCEPT
+                ipt6 -t filter -I INPUT 1 -p tcp --dport 53 -m set --match-set xwall_dns_bypass6 src -j ACCEPT
+            fi
         fi
 
-        # 代理白名单里的设备不劫持：它们本来就绕过代理，被塞 FakeIP 会直接上不了网
-        if [ -n "$DIRECT_LIST" ]; then
-            printf '%s\n' "$DIRECT_LIST" | while IFS= read -r line || [ -n "$line" ]; do
+        _dns_ok=0
+        ipt -t mangle -I "$CHAIN" 2 -p udp --dport 53 $_dns_excl -j TPROXY --on-port "$UDP_PORT" --tproxy-mark "$FWMARK" 2>/dev/null && _dns_ok=$((_dns_ok + 1))
+        ipt -t nat -I "$CHAIN" 2 -p tcp --dport 53 $_dns_excl -j REDIRECT --to-ports "$TCP_PORT" 2>/dev/null && _dns_ok=$((_dns_ok + 1))
+        if [ "$XWALL_IPV6_ENABLE" = "1" ]; then
+            ipt6 -t mangle -I "$CHAIN" 2 -p udp --dport 53 $_dns_excl6 -j TPROXY --on-port "$UDP_PORT" --tproxy-mark "$FWMARK" 2>/dev/null
+            ipt6 -t nat -I "$CHAIN" 2 -p tcp --dport 53 $_dns_excl6 -j REDIRECT --to-ports "$TCP_PORT" 2>/dev/null
+        fi
+
+        # 集合匹配不可用时，退回逐条 -s RETURN（插在 53 规则之前）
+        if [ "${_bypass_n:-0}" -gt 0 ] 2>/dev/null && [ -z "$_dns_excl" ]; then
+            log_date "DNS劫持：白名单集合匹配不可用，改用逐条排除"
+            while IFS= read -r line || [ -n "$line" ]; do
                 line=$(trim "$line")
                 case "$line" in "" | \#* | *[!0-9a-fA-F.:/]*) continue ;; esac
                 case "$line" in
                     *:*)
-                        [ "$XWALL_IPV6_ENABLE" = "1" ] && ipt6 -t nat -I "$CHAIN" 2 -s "$line" -j RETURN 2>/dev/null \
-                            && ipt6 -t mangle -I "$CHAIN" 2 -s "$line" -j RETURN 2>/dev/null
+                        [ "$XWALL_IPV6_ENABLE" = "1" ] && ipt6 -t nat -I "$CHAIN" 2 -s "$line" -j RETURN
+                        [ "$XWALL_IPV6_ENABLE" = "1" ] && ipt6 -t mangle -I "$CHAIN" 2 -s "$line" -j RETURN
                         ;;
                     *)
-                        ipt -t nat -I "$CHAIN" 2 -s "$line" -j RETURN 2>/dev/null
-                        ipt -t mangle -I "$CHAIN" 2 -s "$line" -j RETURN 2>/dev/null
+                        ipt -t nat -I "$CHAIN" 2 -s "$line" -j RETURN
+                        ipt -t mangle -I "$CHAIN" 2 -s "$line" -j RETURN
                         ;;
                 esac
-            done
+            done <<EOF
+$DIRECT_LIST
+EOF
         fi
 
         # 最后插一条“路由器自身发出”的放行：位置 2 每次 -I 都插到最前，所以它最终位于顶层。
@@ -739,6 +807,8 @@ ipts_update() {
 
         if [ "$_dns_ok" = "0" ]; then
             log_date "⚠ DNS劫持规则下发失败：XWALL 链里插不进 53 端口规则"
+        elif [ "${_bypass_n:-0}" -gt 0 ] 2>/dev/null; then
+            log_date "DNS劫持已开启：DNS 走 tproxy 通道（TCP→$TCP_PORT / UDP→$UDP_PORT），代理白名单 ${_bypass_n} 条不劫持、走路由器 DNS"
         else
             log_date "DNS劫持已开启：DNS 走 tproxy 通道（TCP→$TCP_PORT / UDP→$UDP_PORT），由 Xray 的 DNS 模块回答"
         fi
@@ -751,10 +821,20 @@ ipts_origin() {
     while ipt -t filter -D INPUT -p tcp --dport "$TCP_PORT" -m conntrack --ctstate DNAT --ctorigdstport 53 -m set --match-set xwall_src src -j ACCEPT 2>/dev/null; do :; done
     while ipt6 -t filter -D INPUT -p udp --dport 53 -m mark --mark "$FWMARK" -m set --match-set xwall_src6 src -j ACCEPT 2>/dev/null; do :; done
     while ipt6 -t filter -D INPUT -p tcp --dport "$TCP_PORT" -m conntrack --ctstate DNAT --ctorigdstport 53 -m set --match-set xwall_src6 src -j ACCEPT 2>/dev/null; do :; done
+    while ipt -t filter -D INPUT -p udp --dport 53 -m set --match-set xwall_dns_bypass src -j ACCEPT 2>/dev/null; do :; done
+    while ipt -t filter -D INPUT -p tcp --dport 53 -m set --match-set xwall_dns_bypass src -j ACCEPT 2>/dev/null; do :; done
+    while ipt6 -t filter -D INPUT -p udp --dport 53 -m set --match-set xwall_dns_bypass6 src -j ACCEPT 2>/dev/null; do :; done
+    while ipt6 -t filter -D INPUT -p tcp --dport 53 -m set --match-set xwall_dns_bypass6 src -j ACCEPT 2>/dev/null; do :; done
     while ipt -t filter -D INPUT -p udp --dport "$DNS_PORT" -m set --match-set xwall_src src -j ACCEPT 2>/dev/null; do :; done
     while ipt -t filter -D INPUT -p tcp --dport "$DNS_PORT" -m set --match-set xwall_src src -j ACCEPT 2>/dev/null; do :; done
     # 按行号兜底清一遍（ipset 已被销毁时上面的精确删除会失败）
     for _ln in $(ipt -t filter -L INPUT --line-numbers -n 2>/dev/null | awk -v p="dpt:$DNS_PORT" 'index($0, p) {print $1}' | sort -rn); do
+        ipt -t filter -D INPUT "$_ln" 2>/dev/null
+    done
+    for _ln in $(ipt -t filter -L INPUT --line-numbers -n 2>/dev/null | awk '/dpt:53/ && /xwall_dns_bypass/ {print $1}' | sort -rn); do
+        ipt -t filter -D INPUT "$_ln" 2>/dev/null
+    done
+    for _ln in $(ipt -t filter -L INPUT --line-numbers -n 2>/dev/null | awk '/dpt:53/ && /mark match/ {print $1}' | sort -rn); do
         ipt -t filter -D INPUT "$_ln" 2>/dev/null
     done
     while ipt -t filter -D INPUT -p udp --dport "$XWALL_SOCKS_PORT" -m set --match-set xwall_src src -j ACCEPT 2>/dev/null; do :; done
