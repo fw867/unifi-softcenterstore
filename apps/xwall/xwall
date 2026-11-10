@@ -294,7 +294,9 @@ build_xray_config() {
         dns_foreign_target="proxy"
     fi
 
-    client_inbounds='["tproxy-tcp","tproxy-udp"'
+    # TLS/QUIC 嗅探只用于分流，保留客户端实际目标 IP；部分设备使用 *.edge.agora.io
+    # 这类不可解析的 SNI，覆盖目标会导致视频信令失败。FakeIP 仍由 Xray 还原域名。
+    client_inbounds='["tproxy-tcp","tproxy-udp","dns-in"'
     if [ "$XWALL_SOCKS_ENABLE" = "1" ]; then client_inbounds="$client_inbounds"',"socks-in"'; fi
     client_inbounds="$client_inbounds"']'
 
@@ -364,7 +366,7 @@ build_xray_config() {
           "port": 1280,
           "protocol": "dokodemo-door",
           "settings": { "network": "tcp", "followRedirect": true },
-          "sniffing": { "enabled": true, "destOverride": ["fakedns", "http", "tls", "quic"], "routeOnly": false }
+          "sniffing": { "enabled": true, "destOverride": ["fakedns", "http", "tls", "quic"], "routeOnly": true }
         },
         {
           "tag": "tproxy-udp",
@@ -373,7 +375,16 @@ build_xray_config() {
           "protocol": "dokodemo-door",
           "settings": { "network": "udp", "followRedirect": true },
           "streamSettings": { "sockopt": { "tproxy": "tproxy" } },
-          "sniffing": { "enabled": true, "destOverride": ["fakedns", "http", "tls", "quic"], "routeOnly": false }
+          "sniffing": { "enabled": true, "destOverride": ["fakedns", "http", "tls", "quic"], "routeOnly": true }
+        },
+        {
+          "tag": "dns-in",
+          "listen": $dnsListen,
+          "port": $dnsPort,
+          "protocol": "dokodemo-door",
+          # 固定 DNS 目的地址，绝不能启用 followRedirect：否则 UDP 回包会创建
+          # 绑定原目的 53 端口的 FakeUDP socket，抢走 dnsmasq 的查询并积压。
+          "settings": { "address": "127.0.0.1", "port": 53, "network": "tcp,udp", "followRedirect": false }
         }
       ] + (if $socks_en == "1" then [
         {
@@ -608,7 +619,7 @@ $DIRECT_LIST
 EOF
 }
 
-# 把代理白名单填进 DNS 旁路集合：开了域名劫持后这些源地址不进 53 端口 TPROXY，
+# 把代理白名单填进 DNS 旁路集合：开了域名劫持后这些源地址不进入 DNS 重定向，
 # 继续走路由器 dnsmasq（拿真实 IP）。被塞 FakeIP 又绕过代理会直接上不了网。
 # 返回写入条数（stdout 只打数字）。
 load_dns_bypass_set() {
@@ -653,6 +664,8 @@ ipts_update() {
 
     ipt -t nat -A "$CHAIN" -m set ! --match-set xwall_src src -j RETURN
     ipt -t mangle -A "$CHAIN" -m set ! --match-set xwall_src src -j RETURN
+    # DNS 必须走 NAT + 固定目的入站，不能进入透明 UDP 的 FakeUDP 回包路径。
+    ipt -t mangle -A "$CHAIN" -p udp --dport 53 -j RETURN
 
     ipt -t nat -A "$CHAIN" -m addrtype --dst-type LOCAL -j RETURN
     ipt -t mangle -A "$CHAIN" -m addrtype --dst-type LOCAL -j RETURN
@@ -670,6 +683,7 @@ ipts_update() {
 
         ipt6 -t nat -A "$CHAIN" -m set ! --match-set xwall_src6 src -j RETURN
         ipt6 -t mangle -A "$CHAIN" -m set ! --match-set xwall_src6 src -j RETURN
+        ipt6 -t mangle -A "$CHAIN" -p udp --dport 53 -j RETURN
 
         ipt6 -t nat -A "$CHAIN" -m addrtype --dst-type LOCAL -j RETURN
         ipt6 -t mangle -A "$CHAIN" -m addrtype --dst-type LOCAL -j RETURN
@@ -680,6 +694,14 @@ ipts_update() {
 
     # 局域网设备的混合旁路过滤
     if [ -n "$DIRECT_LIST" ]; then add_direct_rule "nat"; add_direct_rule "mangle"; fi
+
+    # 劫持关闭时仍接管本来就要出网的 DNS；本机、内网与源白名单已在前面放行。
+    ipt -t nat -A "$CHAIN" -p udp --dport 53 -j REDIRECT --to-ports "$DNS_PORT"
+    ipt -t nat -A "$CHAIN" -p tcp --dport 53 -j REDIRECT --to-ports "$DNS_PORT"
+    if [ "$XWALL_IPV6_ENABLE" = "1" ]; then
+        ipt6 -t nat -A "$CHAIN" -p udp --dport 53 -j REDIRECT --to-ports "$DNS_PORT"
+        ipt6 -t nat -A "$CHAIN" -p tcp --dport 53 -j REDIRECT --to-ports "$DNS_PORT"
+    fi
 
     # 透明底包重置
     ipt -t nat -A "$CHAIN" -p tcp -j REDIRECT --to-ports "$TCP_PORT"
@@ -693,6 +715,7 @@ ipts_update() {
     PR_INDEX=$(ipt -t nat -L PREROUTING --line-numbers 2>/dev/null | awk '/UBIOS_PREROUTING_JUMP/{print $1}' | head -n1)
     [ -n "$PR_INDEX" ] && RULE_INDEX=$((PR_INDEX + 1)) || RULE_INDEX=1
     ipt -t nat -I PREROUTING "$RULE_INDEX" -p tcp -j "$CHAIN"
+    ipt -t nat -I PREROUTING "$((RULE_INDEX + 1))" -p udp --dport 53 -j "$CHAIN"
 
     MA_INDEX=$(ipt -t mangle -L PREROUTING --line-numbers 2>/dev/null | awk '/UBIOS_PREROUTING_JUMP/{print $1}' | head -n1)
     [ -n "$MA_INDEX" ] && RULE1_INDEX=$((MA_INDEX + 1)) || RULE1_INDEX=1
@@ -702,6 +725,7 @@ ipts_update() {
         PR6_INDEX=$(ipt6 -t nat -L PREROUTING --line-numbers 2>/dev/null | awk '/UBIOS_PREROUTING_JUMP/{print $1}' | head -n1)
         [ -n "$PR6_INDEX" ] && RULE6_INDEX=$((PR6_INDEX + 1)) || RULE6_INDEX=1
         ipt6 -t nat -I PREROUTING "$RULE6_INDEX" -p tcp -j "$CHAIN"
+        ipt6 -t nat -I PREROUTING "$((RULE6_INDEX + 1))" -p udp --dport 53 -j "$CHAIN"
 
         MA6_INDEX=$(ipt6 -t mangle -L PREROUTING --line-numbers 2>/dev/null | awk '/UBIOS_PREROUTING_JUMP/{print $1}' | head -n1)
         [ -n "$MA6_INDEX" ] && RULE16_INDEX=$((MA6_INDEX + 1)) || RULE16_INDEX=1
@@ -718,42 +742,28 @@ ipts_update() {
         fi
     fi
 
-    if [ "$DNS_HIJACK" = "1" ]; then
-        # TPROXY 只改变投递 socket，UDP 报文的目的端口仍是 53；TCP REDIRECT 后则是 1280。
-        # 两者都会经过 INPUT，必须先于 UniFi 的 LAN LOCAL / 区域防火墙放行。
-        # 限制 LAN 来源和实际接管的流量，避免开放未被接管的 DNS 或透明代理端口。
-        ipt -t filter -I INPUT 1 -p udp --dport 53 -m mark --mark "$FWMARK" -m set --match-set xwall_src src -j ACCEPT
-        ipt -t filter -I INPUT 1 -p tcp --dport "$TCP_PORT" -m conntrack --ctstate DNAT --ctorigdstport 53 -m set --match-set xwall_src src -j ACCEPT
+    # 只放行经 DNAT 接管的 LAN DNS，普通 UDP 继续按原有防火墙 / Xray 分流。
+    for _proto in udp tcp; do
+        ipt -t filter -I INPUT 1 -p "$_proto" --dport "$DNS_PORT" -m conntrack --ctstate DNAT --ctorigdstport 53 -m set --match-set xwall_src src -j ACCEPT
         if [ "$XWALL_IPV6_ENABLE" = "1" ]; then
-            ipt6 -t filter -I INPUT 1 -p udp --dport 53 -m mark --mark "$FWMARK" -m set --match-set xwall_src6 src -j ACCEPT
-            ipt6 -t filter -I INPUT 1 -p tcp --dport "$TCP_PORT" -m conntrack --ctstate DNAT --ctorigdstport 53 -m set --match-set xwall_src6 src -j ACCEPT
+            ipt6 -t filter -I INPUT 1 -p "$_proto" --dport "$DNS_PORT" -m conntrack --ctstate DNAT --ctorigdstport 53 -m set --match-set xwall_src6 src -j ACCEPT
         fi
-        # ==================== DNS 劫持（走 tproxy 通道） ====================
-        # 之前是 nat REDIRECT 到 dokodemo-door(15353)：实测那条通道会漏 socket ——
-        # 报文堆在 192.168.1.1:15353 的 socket 里没人读，客户端拿不到应答（日志只有 pending lost）。
-        # 现在改成复用已经稳定的 tproxy 入站：
-        #   TCP 53 -> nat REDIRECT --to-ports $TCP_PORT（tproxy-tcp, 1280）
-        #   UDP 53 -> mangle TPROXY  --on-port  $UDP_PORT（tproxy-udp, 1281）
-        # 两者都会命中路由里已有的 {inboundTag: tproxy-*, port: 53 -> dns-out}，由 Xray 的
-        # DNS 模块（FakeIP）回答，因此不再需要 dns-in 入站。
-        #
-        # 规则插在链的位置 2（紧跟“非 LAN 来源 RETURN”、排在 dst-type LOCAL 之前），这样连
-        # “发往路由器自己”的 DNS 也会被接管。代理白名单用 xwall_dns_bypass 在 53 规则上
-        # 直接排除（! --match-set），命中后落到后面的 dst-type LOCAL RETURN → 路由器 dnsmasq；
-        # 不再依赖“先插一条全流量 RETURN”——那条若因 pipe 子 shell / 插位失败漏掉，白名单设备
-        # 会被塞 FakeIP，流量又被旁路，表现为完全没有 DNS。
+    done
+
+    if [ "$DNS_HIJACK" = "1" ]; then
+        # 早于 dst-type LOCAL，连发往路由器的 DNS 也接管；源白名单仍交给 dnsmasq。
         _bypass_n=$(load_dns_bypass_set xwall_dns_bypass xwall_dns_bypass6)
         _dns_excl=""
         _dns_excl6=""
         if [ "${_bypass_n:-0}" -gt 0 ] 2>/dev/null; then
             # 探测集合匹配是否可用；不可用则下面走逐条 RETURN 兜底
-            if ipt -t mangle -I "$CHAIN" 2 -p udp --dport 53 -m set ! --match-set xwall_dns_bypass src -j RETURN 2>/dev/null; then
-                ipt -t mangle -D "$CHAIN" -p udp --dport 53 -m set ! --match-set xwall_dns_bypass src -j RETURN 2>/dev/null
+            if ipt -t nat -I "$CHAIN" 2 -p udp --dport 53 -m set ! --match-set xwall_dns_bypass src -j RETURN 2>/dev/null; then
+                ipt -t nat -D "$CHAIN" -p udp --dport 53 -m set ! --match-set xwall_dns_bypass src -j RETURN 2>/dev/null
                 _dns_excl="-m set ! --match-set xwall_dns_bypass src"
             fi
             if [ "$XWALL_IPV6_ENABLE" = "1" ]; then
-                if ipt6 -t mangle -I "$CHAIN" 2 -p udp --dport 53 -m set ! --match-set xwall_dns_bypass6 src -j RETURN 2>/dev/null; then
-                    ipt6 -t mangle -D "$CHAIN" -p udp --dport 53 -m set ! --match-set xwall_dns_bypass6 src -j RETURN 2>/dev/null
+                if ipt6 -t nat -I "$CHAIN" 2 -p udp --dport 53 -m set ! --match-set xwall_dns_bypass6 src -j RETURN 2>/dev/null; then
+                    ipt6 -t nat -D "$CHAIN" -p udp --dport 53 -m set ! --match-set xwall_dns_bypass6 src -j RETURN 2>/dev/null
                     _dns_excl6="-m set ! --match-set xwall_dns_bypass6 src"
                 fi
             fi
@@ -767,27 +777,25 @@ ipts_update() {
         fi
 
         _dns_ok=0
-        ipt -t mangle -I "$CHAIN" 2 -p udp --dport 53 $_dns_excl -j TPROXY --on-port "$UDP_PORT" --tproxy-mark "$FWMARK" 2>/dev/null && _dns_ok=$((_dns_ok + 1))
-        ipt -t nat -I "$CHAIN" 2 -p tcp --dport 53 $_dns_excl -j REDIRECT --to-ports "$TCP_PORT" 2>/dev/null && _dns_ok=$((_dns_ok + 1))
+        ipt -t nat -I "$CHAIN" 2 -p udp --dport 53 $_dns_excl -j REDIRECT --to-ports "$DNS_PORT" 2>/dev/null && _dns_ok=$((_dns_ok + 1))
+        ipt -t nat -I "$CHAIN" 2 -p tcp --dport 53 $_dns_excl -j REDIRECT --to-ports "$DNS_PORT" 2>/dev/null && _dns_ok=$((_dns_ok + 1))
         if [ "$XWALL_IPV6_ENABLE" = "1" ]; then
-            ipt6 -t mangle -I "$CHAIN" 2 -p udp --dport 53 $_dns_excl6 -j TPROXY --on-port "$UDP_PORT" --tproxy-mark "$FWMARK" 2>/dev/null
-            ipt6 -t nat -I "$CHAIN" 2 -p tcp --dport 53 $_dns_excl6 -j REDIRECT --to-ports "$TCP_PORT" 2>/dev/null
+            ipt6 -t nat -I "$CHAIN" 2 -p udp --dport 53 $_dns_excl6 -j REDIRECT --to-ports "$DNS_PORT" 2>/dev/null
+            ipt6 -t nat -I "$CHAIN" 2 -p tcp --dport 53 $_dns_excl6 -j REDIRECT --to-ports "$DNS_PORT" 2>/dev/null
         fi
 
         # 集合匹配不可用时，退回逐条 -s RETURN（插在 53 规则之前）
-        if [ "${_bypass_n:-0}" -gt 0 ] 2>/dev/null && [ -z "$_dns_excl" ]; then
+        if [ "${_bypass_n:-0}" -gt 0 ] 2>/dev/null && { [ -z "$_dns_excl" ] || { [ "$XWALL_IPV6_ENABLE" = "1" ] && [ -z "$_dns_excl6" ]; }; }; then
             log_date "DNS劫持：白名单集合匹配不可用，改用逐条排除"
             while IFS= read -r line || [ -n "$line" ]; do
                 line=$(trim "$line")
                 case "$line" in "" | \#* | *[!0-9a-fA-F.:/]*) continue ;; esac
                 case "$line" in
                     *:*)
-                        [ "$XWALL_IPV6_ENABLE" = "1" ] && ipt6 -t nat -I "$CHAIN" 2 -s "$line" -j RETURN
-                        [ "$XWALL_IPV6_ENABLE" = "1" ] && ipt6 -t mangle -I "$CHAIN" 2 -s "$line" -j RETURN
+                        [ "$XWALL_IPV6_ENABLE" = "1" ] && [ -z "$_dns_excl6" ] && ipt6 -t nat -I "$CHAIN" 2 -s "$line" -j RETURN
                         ;;
                     *)
-                        ipt -t nat -I "$CHAIN" 2 -s "$line" -j RETURN
-                        ipt -t mangle -I "$CHAIN" 2 -s "$line" -j RETURN
+                        [ -z "$_dns_excl" ] && ipt -t nat -I "$CHAIN" 2 -s "$line" -j RETURN
                         ;;
                 esac
             done <<EOF
@@ -808,15 +816,19 @@ EOF
         if [ "$_dns_ok" = "0" ]; then
             log_date "⚠ DNS劫持规则下发失败：XWALL 链里插不进 53 端口规则"
         elif [ "${_bypass_n:-0}" -gt 0 ] 2>/dev/null; then
-            log_date "DNS劫持已开启：DNS 走 tproxy 通道（TCP→$TCP_PORT / UDP→$UDP_PORT），代理白名单 ${_bypass_n} 条不劫持、走路由器 DNS"
+            log_date "DNS劫持已开启：DNS 经 NAT 进入固定目的入站 $DNS_PORT，代理白名单 ${_bypass_n} 条不劫持、走路由器 DNS"
         else
-            log_date "DNS劫持已开启：DNS 走 tproxy 通道（TCP→$TCP_PORT / UDP→$UDP_PORT），由 Xray 的 DNS 模块回答"
+            log_date "DNS劫持已开启：DNS 经 NAT 进入固定目的入站 $DNS_PORT，由 Xray 的 DNS 模块回答"
         fi
     fi
 }
 
 ipts_origin() {
     # 先撤掉 filter INPUT 的放行规则（必须在 ipset 销毁之前，否则删不掉）
+    for _proto in udp tcp; do
+        while ipt -t filter -D INPUT -p "$_proto" --dport "$DNS_PORT" -m conntrack --ctstate DNAT --ctorigdstport 53 -m set --match-set xwall_src src -j ACCEPT 2>/dev/null; do :; done
+        while ipt6 -t filter -D INPUT -p "$_proto" --dport "$DNS_PORT" -m conntrack --ctstate DNAT --ctorigdstport 53 -m set --match-set xwall_src6 src -j ACCEPT 2>/dev/null; do :; done
+    done
     while ipt -t filter -D INPUT -p udp --dport 53 -m mark --mark "$FWMARK" -m set --match-set xwall_src src -j ACCEPT 2>/dev/null; do :; done
     while ipt -t filter -D INPUT -p tcp --dport "$TCP_PORT" -m conntrack --ctstate DNAT --ctorigdstport 53 -m set --match-set xwall_src src -j ACCEPT 2>/dev/null; do :; done
     while ipt6 -t filter -D INPUT -p udp --dport 53 -m mark --mark "$FWMARK" -m set --match-set xwall_src6 src -j ACCEPT 2>/dev/null; do :; done
@@ -832,9 +844,6 @@ ipts_origin() {
         ipt -t filter -D INPUT "$_ln" 2>/dev/null
     done
     for _ln in $(ipt -t filter -L INPUT --line-numbers -n 2>/dev/null | awk '/dpt:53/ && /xwall_dns_bypass/ {print $1}' | sort -rn); do
-        ipt -t filter -D INPUT "$_ln" 2>/dev/null
-    done
-    for _ln in $(ipt -t filter -L INPUT --line-numbers -n 2>/dev/null | awk '/dpt:53/ && /mark match/ {print $1}' | sort -rn); do
         ipt -t filter -D INPUT "$_ln" 2>/dev/null
     done
     while ipt -t filter -D INPUT -p udp --dport "$XWALL_SOCKS_PORT" -m set --match-set xwall_src src -j ACCEPT 2>/dev/null; do :; done
@@ -864,12 +873,14 @@ ipts_origin() {
     while ipt6 -t nat -D PREROUTING -p udp --dport 53 -j REDIRECT --to-ports "$DNS_PORT" 2>/dev/null; do :; done
     while ipt6 -t nat -D PREROUTING -p tcp --dport 53 -j REDIRECT --to-ports "$DNS_PORT" 2>/dev/null; do :; done
     while ipt -t nat -D PREROUTING -p tcp -j "$CHAIN" 2>/dev/null; do :; done
+    while ipt -t nat -D PREROUTING -p udp --dport 53 -j "$CHAIN" 2>/dev/null; do :; done
     while ipt -t mangle -D PREROUTING -p udp -j "$CHAIN" 2>/dev/null; do :; done
     for table in nat mangle; do ipt -t "$table" -F "$CHAIN" 2>/dev/null; ipt -t "$table" -X "$CHAIN" 2>/dev/null; done
 
     while ipt6 -t nat -D PREROUTING -p udp --dport 53 -j REDIRECT --to-ports "$DNS_PORT" 2>/dev/null; do :; done
     while ipt6 -t nat -D PREROUTING -p tcp --dport 53 -j REDIRECT --to-ports "$DNS_PORT" 2>/dev/null; do :; done
     while ipt6 -t nat -D PREROUTING -p tcp -j "$CHAIN" 2>/dev/null; do :; done
+    while ipt6 -t nat -D PREROUTING -p udp --dport 53 -j "$CHAIN" 2>/dev/null; do :; done
     while ipt6 -t mangle -D PREROUTING -p udp -j "$CHAIN" 2>/dev/null; do :; done
     for table in nat mangle; do ipt6 -t "$table" -F "$CHAIN" 2>/dev/null; ipt6 -t "$table" -X "$CHAIN" 2>/dev/null; done
 
@@ -1005,8 +1016,12 @@ check_rules() {
 
             if [ "$tb" = "nat" ]; then
                 "$cmd" -t nat -C "$CHAIN" -p tcp -j REDIRECT --to-ports "$TCP_PORT" 2>/dev/null || miss="$miss、${ver} nat 链内规则"
+                "$cmd" -t nat -C PREROUTING -p udp --dport 53 -j "$CHAIN" 2>/dev/null || miss="$miss、${ver} UDP DNS 跳转"
+                "$cmd" -t nat -C "$CHAIN" -p udp --dport 53 -j REDIRECT --to-ports "$DNS_PORT" 2>/dev/null || miss="$miss、${ver} UDP DNS 接管"
+                "$cmd" -t nat -C "$CHAIN" -p tcp --dport 53 -j REDIRECT --to-ports "$DNS_PORT" 2>/dev/null || miss="$miss、${ver} TCP DNS 接管"
             else
                 "$cmd" -t mangle -C "$CHAIN" -p udp -j TPROXY --on-port "$UDP_PORT" --tproxy-mark "$FWMARK" 2>/dev/null || miss="$miss、${ver} mangle 链内规则"
+                "$cmd" -t mangle -C "$CHAIN" -p udp --dport 53 -j RETURN 2>/dev/null || miss="$miss、${ver} DNS 透明 UDP 排除"
             fi
         done
     done

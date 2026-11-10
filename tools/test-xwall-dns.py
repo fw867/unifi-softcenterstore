@@ -68,13 +68,13 @@ def serve_tcp(sock):
                 pass
 
 
-def query_dns(network, domain, qtype):
+def query_dns(network, domain, qtype, inbound="transparent"):
     query = (struct.pack("!6H", 1234, 0x100, 1, 0, 0, 0)
              + b"".join(bytes([len(label)]) + label.encode() for label in domain.split("."))
              + b"\0" + struct.pack("!HH", qtype, 1))
     with socket.socket(socket.AF_INET, network) as sock:
         sock.settimeout(4)
-        sock.connect(("127.0.0.1", 1280 if network == socket.SOCK_STREAM else 1281))
+        sock.connect(("127.0.0.1", 15353 if inbound == "dns" else 1280 if network == socket.SOCK_STREAM else 1281))
         if network == socket.SOCK_STREAM:
             sock.sendall(struct.pack("!H", len(query)) + query)
             response = receive(sock, struct.unpack("!H", receive(sock, 2))[0])
@@ -161,22 +161,23 @@ def main():
                             time.sleep(.03)
                         else:
                             raise AssertionError("Xray listener did not start")
-                        for network in (socket.SOCK_DGRAM, socket.SOCK_STREAM):
-                            for domain in ("fixture.cn.test", "fixture.proxy.test", "fixture.other.test",
-                                           "fixture.lan", "fixture.white.test", "fixture.internal.test"):
-                                count, response = query_dns(network, domain, 1)
-                                assert count > 0, (ipv6, mode, domain, "A empty")
-                                expected = "198.18.0.0" if mode == "1" and domain.endswith("proxy.test") else "203.0.113.9"
-                                if domain.endswith((".lan", ".white.test", ".internal.test")):
-                                    expected = "203.0.113.10"
-                                if expected == "198.18.0.0":
-                                    assert ipaddress.ip_address(response[-4:]) in ipaddress.ip_network("198.18.0.0/15")
-                                else:
-                                    assert response[-4:] == ipaddress.ip_address(expected).packed
-                                count, _ = query_dns(network, domain, 28)
-                                expected_count = 1 if ipv6 == "1" else 0
-                                assert count == expected_count, (ipv6, mode, domain, "AAAA", count)
-                                checks += 2
+                        for inbound in ("transparent", "dns"):
+                            for network in (socket.SOCK_DGRAM, socket.SOCK_STREAM):
+                                for domain in ("fixture.cn.test", "fixture.proxy.test", "fixture.other.test",
+                                               "fixture.lan", "fixture.white.test", "fixture.internal.test"):
+                                    count, response = query_dns(network, domain, 1, inbound)
+                                    assert count > 0, (ipv6, mode, domain, "A empty")
+                                    expected = "198.18.0.0" if mode == "1" and domain.endswith("proxy.test") else "203.0.113.9"
+                                    if domain.endswith((".lan", ".white.test", ".internal.test")):
+                                        expected = "203.0.113.10"
+                                    if expected == "198.18.0.0":
+                                        assert ipaddress.ip_address(response[-4:]) in ipaddress.ip_network("198.18.0.0/15")
+                                    else:
+                                        assert response[-4:] == ipaddress.ip_address(expected).packed
+                                    count, _ = query_dns(network, domain, 28, inbound)
+                                    expected_count = 1 if ipv6 == "1" else 0
+                                    assert count == expected_count, (ipv6, mode, domain, "AAAA", count)
+                                    checks += 2
                     except Exception:
                         print(f"FAIL IPv6={ipv6} mode={mode} domain={locals().get('domain')} network={locals().get('network')}")
                         print((work / "core.log").read_text())

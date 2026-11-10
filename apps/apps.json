@@ -340,7 +340,7 @@
         "Id": "xwall",
         "Name": "XWall",
         "Type": "Binary Core",
-        "Version": "1.1.7",
+        "Version": "1.1.8",
         "Description": "全流量交给 Xray，由 Xray 规则集自动分流（国内直连 / 国外代理）。",
         "Icon": "shield-check",
         "StartCommand": "/data/softcenter/bin/xwall start",
@@ -355,7 +355,7 @@
             {
                 "Name": "xwall",
                 "Path": "apps/xwall/xwall",
-                "Sha256": "97551c59cddbffc829ef384af446a18f82d7890ba5a35f221c0ce33e90a83d44",
+                "Sha256": "53e5451405592971f61e0cea68e06fc3a164fece1a8a118d05b234bc1f281d25",
                 "Mode": "0755"
             },
             {
@@ -373,7 +373,7 @@
             {
                 "Name": "xwall-status",
                 "Path": "apps/xwall/xwall-status",
-                "Sha256": "fd83ea390720d957f25cba005a65d22cf9643646d8308a89b4394c05b619e5d6",
+                "Sha256": "3fcba3701ab525cd13774ff8b02fbb16678709d8b86fd8f270099da6857205d7",
                 "Mode": "0755"
             }
         ],
@@ -444,7 +444,7 @@
                             "Label": "域名劫持",
                             "Type": "switch",
                             "Default": "0",
-                            "Help": "开启后下发 PREROUTING 53 端口劫持：局域网所有 DNS 查询都交给 Xray（国内域名走国内 DNS，国外域名走 FakeIP + 国外 DNS）；关闭则只接管本来就要出网的 DNS 查询。本地域名（.local/.localdomain 等）仍交给路由器 dnsmasq 解析。分流靠域名识别，关闭时局域网解析仍由 dnsmasq 返回真实 IP，个别连接（QUIC 分片等）会按 IP 直连出去，想让 ChatGPT 这类站点稳定走代理建议开启。代理白名单里的设备不会被劫持，继续用路由器 DNS（它们本来就绕过代理，被劫持会拿到 FakeIP 反而上不了网；3D 打印机等设备加白名单后开劫持也应能正常解析）"
+                            "Help": "开启后接管局域网 53 端口 DNS，经 NAT 交给独立 DNS 入站：GFWList 模式的代理域名使用 FakeIP，其余公网域名走国内 DNS；关闭则只接管本来就要出网的 DNS 查询。DNS 入站使用固定目的地址，避免透明 UDP 回包 socket 占用路由器 53 端口、干扰 dnsmasq。本地域名（.local/.localdomain 等）仍交给路由器 dnsmasq 解析。分流靠域名识别，关闭时局域网解析仍由 dnsmasq 返回真实 IP，个别连接（QUIC 分片等）会按 IP 直连出去，想让 ChatGPT 这类站点稳定走代理建议开启。代理白名单里的设备不会被劫持，继续用路由器 DNS（它们本来就绕过代理，被劫持会拿到 FakeIP 反而上不了网）"
                         },
                         {
                             "Key": "XWALL_LOCAL_DOMAINS",
